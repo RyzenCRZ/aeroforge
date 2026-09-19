@@ -54,7 +54,11 @@ LV_FIELDS: tuple[FieldMap, ...] = (
     FieldMap("LV_Family", "family"),
     FieldMap("LV_Variant", "variant"),
     FieldMap("LV_Manufacturer", "manufacturer"),
-    FieldMap("LV_Min_Stage", "min_stages", "1"),
+    # 官方文档 Min/Max stage——是**级号范围**，不是级数（gcat-2026Q3 实测：
+    # Saturn V = 1/3、Falcon 9 = 1/2、Atlas IIAS = −1/2，助推器类别记 0/−1）。
+    # 核心级数 ≈ max_stage_no（末级号）；§7.3 原注释「最小级数」系误读，已更正。
+    FieldMap("LV_Min_Stage", "min_stage_no", "1"),
+    FieldMap("LV_Max_Stage", "max_stage_no", "1"),
     FieldMap("Length", "length_m", "m"),
     FieldMap("Diameter", "diameter_m", "m"),
     # 官方文档：Launch mass (tonnes)——而 Dry_Mass（stages 表）是 kg，勿"顺手统一"
@@ -144,8 +148,9 @@ PLAUSIBLE_BOUNDS: dict[str, tuple[float, float]] = {
     "total_impulse_ns": (0.0, 100_000_000_000.0),
     "isp_vacuum_s": (100.0, 500.0),
     "burn_duration_s": (0.0, 5_000.0),
-    # 官方文档：minimum stage number 可为 0（strapon）甚至 -1（Atlas IIAS 式两类助推器）
-    "min_stages": (-1.0, 50.0),
+    # 级号范围（非级数）：起始级号 −1 = 两类助推器（官方实测 Atlas IIAS）
+    "min_stage_no": (-1.0, 50.0),
+    "max_stage_no": (0.0, 50.0),
     "engine_count": (0.0, 50.0),
 }
 

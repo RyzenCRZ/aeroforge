@@ -17,11 +17,11 @@ from aeroforge.data.snapshot import SNAPSHOT_TABLES, fetch_snapshot
 # ── 夹具：三张业务表各造 2 行，专测换算 / 缺失 / 疑点；三张关联表给空表头 ──
 
 FAKE_LV = (
-    "#LV_Name\tLV_Family\tLV_Variant\tLV_Manufacturer\tLV_Min_Stage\tLength\tDiameter"
-    "\tLaunch_Mass\tLEO_Capacity\tGTO_Capacity\tTO_Thrust\tClass\tLFlag\tMFlag\tDFlag\n"
+    "#LV_Name\tLV_Family\tLV_Variant\tLV_Manufacturer\tLV_Min_Stage\tLV_Max_Stage\tLength"
+    "\tDiameter\tLaunch_Mass\tLEO_Capacity\tGTO_Capacity\tTO_Thrust\tClass\tLFlag\tMFlag\tDFlag\n"
     "# Updated 2026 Sep 18\n"
-    "N-1 11A52\tN-1\t-\tOKB1\t1\t105.3\t14.00\t2,788.0\t70000\t-\t45300\tO\t-\t-\t-\n"
-    "BadRocket\tX\t-\tY\t1\t99999\t2.0\t12ab\t5\t5\t5\tO\t1\t-\t-\n"
+    "N-1 11A52\tN-1\t-\tOKB1\t1\t3\t105.3\t14.00\t2,788.0\t70000\t-\t45300\tO\t-\t-\t-\n"
+    "BadRocket\tX\t-\tY\t1\t1\t99999\t2.0\t12ab\t5\t5\t5\tO\t1\t-\t-\n"
 )
 
 FAKE_STAGES = (
@@ -88,10 +88,10 @@ def test_si_conversions_declared_units(snapshot_dir: Path) -> None:
     assert n1["length_m"] == pytest.approx(105.3)
     assert n1["payload_leo_kg"] == pytest.approx(70_000.0)  # kg 原样
     assert n1["payload_gto_kg"] is None or pd.isna(n1["payload_gto_kg"])  # "-" → 缺失
-    # 无量纲计数（单位 "1"）：必须正常换算且**不得**误标——"1" 漏登记 UNIT_FACTORS 曾
-    # 使真实快照全表被标 unit_uncertain（KeyError 被吞成标记）
-    assert n1["min_stages"] == 1.0
-    assert "min_stages" not in str(n1["unit_uncertain"])
+    # 级号范围（Min/Max stage，非级数——§7.3 更正）：无量纲计数原样换算且不得误标
+    assert n1["min_stage_no"] == 1.0
+    assert n1["max_stage_no"] == 3.0
+    assert "min_stage_no" not in str(n1["unit_uncertain"])
 
     b1 = df[(df["table"] == "stages") & (df["name"] == "N-1 B1")].iloc[0]
     assert b1["full_mass_kg"] == pytest.approx(1_300_000.0)  # 吨 → kg

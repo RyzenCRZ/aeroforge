@@ -11,7 +11,7 @@
 - /specs/      跨模块接口与构型规格（先改这里，再改实现）
 - /data/       数据快照与 CEA 预计算表（不可变，禁止手改）+ `contours/<id>.json` 母线存档（M1 起由 `POST /api/geometry/contour` 写入）
 - /artifacts/  内容寻址产物：`<key>/{model.step, model_lod1.glb, model_lod2.glb, metrics.json, provenance.json}`，`key = sha256(canonical_json + kernel_version + spec_version)`（§16.3）。派生数据，不入库
-- /tools/      preflight.py（环境预检 CLI，仅转调 `aeroforge.selfcheck`——R-30 要求唯一实现）；cea_tablegen.py / gcat_etl.py / model_import.py / benchmark.py 随 M3–M5 落地，**当前不存在**
+- /tools/      preflight.py（环境预检 CLI，仅转调 `aeroforge.selfcheck`——R-30 要求唯一实现）；gcat_snapshot.py / gcat_etl.py / gcat_db.py（GCAT 快照 / ETL / 建库，§7.1 / §7.5 / §7.7 已落地）；cea_tablegen.py / model_import.py / benchmark.py 随 M3–M5 落地，**当前不存在**
 - /docs/       未采纳想法与留白索引：`backlog.md`（R-16 / R-20 的落点，OI-14）· `adr/`（占位）
 - /.github/    持续集成：`workflows/ci.yml`（规格 §13.9）
 - AeroForge-Spec.md  唯一真理源，架构级变更必须先改本文档

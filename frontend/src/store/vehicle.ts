@@ -25,6 +25,12 @@ import { writeFieldPath } from './fieldPath'
 /** §11.4：改值后经 200 ms 防抖发出请求（与几何校验同一口径，避免逐字符请求风暴）。 */
 export const DIAGNOSE_DEBOUNCE_MS = 200
 
+/**
+ * 用户改动后的出处标注（§11.5 ⑤ 规则 5）：模板出处一旦被用户覆写即失去「已核对」
+ * 身份，标注整体转为这两个字——不得把模板出处与用户改值混在一句话里。
+ */
+export const USER_MODIFIED_SOURCE = '用户修改'
+
 /** 需要展示给用户的错误（§10.3 的 `suggestion` 必填且必须可见）。 */
 export interface VehicleError {
   code: string
@@ -91,6 +97,10 @@ interface VehicleState {
   diagnoseError: VehicleError | null
   loadTemplate: () => Promise<void>
   setField: (path: string, value: unknown) => void
+  /** 整体替换出处表（载入模板时用——替换即清掉旧表，包括「用户修改」标注）。 */
+  setSourcedFields: (map: Record<string, string>) => void
+  /** 用户改动某字段：该字段出处转为「用户修改」（§11.5 ⑤ 规则 5）。 */
+  markUserModified: (path: string) => void
   requestDiagnose: () => void
   reset: () => void
 }
@@ -164,6 +174,14 @@ export const useVehicleStore = create<VehicleState>((set, get) => {
         return
       }
       scheduler.schedule(runDiagnose)
+    },
+
+    setSourcedFields: (map) => {
+      set({ sourcedFields: map })
+    },
+
+    markUserModified: (path) => {
+      set({ sourcedFields: { ...get().sourcedFields, [path]: USER_MODIFIED_SOURCE } })
     },
 
     requestDiagnose: () => {

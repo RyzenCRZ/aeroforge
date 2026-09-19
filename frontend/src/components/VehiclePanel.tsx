@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
-import { fetchUnits, type Quantity } from '../api/params'
+import { fetchUnits, type Quantity, type Vehicle } from '../api/params'
+import { fetchTemplateDetail, matchTemplateName, type TemplateMatchResponse } from '../api/templates'
 import { toDisplayValue, toSiValue, toUnitTable, unitSymbol, type UnitTable } from '../api/units'
 import { readFieldPath } from '../store/fieldPath'
 import { useVehicleStore } from '../store/vehicle'
@@ -120,6 +121,15 @@ const MISSION_FIELDS: readonly FieldSpec[] = [
   { path: 'mission.inclination_deg', label: '轨道倾角', quantity: null, siUnit: '°', kind: 'number', step: 0.5 },
 ]
 
+/** 名称匹配的防抖间隔（OI-34）：与诊断防抖分开计——匹配查询更廉价，但也不逐字符发。 */
+export const NAME_MATCH_DEBOUNCE_MS = 300
+
+/** 提示条的状态：命中的响应 + 触发它的输入名（[忽略] 按「同一名称」判定，§11.5 ⑤ 规则 5）。 */
+interface NameMatch {
+  queriedName: string
+  response: TemplateMatchResponse
+}
+
 /** 单位表：载入一次并缓存。失败即保持空表——此时面板按 **SI** 显示并显式说明（不静默换口径）。 */
 function useUnitTable(): UnitTable {
   const [table, setTable] = useState<UnitTable>({})
@@ -147,6 +157,8 @@ interface NumberFieldProps {
   /** `null` = 尚未填写（仅 custom 比冲这类"条件必填"字段会出现） */
   value: number | null
   unsourced: boolean
+  /** 出处标注（§11.5 ⑤ 规则 5）：渲染在控件下方的小字；`undefined` = 无出处（占位值）。 */
+  source: string | undefined
   onCommit: (value: number) => void
 }
 
@@ -156,7 +168,7 @@ interface NumberFieldProps {
  * 为什么不能直接把 `Number(event.target.value)` 写回：输入 `0.0005` 的中间态 `0.`、`0.0`
  * 在 `Number` 下会退化成 `0`，逐字符重置会把小数点吃掉（壁厚、O/F 这类小数首当其冲）。
  */
-function NumberField({ fieldPath, label, unitText, step, value, unsourced, onCommit }: NumberFieldProps) {
+function NumberField({ fieldPath, label, unitText, step, value, unsourced, source, onCommit }: NumberFieldProps) {
   const [draft, setDraft] = useState(value === null ? '' : String(value))
 
   useEffect(() => {
@@ -182,6 +194,7 @@ function NumberField({ fieldPath, label, unitText, step, value, unsourced, onCom
           if (event.target.value.trim() !== '' && Number.isFinite(parsed)) onCommit(parsed)
         }}
       />
+      {source === undefined ? null : <span className="vehicle-panel__source-name">{source}</span>}
     </label>
   )
 }
@@ -199,6 +212,11 @@ function Field({ spec, fieldPath, value, unitTable, sourced, onCommit }: FieldPr
   const unsourced = sourced === undefined
   const unitText =
     spec.quantity === null ? spec.siUnit : (unitSymbol(unitTable, spec.quantity) || spec.siUnit)
+  // 出处标注（§11.5 ⑤ 规则 5）：有出处的字段在控件下方以小字呈现；用户改动后由
+  // store 转为「用户修改」。无出处的字段不标注文字（只有「占位」徽标）。
+  const sourceNode = sourced === undefined ? null : (
+    <span className="vehicle-panel__source-name">{sourced}</span>
+  )
 
   if (spec.kind === 'select') {
     return (
@@ -219,6 +237,7 @@ function Field({ spec, fieldPath, value, unitTable, sourced, onCommit }: FieldPr
             </option>
           ))}
         </select>
+        {sourceNode}
       </label>
     )
   }
@@ -236,6 +255,7 @@ function Field({ spec, fieldPath, value, unitTable, sourced, onCommit }: FieldPr
           value={typeof value === 'string' ? value : ''}
           onChange={(event) => onCommit(fieldPath, event.target.value)}
         />
+        {sourceNode}
       </label>
     )
   }
@@ -258,6 +278,7 @@ function Field({ spec, fieldPath, value, unitTable, sourced, onCommit }: FieldPr
       step={spec.step ?? 1}
       value={display}
       unsourced={unsourced}
+      source={sourced}
       onCommit={(next) => {
         const si = spec.quantity === null ? next : toSiValue(unitTable, spec.quantity, next)
         onCommit(fieldPath, si)
@@ -277,7 +298,42 @@ export function VehiclePanel() {
   const diagnosing = useVehicleStore((state) => state.diagnosing)
   const loadTemplate = useVehicleStore((state) => state.loadTemplate)
   const setField = useVehicleStore((state) => state.setField)
+  const setSourcedFields = useVehicleStore((state) => state.setSourcedFields)
+  const markUserModified = useVehicleStore((state) => state.markUserModified)
   const unitTable = useUnitTable()
+
+  // —— OI-34 名称匹配（§11.5 ⑤ 规则 5）——
+  // 命中只在提示条里呈现，绝不静默改写任何参数：载不载入由用户点按钮决定。
+  const [nameMatch, setNameMatch] = useState<NameMatch | null>(null)
+  const [templateLoadError, setTemplateLoadError] = useState<string | null>(null)
+  const matchTimer = useRef<number | null>(null)
+  const ignoredName = useRef<string | null>(null)
+
+  /** 名称提交后 300ms 防抖匹配；未命中 / 空名 / 已忽略的同名 → 无任何提示（宁漏勿错）。 */
+  const scheduleNameMatch = (name: string) => {
+    if (matchTimer.current !== null) window.clearTimeout(matchTimer.current)
+    // 名称已变：旧提示条立即作废——它描述的是上一个名称。
+    setNameMatch(null)
+    if (name.trim() === '') return // 空名不发起请求
+    matchTimer.current = window.setTimeout(() => {
+      matchTemplateName(name)
+        .then((response) => {
+          if (response.matched && name !== ignoredName.current) {
+            setNameMatch({ queriedName: name, response })
+          }
+        })
+        .catch(() => {
+          // 匹配查询失败不是用户可见错误（输入过程中的高频查询）：静默，宁漏勿错。
+        })
+    }, NAME_MATCH_DEBOUNCE_MS)
+  }
+
+  // 卸载时清掉未触发的防抖回调（jsdom 测试与快速切换页面都靠它兜底）。
+  useEffect(() => {
+    return () => {
+      if (matchTimer.current !== null) window.clearTimeout(matchTimer.current)
+    }
+  }, [])
 
   /**
    * 提交包装（QA-1，v0.6.2）：把比冲来源切回 `default` 时**同时清空**两个级层比冲字段
@@ -285,11 +341,58 @@ export function VehiclePanel() {
    */
   const commitField = (path: string, value: unknown) => {
     setField(path, value)
+    // §11.5 ⑤ 规则 5：用户改动的字段，模板出处即失效，标注转为「用户修改」。
+    // 只对已有出处的字段转换——给占位字段补一条"用户修改"等于替它编出处。
+    if (sourcedFields[path] !== undefined) markUserModified(path)
     if (value === 'default' && path.endsWith('.isp_source')) {
       const prefix = path.slice(0, -'isp_source'.length)
       setField(`${prefix}isp_vacuum_s`, null)
       setField(`${prefix}isp_sea_level_s`, null)
     }
+    if (path === 'name' && typeof value === 'string') scheduleNameMatch(value)
+  }
+
+  /**
+   * 载入命中模板（§11.5 ⑤ 规则 3）：detail.vehicle 整套写入，**但保留**用户当前的
+   * 名称与 mission 里的发射场——用户已经输入的东西不因载入而被覆盖。
+   */
+  const loadMatchedTemplate = () => {
+    if (nameMatch === null) return
+    const templateId = nameMatch.response.template_id
+    if (templateId === null || templateId === undefined) return
+    const current = useVehicleStore.getState().vehicle
+    if (current === null) return
+    setTemplateLoadError(null)
+    fetchTemplateDetail(templateId)
+      .then((detail) => {
+        const nextVehicle: Vehicle = {
+          ...detail.vehicle,
+          name: current.name,
+          mission: {
+            ...detail.vehicle.mission,
+            launch_site: current.mission.launch_site,
+            launch_site_id: current.mission.launch_site_id,
+          },
+        }
+        useVehicleStore.setState({ vehicle: nextVehicle })
+        // 出处表整体替换 = 旧表的「用户修改」标注一并清掉（新表以模板为准）。
+        setSourcedFields(detail.sourced_fields)
+        useVehicleStore.getState().requestDiagnose()
+        setNameMatch(null)
+        ignoredName.current = null
+      })
+      .catch((error: unknown) => {
+        // §10.3：错误必须可见。这里不用 ApiError 的 suggestion（面板顶部已有全局口径），
+        // 但失败绝不能静默——用户点过的按钮必须给个说法。
+        setTemplateLoadError(error instanceof Error ? error.message : '未知错误')
+      })
+  }
+
+  /** [忽略]：只收起提示条；同一名称本轮内不再提示，名称再次变更后重新匹配。 */
+  const ignoreMatchedTemplate = () => {
+    if (nameMatch === null) return
+    ignoredName.current = nameMatch.queriedName
+    setNameMatch(null)
   }
 
   // 起始箭只在首次挂载时取一次：空面板对用户没有意义，且它**只能**来自后端（§11.5 ① 第 6 条）。
@@ -366,6 +469,24 @@ export function VehiclePanel() {
         <div className="vehicle-panel__group">
           <h3 className="label">整箭</h3>
           {renderFields(VEHICLE_FIELDS, '')}
+          {nameMatch !== null ? (
+            <div>
+              <p className="vehicle-panel__hint">
+                {`检测到已知型号 ${nameMatch.response.name}（来源已核对）——载入其参数？`}
+              </p>
+              <p className="vehicle-panel__hint">
+                <button type="button" className="vehicle-panel__button" onClick={loadMatchedTemplate}>
+                  载入参数
+                </button>{' '}
+                <button type="button" className="vehicle-panel__button" onClick={ignoreMatchedTemplate}>
+                  忽略
+                </button>
+              </p>
+            </div>
+          ) : null}
+          {templateLoadError !== null ? (
+            <p className="vehicle-panel__error">{`模板载入失败：${templateLoadError}`}</p>
+          ) : null}
         </div>
 
         {vehicle.stages.map((stage, index) => {

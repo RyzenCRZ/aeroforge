@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AeroForge 参考样例：OpenRocket .ork 极小子集（规格 §7.5，供导入器回归）。
+     仅保留导入器关心的字段（真实 .ork 为 gzip 压缩的 XML，此处为可直接阅读的形
+     式）；级元素用现行方言 <axialstage>，导入器同时兼容 <stage>/<axial-stage>。 -->
+<openrocket version="1.9" creator="OpenRocket 23.09">
+  <rocket>
+    <name>AF 两级样例箭</name>
+    <axialstage>
+      <name>一级</name>
+      <length>1.20</length>
+      <diameter>0.098</diameter>
+      <mass>1.850</mass>
+      <motor mfg="AeroForge" code="AF-R1" type="single-use"/>
+    </axialstage>
+    <axialstage>
+      <name>二级</name>
+      <length>0.65</length>
+      <diameter>0.098</diameter>
+      <mass>0.620</mass>
+      <motor mfg="AeroForge" code="AF-R2" type="single-use"/>
+    </axialstage>
+    <!-- 真实文件常见的一级元素：不在导入子集内，必须被报告而非静默跳过（R-21） -->
+    <referencetype>maximum</referencetype>
+  </rocket>
+</openrocket>

@@ -337,6 +337,115 @@
         }
       }
     },
+    "/api/templates": {
+      "get": {
+        "tags": [
+          "params"
+        ],
+        "summary": "List Templates",
+        "description": "下发内置模板清单（仅元数据；完整参数按 id 取详情）。",
+        "operationId": "list_templates_api_templates_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/templates/match": {
+      "get": {
+        "tags": [
+          "params"
+        ],
+        "summary": "Match Template By Name",
+        "description": "OI-34 名称匹配。\n\n⚠ 本路由**必须注册在** ``/{template_id}`` 之前：路由按注册顺序匹配，\n顺序颠倒会让 ``match`` 被当成模板 id 吞掉。",
+        "operationId": "match_template_by_name_api_templates_match_get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateMatchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/templates/{template_id}": {
+      "get": {
+        "tags": [
+          "params"
+        ],
+        "summary": "Read Template By Id",
+        "description": "下发一个模板的完整参数（含逐字段出处表）。",
+        "operationId": "read_template_by_id_api_templates__template_id__get",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/jobs/{job_id}": {
       "get": {
         "tags": [
@@ -474,6 +583,36 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/import/motor": {
+      "post": {
+        "tags": [
+          "import"
+        ],
+        "summary": "Import Motor",
+        "description": "导入发动机/火箭模型文件，返回带单位后缀的 SI 字段与 warnings。\n\n同步响应端点（规格 §10.1：非作业、无 job_id）。multipart 表单须含名为\n``file`` 的文件字段；解析失败显式报错（R-21），不静默容错。",
+        "operationId": "import_motor_api_import_motor_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MotorParseResult"
+                    },
+                    {
+                      "$ref": "#/components/schemas/RocketParseResult"
+                    }
+                  ],
+                  "title": "Response Import Motor Api Import Motor Post"
                 }
               }
             }
@@ -1597,6 +1736,141 @@
         "title": "Mission",
         "description": "任务与轨道要素（§6.1 Mission 层；轨道要素由 OI-21 补入）。"
       },
+      "MotorParseResult": {
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": [
+              "eng",
+              "rse"
+            ],
+            "title": "Format"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "发动机型号（.eng 表头首列 / .rse 的 code 属性）"
+          },
+          "manufacturer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manufacturer",
+            "description": "制造商（仅 .rse 提供）"
+          },
+          "motor_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motor Type",
+            "description": "发动机类型（仅 .rse 的 type 属性）"
+          },
+          "delays": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Delays",
+            "description": "可用延时（数字或 P=堵死）"
+          },
+          "total_impulse_ns": {
+            "type": "number",
+            "title": "Total Impulse Ns",
+            "description": "总冲（N·s，曲线梯形积分）"
+          },
+          "burn_time_s": {
+            "type": "number",
+            "title": "Burn Time S",
+            "description": "燃烧时间（s，曲线末点时间）"
+          },
+          "avg_thrust_n": {
+            "type": "number",
+            "title": "Avg Thrust N",
+            "description": "平均推力（N，总冲 ÷ 燃烧时间）"
+          },
+          "peak_thrust_n": {
+            "type": "number",
+            "title": "Peak Thrust N",
+            "description": "峰值推力（N）"
+          },
+          "propellant_mass_kg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Propellant Mass Kg",
+            "description": "推进剂质量（kg，有则给出）"
+          },
+          "total_mass_kg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Mass Kg",
+            "description": "总质量（kg，有则给出）"
+          },
+          "thrust_curve": {
+            "items": {
+              "$ref": "#/components/schemas/ThrustPoint"
+            },
+            "type": "array",
+            "title": "Thrust Curve",
+            "description": "推力曲线（已统一为 SI）"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "description": "可疑内容清单（R-21：不静默）"
+          },
+          "unit_conversions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Unit Conversions",
+            "description": "逐条单位换算声明（§7.5：显式声明源单位）"
+          },
+          "derived": {
+            "type": "boolean",
+            "title": "Derived",
+            "description": "是否为推导值（.eng/.rse 为 False）",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "format",
+          "name",
+          "total_impulse_ns",
+          "burn_time_s",
+          "avg_thrust_n",
+          "peak_thrust_n",
+          "thrust_curve"
+        ],
+        "title": "MotorParseResult",
+        "description": "发动机解析结果（``.eng`` / ``.rse`` 同构）。字段名带 SI 单位后缀。"
+      },
       "Recovery": {
         "properties": {
           "enabled": {
@@ -1664,6 +1938,108 @@
         "type": "object",
         "title": "Recovery",
         "description": "回收与复用（§6.1 Recovery 层）。"
+      },
+      "RocketParseResult": {
+        "properties": {
+          "format": {
+            "type": "string",
+            "const": "ork",
+            "title": "Format"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "derived": {
+            "type": "boolean",
+            "title": "Derived",
+            "description": "恒为 True：.ork 结果不保证全字段保真",
+            "default": true
+          },
+          "stage_count": {
+            "type": "integer",
+            "title": "Stage Count"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/RocketStage"
+            },
+            "type": "array",
+            "title": "Stages"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "description": "未识别元素等报告（R-21）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "format",
+          "name",
+          "stage_count",
+          "stages"
+        ],
+        "title": "RocketParseResult",
+        "description": "``.ork`` 火箭解析结果。**一切字段均为 derived**（规格 §7.5）。"
+      },
+      "RocketStage": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "length_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Length M"
+          },
+          "diameter_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diameter M"
+          },
+          "mass_kg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mass Kg"
+          },
+          "engines": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Engines",
+            "description": "该级发动机型号列表"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "RocketStage",
+        "description": "``.ork`` 中的一级（字段仅在该级可用时给出，§7.5：不保证全字段保真）。"
       },
       "RuleOutcome": {
         "properties": {
@@ -2145,6 +2521,131 @@
         "title": "Tank",
         "description": "贮箱（§6.1 Tank 层）。\n\n``volume_m3`` / ``nominal_full_mass_kg`` / ``liquid_level_m`` 是**派生量**，\n不在此层存储（唯一权威原则）——它们由后端算出并随结果下发。"
       },
+      "TemplateDetailResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "模板标识"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "公开型号名"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "description": "必须原样呈现的说明（含来源声明与 §13.2 同源声明）"
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Aliases",
+            "description": "别名表"
+          },
+          "reference_payload_leo_kg": {
+            "type": "number",
+            "title": "Reference Payload Leo Kg",
+            "description": "公开 LEO 运力对照值（§13.2 基准表同源）"
+          },
+          "sourced_fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Sourced Fields",
+            "description": "字段路径 → 出处（覆盖该 Vehicle 的全部数值字段）；载入后逐控件标注，用户改动任何值后该字段出处转为「用户修改」（§11.5 ⑤ 规则 5）"
+          },
+          "vehicle": {
+            "$ref": "#/components/schemas/Vehicle",
+            "description": "模板本体（已过产品校验器、无硬违反，可直接提交诊断）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "note",
+          "aliases",
+          "reference_payload_leo_kg",
+          "sourced_fields",
+          "vehicle"
+        ],
+        "title": "TemplateDetailResponse",
+        "description": "``GET /api/templates/{template_id}`` 的响应体（§11.5 ⑤ 规则 2/5）。"
+      },
+      "TemplateListResponse": {
+        "properties": {
+          "templates": {
+            "items": {
+              "$ref": "#/components/schemas/TemplateSummaryOut"
+            },
+            "type": "array",
+            "title": "Templates",
+            "description": "内置模板清单（当前覆盖范围与缘由见各模板 note）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "templates"
+        ],
+        "title": "TemplateListResponse",
+        "description": "``GET /api/templates`` 的响应体（§11.5 ⑤ OI-29）。"
+      },
+      "TemplateMatchResponse": {
+        "properties": {
+          "matched": {
+            "type": "boolean",
+            "title": "Matched",
+            "description": "是否命中内置模板（规范化后精确等值，宁漏勿错）"
+          },
+          "template_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Id",
+            "description": "命中的模板 id（未命中为 null）"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name",
+            "description": "命中的模板名（未命中为 null）"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note",
+            "description": "命中模板的说明（未命中为 null）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "matched"
+        ],
+        "title": "TemplateMatchResponse",
+        "description": "``GET /api/templates/match`` 的响应体（§11.5 ⑤ OI-34）。\n\n未命中时 ``matched=false``、其余字段为 ``null``——**不报错**：名称栏防抖会在\n用户输入过程中频繁发出查询，「还没打完」不是错误。"
+      },
       "TemplateResponse": {
         "properties": {
           "template_id": {
@@ -2185,6 +2686,54 @@
         ],
         "title": "TemplateResponse",
         "description": "``GET /api/params/template`` 的响应体（界面可编辑的起始箭）。"
+      },
+      "TemplateSummaryOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "模板标识（详情端点的路径参数）"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "公开型号名"
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Aliases",
+            "description": "别名表（OI-34 匹配宇宙的一部分）"
+          },
+          "stage_count": {
+            "type": "integer",
+            "title": "Stage Count",
+            "description": "级数"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "description": "随模板下发的说明（界面须原样呈现）"
+          },
+          "reference_payload_leo_kg": {
+            "type": "number",
+            "title": "Reference Payload Leo Kg",
+            "description": "公开 LEO 运力对照值（§13.2 基准表同源）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "aliases",
+          "stage_count",
+          "note",
+          "reference_payload_leo_kg"
+        ],
+        "title": "TemplateSummaryOut",
+        "description": "清单中单个模板的元数据（不含完整参数——载入走详情端点）。"
       },
       "ThresholdEntry": {
         "properties": {
@@ -2262,6 +2811,27 @@
         ],
         "title": "ThresholdsResponse",
         "description": "``GET`` / ``PUT /api/params/thresholds`` 的响应体（§1.7.3 OI-31）。"
+      },
+      "ThrustPoint": {
+        "properties": {
+          "time_s": {
+            "type": "number",
+            "title": "Time S",
+            "description": "时间（s）"
+          },
+          "thrust_n": {
+            "type": "number",
+            "title": "Thrust N",
+            "description": "推力（N）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "time_s",
+          "thrust_n"
+        ],
+        "title": "ThrustPoint",
+        "description": "推力曲线上的一个点（已统一为 SI 单位）。"
       },
       "UnitsResponse": {
         "properties": {

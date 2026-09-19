@@ -11,7 +11,7 @@
 - /specs/      跨模块接口与构型规格（先改这里，再改实现）
 - /data/       数据快照与 CEA 预计算表（不可变，禁止手改）+ `contours/<id>.json` 母线存档（M1 起由 `POST /api/geometry/contour` 写入）
 - /artifacts/  内容寻址产物：`<key>/{model.step, model_lod1.glb, model_lod2.glb, metrics.json, provenance.json}`，`key = sha256(canonical_json + kernel_version + spec_version)`（§16.3）。派生数据，不入库
-- /tools/      preflight.py（环境预检 CLI，仅转调 `aeroforge.selfcheck`——R-30 要求唯一实现）；gcat_snapshot.py / gcat_etl.py / gcat_db.py（GCAT 快照 / ETL / 建库，§7.1 / §7.5 / §7.7 已落地）；cea_tablegen.py / model_import.py / benchmark.py 随 M3–M5 落地，**当前不存在**
+- /tools/      preflight.py（环境预检 CLI，仅转调 `aeroforge.selfcheck`——R-30 要求唯一实现）；gcat_snapshot.py / gcat_etl.py / gcat_db.py（GCAT 快照 / ETL / 建库，§7.1 / §7.5 / §7.7 已落地）；model_import.py（.eng/.ork/.rse 导入 CLI，§7.5 已落地）；cea_tablegen.py / benchmark.py 随 M4–M5 落地，**当前不存在**
 - /docs/       未采纳想法与留白索引：`backlog.md`（R-16 / R-20 的落点，OI-14）· `adr/`（占位）
 - /.github/    持续集成：`workflows/ci.yml`（规格 §13.9）
 - AeroForge-Spec.md  唯一真理源，架构级变更必须先改本文档
@@ -91,6 +91,7 @@
 - **2D 工程剖面图与 3D 装配树必须共用 §5.9 的 9 段分区枚举**（无漏件、无错序；分区高度与尺寸标注数值**一律后端下发**）
 - **轨道计算须同时输出 C3 与 ΔV**，且二者可由同一组 `μ` / `r_p` 互相反算（规格 §8.10；TMI 结果必须记录窗口 / 相位假设，否则不可复现）
 - **发射场纬度是自转加成与转向损失的唯一输入**，不得另设常量；固定其余参数时**纬度 ↓ ⟹ 运力 ↑** 必须成立（FR-19）
+- **助推器是并联侧级（级号 0）**：与芯一级合并为「0 级段」参与 ΔV 分配（段比冲取并联组合平均有效比冲 `ΣF_vac/Σṁ`，芯级推进剂跨段连续核算），不得当作独立串联级单独分配 ΔV（规格 §8.5 / OI-36）
 
 ## 协作约定
 - 跨模块改动先改 /specs/，接口冻结后再并行实现

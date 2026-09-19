@@ -191,6 +191,69 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Templates
+         * @description 下发内置模板清单（仅元数据；完整参数按 id 取详情）。
+         */
+        get: operations["list_templates_api_templates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/templates/match": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Match Template By Name
+         * @description OI-34 名称匹配。
+         *
+         *     ⚠ 本路由**必须注册在** ``/{template_id}`` 之前：路由按注册顺序匹配，
+         *     顺序颠倒会让 ``match`` 被当成模板 id 吞掉。
+         */
+        get: operations["match_template_by_name_api_templates_match_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/templates/{template_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Template By Id
+         * @description 下发一个模板的完整参数（含逐字段出处表）。
+         */
+        get: operations["read_template_by_id_api_templates__template_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}": {
         parameters: {
             query?: never;
@@ -245,6 +308,29 @@ export interface paths {
         get: operations["get_provenance_api_provenance__key__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/import/motor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Motor
+         * @description 导入发动机/火箭模型文件，返回带单位后缀的 SI 字段与 warnings。
+         *
+         *     同步响应端点（规格 §10.1：非作业、无 job_id）。multipart 表单须含名为
+         *     ``file`` 的文件字段；解析失败显式报错（R-21），不静默容错。
+         */
+        post: operations["import_motor_api_import_motor_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -911,6 +997,88 @@ export interface components {
             wind_profile_ref?: string | null;
         };
         /**
+         * MotorParseResult
+         * @description 发动机解析结果（``.eng`` / ``.rse`` 同构）。字段名带 SI 单位后缀。
+         */
+        MotorParseResult: {
+            /**
+             * Format
+             * @enum {string}
+             */
+            format: "eng" | "rse";
+            /**
+             * Name
+             * @description 发动机型号（.eng 表头首列 / .rse 的 code 属性）
+             */
+            name: string;
+            /**
+             * Manufacturer
+             * @description 制造商（仅 .rse 提供）
+             */
+            manufacturer?: string | null;
+            /**
+             * Motor Type
+             * @description 发动机类型（仅 .rse 的 type 属性）
+             */
+            motor_type?: string | null;
+            /**
+             * Delays
+             * @description 可用延时（数字或 P=堵死）
+             */
+            delays?: string[];
+            /**
+             * Total Impulse Ns
+             * @description 总冲（N·s，曲线梯形积分）
+             */
+            total_impulse_ns: number;
+            /**
+             * Burn Time S
+             * @description 燃烧时间（s，曲线末点时间）
+             */
+            burn_time_s: number;
+            /**
+             * Avg Thrust N
+             * @description 平均推力（N，总冲 ÷ 燃烧时间）
+             */
+            avg_thrust_n: number;
+            /**
+             * Peak Thrust N
+             * @description 峰值推力（N）
+             */
+            peak_thrust_n: number;
+            /**
+             * Propellant Mass Kg
+             * @description 推进剂质量（kg，有则给出）
+             */
+            propellant_mass_kg?: number | null;
+            /**
+             * Total Mass Kg
+             * @description 总质量（kg，有则给出）
+             */
+            total_mass_kg?: number | null;
+            /**
+             * Thrust Curve
+             * @description 推力曲线（已统一为 SI）
+             */
+            thrust_curve: components["schemas"]["ThrustPoint"][];
+            /**
+             * Warnings
+             * @description 可疑内容清单（R-21：不静默）
+             */
+            warnings?: string[];
+            /**
+             * Unit Conversions
+             * @description 逐条单位换算声明（§7.5：显式声明源单位）
+             */
+            unit_conversions?: string[];
+            /**
+             * Derived
+             * @description 是否为推导值（.eng/.rse 为 False）
+             * @default false
+             */
+            derived: boolean;
+        };
+        /**
          * Recovery
          * @description 回收与复用（§6.1 Recovery 层）。
          */
@@ -942,6 +1110,53 @@ export interface components {
              * @description 回收系统质量代价
              */
             system_mass_kg?: number | null;
+        };
+        /**
+         * RocketParseResult
+         * @description ``.ork`` 火箭解析结果。**一切字段均为 derived**（规格 §7.5）。
+         */
+        RocketParseResult: {
+            /**
+             * Format
+             * @constant
+             */
+            format: "ork";
+            /** Name */
+            name: string;
+            /**
+             * Derived
+             * @description 恒为 True：.ork 结果不保证全字段保真
+             * @default true
+             */
+            derived: boolean;
+            /** Stage Count */
+            stage_count: number;
+            /** Stages */
+            stages: components["schemas"]["RocketStage"][];
+            /**
+             * Warnings
+             * @description 未识别元素等报告（R-21）
+             */
+            warnings?: string[];
+        };
+        /**
+         * RocketStage
+         * @description ``.ork`` 中的一级（字段仅在该级可用时给出，§7.5：不保证全字段保真）。
+         */
+        RocketStage: {
+            /** Name */
+            name: string;
+            /** Length M */
+            length_m?: number | null;
+            /** Diameter M */
+            diameter_m?: number | null;
+            /** Mass Kg */
+            mass_kg?: number | null;
+            /**
+             * Engines
+             * @description 该级发动机型号列表
+             */
+            engines?: string[];
         };
         /**
          * RuleOutcome
@@ -1198,6 +1413,86 @@ export interface components {
             common_bulkhead_insulation_m?: number | null;
         };
         /**
+         * TemplateDetailResponse
+         * @description ``GET /api/templates/{template_id}`` 的响应体（§11.5 ⑤ 规则 2/5）。
+         */
+        TemplateDetailResponse: {
+            /**
+             * Id
+             * @description 模板标识
+             */
+            id: string;
+            /**
+             * Name
+             * @description 公开型号名
+             */
+            name: string;
+            /**
+             * Note
+             * @description 必须原样呈现的说明（含来源声明与 §13.2 同源声明）
+             */
+            note: string;
+            /**
+             * Aliases
+             * @description 别名表
+             */
+            aliases: string[];
+            /**
+             * Reference Payload Leo Kg
+             * @description 公开 LEO 运力对照值（§13.2 基准表同源）
+             */
+            reference_payload_leo_kg: number;
+            /**
+             * Sourced Fields
+             * @description 字段路径 → 出处（覆盖该 Vehicle 的全部数值字段）；载入后逐控件标注，用户改动任何值后该字段出处转为「用户修改」（§11.5 ⑤ 规则 5）
+             */
+            sourced_fields: {
+                [key: string]: string;
+            };
+            /** @description 模板本体（已过产品校验器、无硬违反，可直接提交诊断） */
+            vehicle: components["schemas"]["Vehicle"];
+        };
+        /**
+         * TemplateListResponse
+         * @description ``GET /api/templates`` 的响应体（§11.5 ⑤ OI-29）。
+         */
+        TemplateListResponse: {
+            /**
+             * Templates
+             * @description 内置模板清单（当前覆盖范围与缘由见各模板 note）
+             */
+            templates: components["schemas"]["TemplateSummaryOut"][];
+        };
+        /**
+         * TemplateMatchResponse
+         * @description ``GET /api/templates/match`` 的响应体（§11.5 ⑤ OI-34）。
+         *
+         *     未命中时 ``matched=false``、其余字段为 ``null``——**不报错**：名称栏防抖会在
+         *     用户输入过程中频繁发出查询，「还没打完」不是错误。
+         */
+        TemplateMatchResponse: {
+            /**
+             * Matched
+             * @description 是否命中内置模板（规范化后精确等值，宁漏勿错）
+             */
+            matched: boolean;
+            /**
+             * Template Id
+             * @description 命中的模板 id（未命中为 null）
+             */
+            template_id?: string | null;
+            /**
+             * Name
+             * @description 命中的模板名（未命中为 null）
+             */
+            name?: string | null;
+            /**
+             * Note
+             * @description 命中模板的说明（未命中为 null）
+             */
+            note?: string | null;
+        };
+        /**
          * TemplateResponse
          * @description ``GET /api/params/template`` 的响应体（界面可编辑的起始箭）。
          */
@@ -1226,6 +1521,42 @@ export interface components {
             };
             /** @description 起始箭本体（结构合法，可直接提交诊断） */
             vehicle: components["schemas"]["Vehicle"];
+        };
+        /**
+         * TemplateSummaryOut
+         * @description 清单中单个模板的元数据（不含完整参数——载入走详情端点）。
+         */
+        TemplateSummaryOut: {
+            /**
+             * Id
+             * @description 模板标识（详情端点的路径参数）
+             */
+            id: string;
+            /**
+             * Name
+             * @description 公开型号名
+             */
+            name: string;
+            /**
+             * Aliases
+             * @description 别名表（OI-34 匹配宇宙的一部分）
+             */
+            aliases: string[];
+            /**
+             * Stage Count
+             * @description 级数
+             */
+            stage_count: number;
+            /**
+             * Note
+             * @description 随模板下发的说明（界面须原样呈现）
+             */
+            note: string;
+            /**
+             * Reference Payload Leo Kg
+             * @description 公开 LEO 运力对照值（§13.2 基准表同源）
+             */
+            reference_payload_leo_kg: number;
         };
         /**
          * ThresholdEntry
@@ -1278,6 +1609,22 @@ export interface components {
              * @description 各项的**生效值**与来源；value 为 null 表示「未配置」（该判据不判定）
              */
             thresholds: components["schemas"]["ThresholdEntry"][];
+        };
+        /**
+         * ThrustPoint
+         * @description 推力曲线上的一个点（已统一为 SI 单位）。
+         */
+        ThrustPoint: {
+            /**
+             * Time S
+             * @description 时间（s）
+             */
+            time_s: number;
+            /**
+             * Thrust N
+             * @description 推力（N）
+             */
+            thrust_n: number;
         };
         /**
          * UnitsResponse
@@ -1685,6 +2032,88 @@ export interface operations {
             };
         };
     };
+    list_templates_api_templates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateListResponse"];
+                };
+            };
+        };
+    };
+    match_template_by_name_api_templates_match_get: {
+        parameters: {
+            query?: {
+                name?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateMatchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_template_by_id_api_templates__template_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                template_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_job_api_jobs__job_id__get: {
         parameters: {
             query?: never;
@@ -1779,6 +2208,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_motor_api_import_motor_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MotorParseResult"] | components["schemas"]["RocketParseResult"];
                 };
             };
         };

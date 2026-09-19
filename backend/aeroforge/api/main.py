@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from aeroforge import __version__
-from aeroforge.api import artifacts, geometry, jobs, params
+from aeroforge.api import artifacts, geometry, importers, jobs, params
 from aeroforge.api.deps import get_runner, reset_singletons
 from aeroforge.errors import AeroForgeError, ErrorBody, to_error_body
 from aeroforge.geometry.meridian import MeridianError
@@ -36,6 +36,8 @@ _STATUS_BY_CODE: dict[str, int] = {
     "GEOMETRY_KERNEL_FAILED": 500,
     "PARAMS_CONSTRAINT_VIOLATION": 422,
     "CONFIG_INVALID": 422,
+    "IMPORT_FORMAT_UNSUPPORTED": 400,
+    "IMPORT_PARSE_FAILED": 422,
 }
 
 _STATUS_CODES: dict[int, str] = {
@@ -73,6 +75,7 @@ app.include_router(geometry.router)
 app.include_router(params.router)
 app.include_router(jobs.router)
 app.include_router(artifacts.router)
+app.include_router(importers.router)
 
 
 def _error_response(status_code: int, body: ErrorBody) -> JSONResponse:

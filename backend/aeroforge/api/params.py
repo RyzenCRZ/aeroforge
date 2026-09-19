@@ -5,6 +5,9 @@
 - ``GET  /api/params/thresholds`` —— §6.5 阈值的**生效值**与来源（含「未配置」，OI-31）。
 - ``PUT  /api/params/thresholds`` —— 写入 ``config.toml``（§18.4 优先级不变）。
 - ``GET  /api/params/template`` —— 界面可编辑的起始箭（示例骨架，未经来源核对）。
+- ``GET  /api/templates`` —— 内置火箭模板清单（§11.5 ⑤ OI-29，M3 第四片）。
+- ``GET  /api/templates/match`` —— OI-34 名称匹配（规范化后等值，宁漏勿错）。
+- ``GET  /api/templates/{template_id}`` —— 模板完整参数（含逐字段出处表）。
 
 两条通路（§6.3 的「处理」列决定了它们必须分开）
 ----------------------------------------------
@@ -32,6 +35,7 @@ from pydantic import BaseModel, Field
 
 from aeroforge.errors import ParamsError
 from aeroforge.params import template as template_module
+from aeroforge.params import templates as templates_module
 from aeroforge.params.constraints import check_vehicle
 from aeroforge.params.diagnostics import RuleOutcome, run_diagnostics
 from aeroforge.params.report import Diagnostic, has_hard
@@ -197,4 +201,101 @@ def read_template() -> TemplateResponse:
         note=template_module.NOTE,
         sourced_fields=dict(template_module.SOURCED_FIELDS),
         vehicle=template_module.skeleton_vehicle(),
+    )
+
+
+class TemplateSummaryOut(BaseModel):
+    """清单中单个模板的元数据（不含完整参数——载入走详情端点）。"""
+
+    id: str = Field(description="模板标识（详情端点的路径参数）")
+    name: str = Field(description="公开型号名")
+    aliases: tuple[str, ...] = Field(description="别名表（OI-34 匹配宇宙的一部分）")
+    stage_count: int = Field(description="级数")
+    note: str = Field(description="随模板下发的说明（界面须原样呈现）")
+    reference_payload_leo_kg: float = Field(description="公开 LEO 运力对照值（§13.2 基准表同源）")
+
+
+class TemplateListResponse(BaseModel):
+    """``GET /api/templates`` 的响应体（§11.5 ⑤ OI-29）。"""
+
+    templates: tuple[TemplateSummaryOut, ...] = Field(
+        description="内置模板清单（当前覆盖范围与缘由见各模板 note）"
+    )
+
+
+@router.get("/api/templates", response_model=TemplateListResponse)
+def list_templates() -> TemplateListResponse:
+    """下发内置模板清单（仅元数据；完整参数按 id 取详情）。"""
+    return TemplateListResponse(
+        templates=tuple(
+            TemplateSummaryOut(
+                id=record.id,
+                name=record.name,
+                aliases=record.aliases,
+                stage_count=record.stage_count,
+                note=record.note,
+                reference_payload_leo_kg=record.reference_payload_leo_kg,
+            )
+            for record in templates_module.get_template_list()
+        )
+    )
+
+
+class TemplateMatchResponse(BaseModel):
+    """``GET /api/templates/match`` 的响应体（§11.5 ⑤ OI-34）。
+
+    未命中时 ``matched=false``、其余字段为 ``null``——**不报错**：名称栏防抖会在
+    用户输入过程中频繁发出查询，「还没打完」不是错误。
+    """
+
+    matched: bool = Field(description="是否命中内置模板（规范化后精确等值，宁漏勿错）")
+    template_id: str | None = Field(default=None, description="命中的模板 id（未命中为 null）")
+    name: str | None = Field(default=None, description="命中的模板名（未命中为 null）")
+    note: str | None = Field(default=None, description="命中模板的说明（未命中为 null）")
+
+
+@router.get("/api/templates/match", response_model=TemplateMatchResponse)
+def match_template_by_name(name: str = "") -> TemplateMatchResponse:
+    """OI-34 名称匹配。
+
+    ⚠ 本路由**必须注册在** ``/{template_id}`` 之前：路由按注册顺序匹配，
+    顺序颠倒会让 ``match`` 被当成模板 id 吞掉。
+    """
+    record = templates_module.match_template(name)
+    if record is None:
+        return TemplateMatchResponse(matched=False)
+    return TemplateMatchResponse(
+        matched=True, template_id=record.id, name=record.name, note=record.note
+    )
+
+
+class TemplateDetailResponse(BaseModel):
+    """``GET /api/templates/{template_id}`` 的响应体（§11.5 ⑤ 规则 2/5）。"""
+
+    id: str = Field(description="模板标识")
+    name: str = Field(description="公开型号名")
+    note: str = Field(description="必须原样呈现的说明（含来源声明与 §13.2 同源声明）")
+    aliases: tuple[str, ...] = Field(description="别名表")
+    reference_payload_leo_kg: float = Field(description="公开 LEO 运力对照值（§13.2 基准表同源）")
+    sourced_fields: dict[str, str] = Field(
+        description=(
+            "字段路径 → 出处（覆盖该 Vehicle 的全部数值字段）；载入后逐控件标注，"
+            "用户改动任何值后该字段出处转为「用户修改」（§11.5 ⑤ 规则 5）"
+        )
+    )
+    vehicle: Vehicle = Field(description="模板本体（已过产品校验器、无硬违反，可直接提交诊断）")
+
+
+@router.get("/api/templates/{template_id}", response_model=TemplateDetailResponse)
+def read_template_by_id(template_id: str) -> TemplateDetailResponse:
+    """下发一个模板的完整参数（含逐字段出处表）。"""
+    record = templates_module.get_template(template_id)  # 未知 id → ParamsError（422）
+    return TemplateDetailResponse(
+        id=record.id,
+        name=record.name,
+        note=record.note,
+        aliases=record.aliases,
+        reference_payload_leo_kg=record.reference_payload_leo_kg,
+        sourced_fields=dict(record.sourced_fields),
+        vehicle=record.build_vehicle(),
     )

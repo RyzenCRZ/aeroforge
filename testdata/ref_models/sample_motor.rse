@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AeroForge 参考样例：thrustcurve .rse 方言（规格 §7.5，供导入器回归）。
+     单位按 RSE 约定：推力 f 为 N、时间 t 为 s、质量属性为 kg。 -->
+<engine-directory>
+  <engine mfg="AeroForge" code="AF-R1" type="single-use" delays="0,2,4,P" massTotal="0.041" massProp="0.019">
+    <comment>参考样例发动机：0→峰值→0，燃烧 2.0 s，曲线积分约 15.15 N·s。</comment>
+    <data>
+      <point t="0.0" f="0.0"/>
+      <point t="0.1" f="4.0"/>
+      <point t="0.2" f="6.0"/>
+      <point t="0.4" f="9.0"/>
+      <point t="0.6" f="9.0"/>
+      <point t="0.8" f="9.0"/>
+      <point t="1.0" f="9.0"/>
+      <point t="1.2" f="9.0"/>
+      <point t="1.4" f="9.0"/>
+      <point t="1.6" f="9.0"/>
+      <point t="1.7" f="8.0"/>
+      <point t="1.8" f="6.0"/>
+      <point t="1.9" f="3.0"/>
+      <point t="1.95" f="1.5"/>
+      <point t="2.0" f="0.0"/>
+    </data>
+  </engine>
+</engine-directory>

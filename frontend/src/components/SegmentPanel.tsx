@@ -1,7 +1,6 @@
-import { useState } from 'react'
-
 import type { MeridianSegment, SegmentType } from '../api/geometry'
 import { canAppendSegment, chainEndRadius, useParamsStore } from '../store/params'
+import { useViewStore } from '../store/view'
 import './SegmentPanel.css'
 
 /** 段类型的中文名（§16.3 的 M1 曲线族裁剪）。 */
@@ -24,7 +23,7 @@ function metersText(value: number): string {
   return `${value.toFixed(2)} m`
 }
 
-/** 左栏：组件树（base_radius + 段链）+ 选中段的参数表单（规格 §16.3 三栏骨架）。 */
+/** 左栏：组件树（base_radius + 段链，含分级显隐）+ 选中段的参数表单（规格 §16.3 三栏骨架）。 */
 export function SegmentPanel() {
   const profile = useParamsStore((state) => state.profile)
   const setBaseRadius = useParamsStore((state) => state.setBaseRadius)
@@ -32,16 +31,33 @@ export function SegmentPanel() {
   const addSegment = useParamsStore((state) => state.addSegment)
   const removeSegment = useParamsStore((state) => state.removeSegment)
 
-  const [selected, setSelected] = useState(0)
+  // 选中项放在 `store/view`：组件树与视口**双向联动**（点视口里的段也会写这里，§11.4）
+  const selected = useViewStore((state) => state.selectedSegment)
+  const hiddenSegments = useViewStore((state) => state.hiddenSegments)
+  const selectSegment = useViewStore((state) => state.selectSegment)
+  const toggleSegmentHidden = useViewStore((state) => state.toggleSegmentHidden)
+  const showAllSegments = useViewStore((state) => state.showAllSegments)
 
   const selectedSegment: MeridianSegment | null =
-    selected >= 0 && selected < profile.segments.length ? profile.segments[selected] : null
+    selected !== null && selected >= 0 && selected < profile.segments.length
+      ? profile.segments[selected]
+      : null
   const appendable = canAppendSegment(profile)
 
   return (
     <div className="segment-panel">
       <section className="panel surface">
-        <h2 className="panel__title label">组件树</h2>
+        <div className="segment-panel__head">
+          <h2 className="panel__title label">组件树</h2>
+          <button
+            type="button"
+            className="segment-panel__button"
+            disabled={hiddenSegments.size === 0}
+            onClick={showAllSegments}
+          >
+            全部显示
+          </button>
+        </div>
         <ul className="segment-panel__tree">
           <li>
             <div className="segment-panel__row segment-panel__row--root">
@@ -49,26 +65,42 @@ export function SegmentPanel() {
               <span className="segment-panel__summary num">{metersText(profile.base_radius)}</span>
             </div>
           </li>
-          {profile.segments.map((segment, index) => (
-            <li key={`${index}-${segment.type}`}>
-              <button
-                type="button"
-                className={`segment-panel__row segment-panel__row--button${
-                  selected === index ? ' segment-panel__row--selected' : ''
-                }`}
-                aria-pressed={selected === index}
-                onClick={() => setSelected(index)}
-              >
-                <span className="segment-panel__name">
-                  {`#${index} ${segment.type}`}
-                </span>
-                <span className="segment-panel__summary num">
-                  {`L ${segment.length.toFixed(2)} · R ${segment.end_radius.toFixed(2)}`}
-                </span>
-              </button>
-            </li>
-          ))}
+          {profile.segments.map((segment, index) => {
+            const hidden = hiddenSegments.has(index)
+            return (
+              <li key={`${index}-${segment.type}`}>
+                <div
+                  className={`segment-panel__row segment-panel__row--button${
+                    selected === index ? ' segment-panel__row--selected' : ''
+                  }${hidden ? ' segment-panel__row--hidden' : ''}`}
+                >
+                  <input
+                    type="checkbox"
+                    className="segment-panel__visible"
+                    checked={!hidden}
+                    aria-label={`显示第 ${index} 段`}
+                    onChange={() => toggleSegmentHidden(index)}
+                  />
+                  <button
+                    type="button"
+                    className="segment-panel__select"
+                    aria-pressed={selected === index}
+                    onClick={() => selectSegment(index)}
+                  >
+                    <span className="segment-panel__name">{`#${index} ${segment.type}`}</span>
+                    <span className="segment-panel__summary num">
+                      {`L ${segment.length.toFixed(2)} · R ${segment.end_radius.toFixed(2)}`}
+                    </span>
+                  </button>
+                </div>
+              </li>
+            )
+          })}
         </ul>
+        <p className="segment-panel__hint label">
+          勾选框 = 该段在 3D 视口中的显隐。显隐是<strong>纯视图状态</strong>：不重算几何、不触发
+          后端请求；隐藏某段时露出的是该处的真实分界（§11.4）。
+        </p>
       </section>
 
       <section className="panel surface">
@@ -89,7 +121,7 @@ export function SegmentPanel() {
           />
         </label>
 
-        {selectedSegment !== null ? (
+        {selected !== null && selectedSegment !== null ? (
           <div className="segment-panel__fields">
             <p className="segment-panel__hint label">{`正在编辑段 #${selected}`}</p>
 
@@ -146,7 +178,7 @@ export function SegmentPanel() {
               disabled={profile.segments.length <= 1}
               onClick={() => {
                 removeSegment(selected)
-                setSelected(Math.max(0, selected - 1))
+                selectSegment(Math.max(0, selected - 1))
               }}
             >
               删除本段
@@ -168,7 +200,7 @@ export function SegmentPanel() {
               disabled={!appendable}
               onClick={() => {
                 addSegment(type)
-                setSelected(profile.segments.length)
+                selectSegment(profile.segments.length)
               }}
             >
               {`追加 ${SEGMENT_TYPE_TEXT[type]}`}

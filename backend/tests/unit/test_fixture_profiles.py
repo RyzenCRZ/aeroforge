@@ -57,6 +57,8 @@ LEGAL = frozenset(
         "_g1_clean",
         "_axial_cylinder",
         "_axial_capsule",
+        "_segmented_capsule",
+        "_segmented_cylinder",
     }
 )
 
@@ -64,7 +66,9 @@ LEGAL = frozenset(
 LEGAL_WITH_WARNING = frozenset({"_pinch"})
 
 #: 必须被拒的夹具
-ILLEGAL = frozenset({"_g1_violation"})
+#: ``_degenerate_middle`` 含两端半径均为 0 的轴向段，它与穹顶段在轴处呈 90° 折角，
+#: 违反 G1——用它验证几何层的"退化段不产出节点"分支（正常输入走不到该分支）。
+ILLEGAL = frozenset({"_g1_violation", "_degenerate_middle"})
 
 
 def _factories() -> dict[str, MeridianProfile]:

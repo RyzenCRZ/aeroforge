@@ -8,19 +8,29 @@ import { VehiclePanel } from '../components/VehiclePanel'
 import { Viewport } from '../r3f/Viewport'
 import { useModelStore } from '../store/model'
 import { useParamsStore } from '../store/params'
-import { LIGHT_INTENSITY_MAX, LIGHT_INTENSITY_MIN, useViewStore } from '../store/view'
+import { LIGHT_INTENSITY_MAX, LIGHT_INTENSITY_MIN, useViewStore, type ClipAxis } from '../store/view'
 import './Workspace.css'
 
-/** 视口控制条：亮度滑杆 + 着色开关。**只影响视觉，不触发任何后端请求**（§11.3 / §11.6）。 */
+/** 剖切法向的中文名（§11.4：法向沿箭体轴向或径向）。 */
+const CLIP_AXIS_TEXT: Record<ClipAxis, string> = {
+  axial: '轴向',
+  radial: '径向',
+}
+
+/** 视口控制条：亮度滑杆 + 着色开关 + 剖切。**只影响视觉，不触发任何后端请求**（§11.3 / §11.6）。 */
 function ViewControls() {
   const lightIntensity = useViewStore((state) => state.lightIntensity)
   const showGrid = useViewStore((state) => state.showGrid)
   const autoRotate = useViewStore((state) => state.autoRotate)
   const wireframe = useViewStore((state) => state.wireframe)
+  const clip = useViewStore((state) => state.clip)
   const setLightIntensity = useViewStore((state) => state.setLightIntensity)
   const toggleGrid = useViewStore((state) => state.toggleGrid)
   const toggleAutoRotate = useViewStore((state) => state.toggleAutoRotate)
   const toggleWireframe = useViewStore((state) => state.toggleWireframe)
+  const setClipEnabled = useViewStore((state) => state.setClipEnabled)
+  const setClipAxis = useViewStore((state) => state.setClipAxis)
+  const setClipPosition = useViewStore((state) => state.setClipPosition)
 
   return (
     <div className="workspace__controls">
@@ -47,6 +57,41 @@ function ViewControls() {
       <label className="workspace__control">
         <input type="checkbox" checked={wireframe} onChange={toggleWireframe} />
         <span className="label">线框</span>
+      </label>
+      <label className="workspace__control">
+        <input
+          type="checkbox"
+          checked={clip.enabled}
+          onChange={(event) => setClipEnabled(event.target.checked)}
+        />
+        <span className="label">剖切</span>
+      </label>
+      <label className="workspace__control">
+        <span className="label">法向</span>
+        <select
+          value={clip.axis}
+          disabled={!clip.enabled}
+          onChange={(event) => setClipAxis(event.target.value as ClipAxis)}
+        >
+          {(Object.keys(CLIP_AXIS_TEXT) as ClipAxis[]).map((axis) => (
+            <option key={axis} value={axis}>
+              {CLIP_AXIS_TEXT[axis]}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="workspace__control">
+        <span className="label">位置</span>
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.01}
+          value={clip.position}
+          disabled={!clip.enabled}
+          onChange={(event) => setClipPosition(Number(event.target.value))}
+        />
+        <span className="num">{clip.position.toFixed(2)}</span>
       </label>
     </div>
   )

@@ -42,6 +42,25 @@ const REPORT: ValidationReport = {
     [1, 1],
     [0, 5],
   ],
+  // 逐段闭合轮廓（下标对应 profile.segments）：下穹顶 / 柱段 / 上穹顶
+  segment_outline: [
+    [
+      [0, 0],
+      [1, 1],
+      [0, 1],
+    ],
+    [
+      [0, 1],
+      [1, 1],
+      [1, 4],
+      [0, 4],
+    ],
+    [
+      [0, 4],
+      [1, 4],
+      [0, 5],
+    ],
+  ],
   envelope: [2, 2, 5],
   volume: 5.2,
   surface_area: 20.1,

@@ -52,3 +52,20 @@
 .workspace__control input[type='checkbox'] {
   accent-color: var(--color-accent);
 }
+
+.workspace__control select {
+  padding: 2px 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 12px;
+}
+
+/* 剖切关闭时，法向与位置控件禁用——避免"看不出为什么拖了没反应" */
+.workspace__control select:disabled,
+.workspace__control input[type='range']:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}

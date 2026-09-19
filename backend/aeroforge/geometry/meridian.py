@@ -288,6 +288,33 @@ class ResolvedProfile:
             points.insert(0, (0.0, 0.0))
         return points
 
+    def segment_outlines(self, max_step_deg: float = 5.0) -> list[list[tuple[float, float]]]:
+        """**逐段**闭合轮廓（OI-33 ③），与 :meth:`closed_outline` 同粒度拆分。
+
+        每段一组点，自轴线起、回轴线止（两端半径为正时各补一条径向段），
+        故前端可对每组点各建一个 ``LatheGeometry``，使**示意通道与权威通道同粒度**：
+        隐藏某段时两侧都少画同一段。数值全部来自后端，前端仍是零几何计算（ADR-011）。
+
+        ⚠ **下标必须与 ``segments`` 一一对应**：退化段（两端半径均为 0，回转体为空）
+        返回**空列表**而非跳过——跳过会让后续下标整体前移，前端按 `seg-<i>` 隐藏时
+        就会隐藏**相邻的另一段**（静默错位）。
+        """
+        outlines: list[list[tuple[float, float]]] = []
+        for geom in self.segments:
+            start_radius, start_z = geom.start
+            end_radius, end_z = geom.end
+            if start_radius <= GEOM_TOL and end_radius <= GEOM_TOL:
+                outlines.append([])
+                continue
+            points: list[tuple[float, float]] = []
+            if start_radius > GEOM_TOL:
+                points.append((0.0, start_z))
+            points.extend(sample_segment(geom, max_step_deg))
+            if end_radius > GEOM_TOL:
+                points.append((0.0, end_z))
+            outlines.append(points)
+        return outlines
+
 
 def resolve(profile: MeridianProfile) -> ResolvedProfile:
     """推算整条剖面：逐段链接并校验端点连续性（G0 应结构性成立）。"""

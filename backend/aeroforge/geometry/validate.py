@@ -77,6 +77,13 @@ class ValidationReport(BaseModel):
     joints: list[JointCheck]
     sample: list[tuple[float, float]] = Field(description="剖面采样点 (r, z)，米")
     outline: list[tuple[float, float]] = Field(description="闭合轮廓 (r, z)，米")
+    segment_outline: list[list[tuple[float, float]]] = Field(
+        description=(
+            "**逐段**闭合轮廓 (r, z)，米——下标与 `profile.segments` 一一对应，"
+            "退化段为空列表。供示意通道**逐段**建网格，与权威通道的 GLB 具名节点"
+            "（`seg-<i>`）同粒度，二者才能各自隐藏同一段（OI-33 ③）"
+        )
+    )
     envelope: tuple[float, float, float] = Field(description="解析包络 (2R, 2R, L)，米")
     volume: float = Field(description="解析体积（m³）")
     surface_area: float
@@ -207,6 +214,10 @@ def validate_meridian(profile: MeridianProfile) -> ValidationReport:
         joints=joints,
         sample=[(round(r, 12), round(z, 12)) for r, z in sample_profile(resolved)],
         outline=[(round(r, 12), round(z, 12)) for r, z in outline],
+        segment_outline=[
+            [(round(r, 12), round(z, 12)) for r, z in chunk]
+            for chunk in resolved.segment_outlines()
+        ],
         envelope=metrics.envelope,
         volume=metrics.volume,
         surface_area=metrics.surface_area,

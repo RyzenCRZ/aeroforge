@@ -115,7 +115,12 @@ def profile_face(resolved: ResolvedProfile) -> bd.Face:
 
 
 def build_solid(profile: MeridianProfile) -> bd.Part:
-    """母线剖面 → 回转实体（绕 Z 轴 360°）。"""
+    """母线剖面 → 回转实体（绕 Z 轴 360°）。
+
+    ⚠ 这是**权威体**：体积 / 表面积 / 质心 / STEP 一律取它（OI-33 ④）。
+    GLB 走 :func:`build_segments` 的逐段版，但两者覆盖**同一区域**，故"看到的"
+    与"算的"仍是同一个外形（P1 / ADR-012）。
+    """
     resolved = resolve(profile)
     face = profile_face(resolved)
     part = bd.revolve(face, axis=bd.Axis.Z)
@@ -123,6 +128,82 @@ def build_solid(profile: MeridianProfile) -> bd.Part:
         msg = "回转建模失败：OCCT 未返回实体"
         raise RuntimeError(msg)
     return part
+
+
+# ---------------------------------------------------------------------------
+# 分段回转（GLB 场景图的来源，OI-33 ②）
+# ---------------------------------------------------------------------------
+
+#: 分段 GLB 的根节点名。⚠ 前端只按名找节点，改名即等于关掉分级显隐。
+GLB_ROOT_NAME = "vehicle"
+
+#: 分段节点名前缀：``seg-<i>``，``<i>`` 为 ``profile.segments`` 的 0 基下标。
+GLB_SEGMENT_PREFIX = "seg-"
+
+
+def segment_label(index: int) -> str:
+    """第 ``index`` 段的 GLB 节点名（0 基，对应 ``profile.segments[index]``）。"""
+    return f"{GLB_SEGMENT_PREFIX}{index}"
+
+
+def segment_face(geom: SegmentGeometry) -> bd.Face | None:
+    """单段的自闭合剖面（该段曲线 + 两端径向段 + 轴线闭合边）。
+
+    返回 ``None`` 表示**退化段**（两端半径均为 0，回转体为空）——按 OI-33 ② 不产出节点。
+    """
+    start_radius, start_z = geom.start
+    end_radius, end_z = geom.end
+    if start_radius <= GEOM_TOL and end_radius <= GEOM_TOL:
+        return None
+
+    chain: list[bd.Edge] = [_segment_edge(geom)]
+    if start_radius > GEOM_TOL:
+        chain.append(bd.Edge.make_line((0.0, 0.0, start_z), (start_radius, 0.0, start_z)))
+    if end_radius > GEOM_TOL:
+        chain.append(bd.Edge.make_line((end_radius, 0.0, end_z), (0.0, 0.0, end_z)))
+    chain.append(bd.Edge.make_line((0.0, 0.0, end_z), (0.0, 0.0, start_z)))
+
+    wires = bd.Wire.combine(chain)
+    if not wires:
+        msg = f"分段剖面构边失败：段（{geom.kind}，z {start_z} → {end_z}）的边链无法合成为线框"
+        raise RuntimeError(msg)
+    face = bd.Face(wires[0])
+    if face is None:
+        msg = f"分段剖面无法生成平面（边链可能不自洽）：段（{geom.kind}，z {start_z} → {end_z}）"
+        raise RuntimeError(msg)
+    return face
+
+
+def build_segments(profile: MeridianProfile) -> bd.Compound:
+    """母线剖面 → **逐段具名**的复合体（GLB 场景图的唯一来源，OI-33 ②）。
+
+    场景图：``vehicle``（根，**无 mesh**）→ ``seg-0`` / ``seg-1`` / … 各持一个 mesh。
+    每段各自回转成实体，故段间新增的分界面在**未隐藏任何段**时被实体完全包住、
+    从外部不可见——"看到的"与"算的"仍是同一个外形（P1 / ADR-012）。
+
+    ⚠ 三条硬约束中本函数负责两条：**每个非退化段必须有节点名**（缺名 = 前端点了没反应，
+    静默失效）、**根节点不得持 mesh**（否则整体网格与分段网格叠加渲染，同一处画两遍）。
+    """
+    resolved = resolve(profile)
+    children: list[bd.Part] = []
+    for index, geom in enumerate(resolved.segments):
+        face = segment_face(geom)
+        if face is None:
+            continue
+        solid = bd.revolve(face, axis=bd.Axis.Z)
+        if solid is None:
+            msg = f"分段回转建模失败：段 {index}（{geom.kind}），OCCT 未返回实体"
+            raise RuntimeError(msg)
+        solid.label = segment_label(index)
+        children.append(solid)
+
+    if not children:
+        msg = "分段回转失败：全部段均退化（两端半径均为 0），未产出任何实体"
+        raise RuntimeError(msg)
+
+    root = bd.Compound(children=children)
+    root.label = GLB_ROOT_NAME
+    return root
 
 
 # ---------------------------------------------------------------------------
@@ -191,11 +272,15 @@ def export_step(part: bd.Part, path: Path) -> None:
         raise RuntimeError(msg)
 
 
-def export_glb(part: bd.Part, path: Path, *, deflection: float, angular: float) -> None:
-    """导出二进制 GLB（⚠ 必须显式 ``unit=Unit.M``）。"""
+def export_glb(shape: bd.Compound, path: Path, *, deflection: float, angular: float) -> None:
+    """导出二进制 GLB（⚠ 必须显式 ``unit=Unit.M``）。
+
+    传入的 ``shape`` 决定 GLB 的**场景图**：传 :func:`build_segments` 得逐段具名节点
+    （分级显隐的前提，OI-33 ②）；传 :func:`build_solid` 得单节点。本工程一律走分段版。
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     ok = bd.export_gltf(
-        part,
+        shape,
         str(path),
         unit=bd.Unit.M,
         binary=True,
@@ -279,6 +364,32 @@ def _transform_point(
     return (coordinates[0], coordinates[1], coordinates[2])
 
 
+def read_glb_json(path: Path) -> dict[str, Any]:
+    """读取 GLB 的 JSON 块（场景图、网格、访问器都在此）。
+
+    GLB = 12 字节头 + 若干块（每块 8 字节头 + 载荷，载荷按 4 字节对齐）。
+    单独抽出本函数是为了让"场景图契约"（OI-33 ②：节点名 / 根节点不持 mesh）与
+    包围盒核对**读同一份解析结果**，而不是各写一份二进制解析。
+    """
+    raw = path.read_bytes()
+    if len(raw) < 12 or raw[:4] != b"glTF":
+        msg = f"不是合法的 GLB 文件：{path}"
+        raise RuntimeError(msg)
+
+    offset = 12
+    while offset + 8 <= len(raw):
+        chunk_length = int.from_bytes(raw[offset : offset + 4], "little")
+        chunk_type = raw[offset + 4 : offset + 8]
+        if chunk_type == b"JSON":
+            payload = raw[offset + 8 : offset + 8 + chunk_length]
+            gltf: dict[str, Any] = json.loads(payload.decode("utf-8"))
+            return gltf
+        offset += 8 + chunk_length + (-chunk_length % 4)
+
+    msg = f"GLB 缺少 JSON 块：{path}"
+    raise RuntimeError(msg)
+
+
 def glb_bounding_box(path: Path) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
     """GLB 在**世界坐标**下的包围盒（已施加场景图的节点变换）。
 
@@ -292,25 +403,7 @@ def glb_bounding_box(path: Path) -> tuple[tuple[float, float, float], tuple[floa
     只读访问器会得到"轴向在 z"的错误结论，进而让前端多做一次 -90°，把模型转倒——
     这正是 M2 首项目视核对查出的缺陷，故此处按场景图求世界坐标。
     """
-    raw = path.read_bytes()
-    if len(raw) < 12 or raw[:4] != b"glTF":
-        msg = f"不是合法的 GLB 文件：{path}"
-        raise RuntimeError(msg)
-
-    offset = 12
-    gltf: dict[str, Any] | None = None
-    while offset + 8 <= len(raw):
-        chunk_length = int.from_bytes(raw[offset : offset + 4], "little")
-        chunk_type = raw[offset + 4 : offset + 8]
-        payload = raw[offset + 8 : offset + 8 + chunk_length]
-        if chunk_type == b"JSON":
-            gltf = json.loads(payload.decode("utf-8"))
-            break
-        offset += 8 + chunk_length + (-chunk_length % 4)
-
-    if gltf is None:
-        msg = f"GLB 缺少 JSON 块：{path}"
-        raise RuntimeError(msg)
+    gltf = read_glb_json(path)
 
     nodes: list[dict[str, Any]] = gltf.get("nodes", [])
     if not nodes:

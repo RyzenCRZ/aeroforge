@@ -4,6 +4,17 @@
   gap: 10px;
 }
 
+.segment-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.segment-panel__head .panel__title {
+  margin: 0;
+}
+
 .segment-panel__tree {
   display: flex;
   flex-direction: column;
@@ -38,6 +49,34 @@
 
 .segment-panel__row--selected {
   border-color: var(--color-accent);
+}
+
+/* 已隐藏的段：文字压暗，与视口里"看不见"对应（§11.4 组件树 ↔ 视口双向联动） */
+.segment-panel__row--hidden .segment-panel__name,
+.segment-panel__row--hidden .segment-panel__summary {
+  opacity: 0.45;
+}
+
+.segment-panel__visible {
+  flex: 0 0 auto;
+  margin: 0;
+  accent-color: var(--color-accent);
+}
+
+/* 选中段的行内按钮：吃掉整行剩余宽度，但外观仍由 .segment-panel__row 承担 */
+.segment-panel__select {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .segment-panel__row--root {

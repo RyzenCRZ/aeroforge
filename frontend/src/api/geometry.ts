@@ -69,6 +69,10 @@ function isValidationReport(value: unknown): value is ValidationReport {
     value.sample.every(isNumberPair) &&
     Array.isArray(value.outline) &&
     value.outline.every(isNumberPair) &&
+    Array.isArray(value.segment_outline) &&
+    value.segment_outline.every(
+      (chunk) => Array.isArray(chunk) && chunk.every(isNumberPair),
+    ) &&
     isNumberTriple(value.envelope) &&
     typeof value.volume === 'number' &&
     typeof value.surface_area === 'number' &&
@@ -115,6 +119,8 @@ function isContourResponse(value: unknown): value is ContourResponse {
  * 母线层校验（纯 Python，无内核）。
  *
  * 响应同时带 `sample` / `outline` 采样点，前端据此画 2D 剖面与示意网格——
+ * `segment_outline` 是**逐段**轮廓（下标与 `profile.segments` 一一对应），
+ * 供示意通道与权威通道的 `seg-<i>` 节点**同粒度**显隐（§11.4 / OI-33）。
  * 端点数值全部来自后端，前端不做任何几何计算（ADR-011）。
  */
 export function validateProfile(profile: MeridianProfile, signal?: AbortSignal): Promise<ValidationReport> {

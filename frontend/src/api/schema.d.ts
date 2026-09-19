@@ -1331,6 +1331,14 @@ export interface components {
                 number
             ][];
             /**
+             * Segment Outline
+             * @description **逐段**闭合轮廓 (r, z)，米——下标与 `profile.segments` 一一对应，退化段为空列表。供示意通道**逐段**建网格，与权威通道的 GLB 具名节点（`seg-<i>`）同粒度，二者才能各自隐藏同一段（OI-33 ③）
+             */
+            segment_outline: [
+                number,
+                number
+            ][][];
+            /**
              * Envelope
              * @description 解析包络 (2R, 2R, L)，米
              */

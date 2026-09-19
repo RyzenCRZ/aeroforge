@@ -49,6 +49,7 @@ from aeroforge.geometry.revolve import (
     LOD1_DEFLECTION,
     LOD2_ANGULAR,
     LOD2_DEFLECTION,
+    build_segments,
     build_solid,
     export_glb,
     export_step,
@@ -268,17 +269,20 @@ class GeometryJobRunner:
         written: list[str] = []
 
         with self.store.stage(cache_key.key) as staged:
-            # ── 阶段 3：LOD 网格导出 ──
+            # ── 阶段 3：LOD 网格导出（**逐段具名**场景图，OI-33 ②） ──
+            #    量测与 STEP 一律仍取上面的整体体 `part`；分段体只用于 GLB 与显隐，
+            #    两者覆盖同一区域，故"看到的"与"算的"是同一个外形（P1 / ADR-012）。
             self._stage(job_id, JobStage.MESH, started, timings)
+            segments = build_segments(profile)
             export_glb(
-                part,
+                segments,
                 staged.register(ARTIFACT_LOD1),
                 deflection=LOD1_DEFLECTION,
                 angular=LOD1_ANGULAR,
             )
             written.append(ARTIFACT_LOD1)
             export_glb(
-                part,
+                segments,
                 staged.register(ARTIFACT_LOD2),
                 deflection=LOD2_DEFLECTION,
                 angular=LOD2_ANGULAR,

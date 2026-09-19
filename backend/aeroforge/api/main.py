@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from aeroforge import __version__
-from aeroforge.api import artifacts, geometry, importers, jobs, params
+from aeroforge.api import artifacts, catalog, geometry, importers, jobs, params
 from aeroforge.api.deps import get_runner, reset_singletons
 from aeroforge.errors import AeroForgeError, ErrorBody, to_error_body
 from aeroforge.geometry.meridian import MeridianError
@@ -31,6 +31,7 @@ _STATUS_BY_CODE: dict[str, int] = {
     "CONTOUR_NOT_FOUND": 404,
     "ARTIFACT_NOT_FOUND": 404,
     "JOB_NOT_FOUND": 404,
+    "CATALOG_NOT_FOUND": 404,
     "GEOMETRY_INVALID": 422,
     "GEOMETRY_G1_DISCONTINUITY": 422,
     "GEOMETRY_KERNEL_FAILED": 500,
@@ -73,6 +74,7 @@ app = FastAPI(
 
 app.include_router(geometry.router)
 app.include_router(params.router)
+app.include_router(catalog.router)
 app.include_router(jobs.router)
 app.include_router(artifacts.router)
 app.include_router(importers.router)

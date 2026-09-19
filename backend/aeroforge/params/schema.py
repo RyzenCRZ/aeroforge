@@ -128,7 +128,7 @@ class Tank(ParamsModel):
         "length", "用户显式给定的箱长（省略 = 由后端按 §5.9 派生）", default=None, gt=0.0
     )
     wall_thickness_m: float = si_field("length", "壁厚", gt=0.0)
-    material: str = Field(description="材料（M3 起由材料库校验）")
+    material: str = Field(description="材料库引用（/api/catalog/materials；值须为库内材料 id）")
     fill_fraction: float = Field(
         gt=0.0,
         description="加注比例 = 实际加注量 / 满装量；上限 1.0（OI-03，由约束引擎判定）",
@@ -288,7 +288,7 @@ class Stage(ParamsModel):
     diameter_m: float = si_field("length", "级直径", gt=0.0)
     length_m: float = si_field("length", "级高度（含级间段）", gt=0.0)
     wall_thickness_m: float = si_field("length", "级壁厚", gt=0.0)
-    material: str = Field(description="材料（M3 起由材料库校验）")
+    material: str = Field(description="材料库引用（/api/catalog/materials；值须为库内材料 id）")
     structure_coefficient: float = Field(
         gt=0.0, lt=1.0, description="结构系数 σ = m_dry/(m_dry+m_prop)（**存储权威**，§6.1）"
     )
@@ -378,7 +378,9 @@ class Vehicle(ParamsModel):
     stages: tuple[Stage, ...] = Field(min_length=1, description="自下而上（index 1 = 第一级）")
     payload_mass_kg: float = si_field("mass", "有效载荷质量", ge=0.0)
     fairing_diameter_m: float | None = si_field("length", "整流罩直径", default=None, gt=0.0)
-    material: str = Field(description="箭体材料（全局默认，可被 Stage 覆盖）")
+    material: str = Field(
+        description="箭体材料（全局默认，可被 Stage 覆盖）；材料库引用（/api/catalog/materials）"
+    )
     propellant: PropellantCombination = Field(description="推进剂组合（全局默认，可被 Stage 覆盖）")
     aero: Aero | None = Field(default=None, description="气动（缺失时按默认值并附 warning）")
     profile: MeridianProfile | None = Field(

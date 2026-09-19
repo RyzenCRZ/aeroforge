@@ -89,7 +89,7 @@ def make_stage(
     tank = Tank(
         tank_type="separate",
         wall_thickness_m=tank_wall_thickness_m,
-        material="Al-2219",
+        material="al-2219",
         fill_fraction=0.95,
         feed_system="pump_fed",
     )
@@ -99,7 +99,7 @@ def make_stage(
         diameter_m=3.7,
         length_m=length_m,
         wall_thickness_m=0.005,
-        material="Al-2219",
+        material="al-2219",
         structure_coefficient=structure_coefficient,
         fill_fraction=0.95,
         engine_count=9,
@@ -124,7 +124,7 @@ def _legal_vehicle(name: str, stages: tuple[Stage, ...]) -> Vehicle:
         name=name,
         stages=stages,
         payload_mass_kg=22_800.0,
-        material="Al-2219",
+        material="al-2219",
         propellant="LOX/RP-1",
         # 显式给出气动，避免正例夹具无端带一条 ENGINEER_AERO_DEFAULTED 警告
         aero=Aero(drag_coefficient=0.3),

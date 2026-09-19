@@ -115,6 +115,10 @@ ENGINE_FIELDS: tuple[FieldMap, ...] = (
     # 官方文档：Typical Isp (s), (vacuum Isp where available)——§7.5 规则 3 的真空口径
     FieldMap("Isp", "isp_vacuum_s", "s"),
     FieldMap("Duration", "burn_duration_s", "s"),
+    # 族谱落地口径（§7.4，M3 第五片）：Date / Usage 两列 TEXT 原样映射——含 ``?``
+    # 尾标等可信度痕迹（§7.5：无法确定即保留原样，不猜、不清洗）。
+    FieldMap("Date", "first_flight"),
+    FieldMap("Usage", "usage_notes"),
     FieldMap("MFlag", "source_flags", keep_raw=True),
     FieldMap("ImpFlag", "source_flags", keep_raw=True),
     FieldMap("TFlag", "source_flags", keep_raw=True),

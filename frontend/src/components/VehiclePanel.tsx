@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 
+import { fetchMaterials, type MaterialEntry } from '../api/materials'
 import { fetchUnits, type Quantity, type Vehicle } from '../api/params'
 import { fetchTemplateDetail, matchTemplateName, type TemplateMatchResponse } from '../api/templates'
 import { toDisplayValue, toSiValue, toUnitTable, unitSymbol, type UnitTable } from '../api/units'
@@ -20,6 +21,12 @@ import './VehiclePanel.css'
  * 3. **单位按后端下发的 `factor` 格式化**（§6.4 / OI-32）：前端零换算系数。
  */
 
+/** 下拉选项：value 进 store 与诊断载荷（材料 = 库内 id），label 仅用于展示。 */
+interface SelectOption {
+  value: string
+  label: string
+}
+
 /** 一个可编辑字段的声明。`path` 是**相对路径**（级字段由面板补上 `stages[i].` 前缀）。 */
 interface FieldSpec {
   path: string
@@ -29,13 +36,24 @@ interface FieldSpec {
   /** 单位表不可用时的回退单位文本（= 内部 SI 符号，§1.4-3）。 */
   siUnit: string
   kind: 'number' | 'text' | 'select'
+  /** 静态选项（value = label）；`optionsFrom: 'materials'` 的下拉不用它。 */
   options?: readonly string[]
+  /** QA-3 材料引用化：选项动态来自 `fetchMaterials`（值域 = 库内材料 id）。 */
+  optionsFrom?: 'materials'
   step?: number
 }
 
 const VEHICLE_FIELDS: readonly FieldSpec[] = [
   { path: 'name', label: '火箭名称', quantity: null, siUnit: '', kind: 'text' },
   { path: 'payload_mass_kg', label: '有效载荷质量', quantity: 'mass', siUnit: 'kg', kind: 'number', step: 100 },
+  {
+    path: 'material',
+    label: '箭体材料（全局默认，可被各级覆盖）',
+    quantity: null,
+    siUnit: '',
+    kind: 'select',
+    optionsFrom: 'materials',
+  },
 ]
 
 /** 级字段：面板按 `stages[i].` 前缀展开为逐级控件（§6.1 的级层与发动机层）。 */
@@ -43,6 +61,14 @@ const STAGE_FIELDS: readonly FieldSpec[] = [
   { path: 'length_m', label: '级高度', quantity: 'length', siUnit: 'm', kind: 'number', step: 0.1 },
   { path: 'diameter_m', label: '级直径', quantity: 'length', siUnit: 'm', kind: 'number', step: 0.1 },
   { path: 'wall_thickness_m', label: '级壁厚', quantity: 'length', siUnit: 'm', kind: 'number', step: 0.0005 },
+  {
+    path: 'material',
+    label: '该级材料（覆盖整箭默认）',
+    quantity: null,
+    siUnit: '',
+    kind: 'select',
+    optionsFrom: 'materials',
+  },
   { path: 'structure_coefficient', label: '结构系数 σ', quantity: null, siUnit: '', kind: 'number', step: 0.005 },
   { path: 'fill_fraction', label: '加注比例', quantity: null, siUnit: '', kind: 'number', step: 0.01 },
   { path: 'engine_count', label: '发动机台数', quantity: null, siUnit: '', kind: 'number', step: 1 },
@@ -83,6 +109,14 @@ const TANK_FIELDS: readonly FieldSpec[] = [
     step: 0.0005,
   },
   {
+    path: 'geometry.oxidizer_tank.material',
+    label: '氧化剂箱材料',
+    quantity: null,
+    siUnit: '',
+    kind: 'select',
+    optionsFrom: 'materials',
+  },
+  {
     path: 'geometry.oxidizer_tank.fill_fraction',
     label: '氧化剂箱加注比例',
     quantity: null,
@@ -97,6 +131,14 @@ const TANK_FIELDS: readonly FieldSpec[] = [
     siUnit: 'm',
     kind: 'number',
     step: 0.0005,
+  },
+  {
+    path: 'geometry.fuel_tank.material',
+    label: '燃料箱材料',
+    quantity: null,
+    siUnit: '',
+    kind: 'select',
+    optionsFrom: 'materials',
   },
   {
     path: 'geometry.fuel_tank.fill_fraction',
@@ -147,6 +189,38 @@ function useUnitTable(): UnitTable {
     }
   }, [])
   return table
+}
+
+/** 材料下拉选项：label = 「名称（id）」；typical 条目尾缀 [典型值]（§1.4-4：工程典型值不得冒充实测手册值）。 */
+function materialOption(material: MaterialEntry): SelectOption {
+  const label = `${material.name}（${material.id}）`
+  return {
+    value: material.id,
+    label: material.quality === 'typical' ? `${label}[典型值]` : label,
+  }
+}
+
+/**
+ * 材料库（QA-3 引用化）：挂载时拉一次，各层 material 下拉共用同一份 options。
+ * 失败不阻断编辑——下拉降级为空 options，面板顶部给一行「材料库不可用」提示（不得白屏）。
+ */
+function useMaterials(): { options: readonly SelectOption[]; failed: boolean } {
+  const [options, setOptions] = useState<readonly SelectOption[]>([])
+  const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    let alive = true
+    fetchMaterials()
+      .then((response) => {
+        if (alive) setOptions(response.materials.map(materialOption))
+      })
+      .catch(() => {
+        if (alive) setFailed(true)
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+  return { options, failed }
 }
 
 interface NumberFieldProps {
@@ -204,11 +278,13 @@ interface FieldProps {
   fieldPath: string
   value: unknown
   unitTable: UnitTable
+  /** 材料下拉的动态选项（QA-3）；静态枚举字段不用它。 */
+  materialOptions: readonly SelectOption[]
   sourced: string | undefined
   onCommit: (path: string, value: unknown) => void
 }
 
-function Field({ spec, fieldPath, value, unitTable, sourced, onCommit }: FieldProps) {
+function Field({ spec, fieldPath, value, unitTable, materialOptions, sourced, onCommit }: FieldProps) {
   const unsourced = sourced === undefined
   const unitText =
     spec.quantity === null ? spec.siUnit : (unitSymbol(unitTable, spec.quantity) || spec.siUnit)
@@ -219,6 +295,11 @@ function Field({ spec, fieldPath, value, unitTable, sourced, onCommit }: FieldPr
   )
 
   if (spec.kind === 'select') {
+    // QA-3：材料下拉的 options 动态来自材料库（值 = 库 id）；静态枚举仍取声明里的 options。
+    const selectOptions: readonly SelectOption[] =
+      spec.optionsFrom === 'materials'
+        ? materialOptions
+        : (spec.options ?? []).map((option) => ({ value: option, label: option }))
     return (
       <label className="vehicle-panel__field">
         <span className="vehicle-panel__label label">
@@ -231,9 +312,9 @@ function Field({ spec, fieldPath, value, unitTable, sourced, onCommit }: FieldPr
           value={typeof value === 'string' ? value : ''}
           onChange={(event) => onCommit(fieldPath, event.target.value)}
         >
-          {(spec.options ?? []).map((option) => (
-            <option key={option} value={option}>
-              {option}
+          {selectOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
             </option>
           ))}
         </select>
@@ -301,6 +382,7 @@ export function VehiclePanel() {
   const setSourcedFields = useVehicleStore((state) => state.setSourcedFields)
   const markUserModified = useVehicleStore((state) => state.markUserModified)
   const unitTable = useUnitTable()
+  const materials = useMaterials()
 
   // —— OI-34 名称匹配（§11.5 ⑤ 规则 5）——
   // 命中只在提示条里呈现，绝不静默改写任何参数：载不载入由用户点按钮决定。
@@ -446,6 +528,7 @@ export function VehiclePanel() {
           fieldPath={fieldPath}
           value={readFieldPath(vehicle, fieldPath)}
           unitTable={unitTable}
+          materialOptions={materials.options}
           sourced={sourcedFields[fieldPath]}
           onCommit={commitField}
         />
@@ -464,6 +547,11 @@ export function VehiclePanel() {
             ? '数值按后端下发的显示单位（§6.4）；换算系数取自 GET /api/params/units。'
             : '单位表尚未载入（GET /api/params/units 未返回），当前一律按 SI 显示。'}
         </p>
+        {materials.failed ? (
+          <p className="vehicle-panel__hint">
+            材料库不可用（GET /api/catalog/materials 未返回）——材料下拉暂无可选项，其余参数仍可编辑。
+          </p>
+        ) : null}
         {diagnosing ? <p className="vehicle-panel__hint">诊断计算中…</p> : null}
 
         <div className="vehicle-panel__group">

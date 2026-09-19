@@ -9,6 +9,7 @@
 - ``models``——读取侧数据类（字段与 ETL 内部字段名同步，有门禁）
 - ``parsers``——外部格式解析器（§7.5：``.eng``/``.rse``/``.ork``，纯标准库、R-21 显式报错）
 
-规划中：materials（材料库，QA-3）· lineage（谱系/溯源）。
+规划中：lineage（谱系/溯源）。材料库（QA-3）已按 §7.4 裁决自建并落在
+``aeroforge.params.materials``（与模板同形态的 Python 内嵌，非数据层）。
 查询必须走三层标签索引，禁止全表扫描（§7.2，AGENTS.md 领域规则）。
 """

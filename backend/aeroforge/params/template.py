@@ -72,7 +72,7 @@ def skeleton_vehicle() -> Vehicle:
     tank = Tank(
         tank_type="separate",
         wall_thickness_m=0.005,
-        material="Al-2219",
+        material="al-2219",
         fill_fraction=0.95,
         feed_system="pump_fed",
     )
@@ -82,7 +82,7 @@ def skeleton_vehicle() -> Vehicle:
         diameter_m=2.0,
         length_m=20.0,
         wall_thickness_m=0.005,
-        material="Al-2219",
+        material="al-2219",
         structure_coefficient=0.05,
         fill_fraction=0.95,
         engine_count=1,
@@ -110,7 +110,7 @@ def skeleton_vehicle() -> Vehicle:
         name=LABEL,
         stages=(stage,),
         payload_mass_kg=1_000.0,
-        material="Al-2219",
+        material="al-2219",
         propellant="LOX/RP-1",
         # aero / fairing / profile / sequence / recovery 一律留空：缺失会如实变成警告
         mission=Mission(

@@ -196,7 +196,7 @@ def falcon9_vehicle() -> Vehicle:
         diameter_m=3.7,
         length_m=42.6,
         wall_thickness_m=0.006,
-        material="Al-Li 2198",
+        material="al-li-2198",
         structure_coefficient=_F9_S1_DRY_KG / (_F9_S1_DRY_KG + _F9_S1_PROP_KG),
         fill_fraction=1.0,
         engine_count=9,
@@ -204,7 +204,7 @@ def falcon9_vehicle() -> Vehicle:
         engine_height_m=3.0,
         interstage_type="cold_staging",
         isp_source="default",
-        geometry=_geometry(material="Al-Li 2198", wall_thickness_m=0.006, fill_fraction=1.0),
+        geometry=_geometry(material="al-li-2198", wall_thickness_m=0.006, fill_fraction=1.0),
     )
     stage2 = Stage(
         index=2,
@@ -212,7 +212,7 @@ def falcon9_vehicle() -> Vehicle:
         diameter_m=3.7,
         length_m=12.6,
         wall_thickness_m=0.004,
-        material="Al-Li 2198",
+        material="al-li-2198",
         structure_coefficient=_F9_S2_DRY_KG / (_F9_S2_DRY_KG + _F9_S2_PROP_KG),
         fill_fraction=1.0,
         engine_count=1,
@@ -220,7 +220,7 @@ def falcon9_vehicle() -> Vehicle:
         engine_height_m=4.5,
         interstage_type="none",
         isp_source="default",
-        geometry=_geometry(material="Al-Li 2198", wall_thickness_m=0.004, fill_fraction=1.0),
+        geometry=_geometry(material="al-li-2198", wall_thickness_m=0.004, fill_fraction=1.0),
     )
     return _gate(
         Vehicle(
@@ -228,7 +228,7 @@ def falcon9_vehicle() -> Vehicle:
             stages=(stage1, stage2),
             payload_mass_kg=22_800.0,
             fairing_diameter_m=5.2,
-            material="Al-Li 2198",
+            material="al-li-2198",
             propellant="LOX/RP-1",
             mission=Mission(
                 orbit_type="LEO",
@@ -379,7 +379,7 @@ def saturnv_vehicle() -> Vehicle:
         diameter_m=10.1,
         length_m=42.1,
         wall_thickness_m=0.012,
-        material="Al-2219",
+        material="al-2219",
         structure_coefficient=_SV_SIC_DRY_KG / (_SV_SIC_DRY_KG + _SV_SIC_PROP_KG),
         fill_fraction=1.0,
         engine_count=5,
@@ -387,7 +387,7 @@ def saturnv_vehicle() -> Vehicle:
         engine_height_m=5.6,
         interstage_type="cold_staging",
         isp_source="default",
-        geometry=_geometry(material="Al-2219", wall_thickness_m=0.012, fill_fraction=1.0),
+        geometry=_geometry(material="al-2219", wall_thickness_m=0.012, fill_fraction=1.0),
     )
     stage2 = Stage(
         index=2,
@@ -395,7 +395,7 @@ def saturnv_vehicle() -> Vehicle:
         diameter_m=10.1,
         length_m=24.9,
         wall_thickness_m=0.010,
-        material="Al-2219",
+        material="al-2219",
         structure_coefficient=_SV_SII_DRY_KG / (_SV_SII_DRY_KG + _SV_SII_PROP_KG),
         fill_fraction=1.0,
         engine_count=5,
@@ -404,7 +404,7 @@ def saturnv_vehicle() -> Vehicle:
         interstage_type="cold_staging",
         isp_source="default",
         geometry=_geometry(
-            material="Al-2219",
+            material="al-2219",
             wall_thickness_m=0.010,
             fill_fraction=1.0,
             common_bulkhead=True,
@@ -417,7 +417,7 @@ def saturnv_vehicle() -> Vehicle:
         diameter_m=6.6,
         length_m=17.8,
         wall_thickness_m=0.006,
-        material="Al-2219",
+        material="al-2219",
         structure_coefficient=_SV_SIVB_DRY_KG / (_SV_SIVB_DRY_KG + _SV_SIVB_PROP_KG),
         fill_fraction=1.0,
         engine_count=1,
@@ -426,7 +426,7 @@ def saturnv_vehicle() -> Vehicle:
         interstage_type="none",
         isp_source="default",
         geometry=_geometry(
-            material="Al-2219",
+            material="al-2219",
             wall_thickness_m=0.006,
             fill_fraction=1.0,
             common_bulkhead=True,
@@ -440,7 +440,7 @@ def saturnv_vehicle() -> Vehicle:
             stages=(stage1, stage2, stage3),
             payload_mass_kg=140_000.0,
             fairing_diameter_m=6.6,
-            material="Al-2219",
+            material="al-2219",
             propellant="LOX/RP-1",
             mission=Mission(
                 orbit_type="LEO",

@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TypeVar
 
 from aeroforge.data.models import (
+    EngineFamilyCount,
     EngineRecord,
     SnapshotMeta,
     StageLink,
@@ -152,6 +153,29 @@ class CatalogRepository:
             )
             for row in rows
         ]
+
+    # ── 发动机族谱（§7.4） ────────────────────────────────────────────────────
+
+    def engine_families(self) -> list[EngineFamilyCount]:
+        """族清单 + 每族发动机计数（按族名序）。
+
+        只列**确有发动机记录**的族（engines 表按 ``family`` 列聚合）；GCAT 的
+        engines 行有相当比例 ``family`` 缺失（多为固体助推器），那些记录不归任何族
+        ——如实排除，不得归并成「未知族」这种发明出来的桶。
+        """
+        rows = self._conn.execute(
+            "SELECT family, COUNT(*) AS n FROM engines"
+            " WHERE family IS NOT NULL AND family != ''"
+            " GROUP BY family ORDER BY family"
+        ).fetchall()
+        return [EngineFamilyCount(family=str(row["family"]), count=int(row["n"])) for row in rows]
+
+    def engines_in_family(self, family: str) -> list[EngineRecord]:
+        """单族内的发动机记录（按 record_id 序）；无此族返回空表。"""
+        rows = self._conn.execute(
+            'SELECT * FROM "engines" WHERE family = ? ORDER BY record_id', (family,)
+        ).fetchall()
+        return [self._to_record(EngineRecord, row) for row in rows]
 
     # ── 内部：SQL 的全部形态都在这两个私有方法里 ─────────────────────────────
 

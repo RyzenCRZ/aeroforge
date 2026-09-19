@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+from aeroforge.params.materials import material_ids
 from aeroforge.params.propellants import fuel_is_lh2
 from aeroforge.params.report import Diagnostic
 from aeroforge.params.schema import Stage, Vehicle
@@ -349,6 +350,51 @@ def _check_mission(vehicle: Vehicle) -> list[Diagnostic]:
     return items
 
 
+def _check_materials(vehicle: Vehicle) -> list[Diagnostic]:
+    """QA-3（§7.4）：``material`` 三层字段必须是**材料库引用**——不在库即拒绝。
+
+    判 hard 而非警告：壁厚校验要按材料回落典型工艺下限（§6.5 / §7.4），
+    一个不在库的材料名会让整条链静默失守——「材料随便填个名字」与
+    「推进剂随便填个组合」同族（R-28：未知参数不得进入计算）。
+    """
+    known = frozenset(material_ids())
+    items: list[Diagnostic] = []
+    if vehicle.material not in known:
+        items.append(
+            _hard(
+                "HARD_MATERIAL_UNKNOWN",
+                "material",
+                f"箭体材料 {vehicle.material!r} 不在材料库",
+                "改用库内材料 id（GET /api/catalog/materials 查看全部可选值）",
+            )
+        )
+    for position, stage in enumerate(vehicle.stages):
+        prefix = f"stages[{position}]"
+        if stage.material not in known:
+            items.append(
+                _hard(
+                    "HARD_MATERIAL_UNKNOWN",
+                    f"{prefix}.material",
+                    f"第 {stage.index} 级材料 {stage.material!r} 不在材料库",
+                    "改用库内材料 id（GET /api/catalog/materials 查看全部可选值）",
+                )
+            )
+        for role, tank, tank_path in (
+            ("氧化剂箱", stage.geometry.oxidizer_tank, f"{prefix}.geometry.oxidizer_tank"),
+            ("燃料箱", stage.geometry.fuel_tank, f"{prefix}.geometry.fuel_tank"),
+        ):
+            if tank.material not in known:
+                items.append(
+                    _hard(
+                        "HARD_MATERIAL_UNKNOWN",
+                        f"{tank_path}.material",
+                        f"第 {stage.index} 级{role}材料 {tank.material!r} 不在材料库",
+                        "改用库内材料 id（GET /api/catalog/materials 查看全部可选值）",
+                    )
+                )
+    return items
+
+
 def _check_recovery(vehicle: Vehicle) -> list[Diagnostic]:
     recovery = vehicle.recovery
     if recovery is None or not recovery.enabled:
@@ -393,5 +439,6 @@ def check_vehicle(vehicle: Vehicle) -> list[Diagnostic]:
     for position, stage in enumerate(vehicle.stages):
         items += _check_stage(stage, position)
     items += _check_mission(vehicle)
+    items += _check_materials(vehicle)
     items += _check_recovery(vehicle)
     return items

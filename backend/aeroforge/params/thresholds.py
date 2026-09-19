@@ -119,8 +119,8 @@ THRESHOLD_SPECS: tuple[ThresholdSpec, ...] = (
         "min_tank_wall_thickness_m",
         "贮箱最小工艺厚度（m）",
         SOURCE_PROCESS_LIMIT,
-        "**留空 = 该条判据不判定**（并如实标注「未配置」），绝不填一个凭空的毫米数；"
-        "量级参照：NASA Centaur 不锈钢气球箱 0.51 mm（0.020 in，§1.7.3）",
+        "**留空 = 回落各箱材料的典型工艺下限**（警告级，§7.4 QA-3；材料未知才不判定并留痕），"
+        "绝不填一个凭空的毫米数；量级参照：NASA Centaur 不锈钢气球箱 0.51 mm（0.020 in，§1.7.3）",
     ),
     ThresholdSpec(
         "dv_allocation_deviation_max",

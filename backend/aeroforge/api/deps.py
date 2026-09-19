@@ -1,16 +1,24 @@
-"""API 层的进程内单例：产物仓库与几何作业执行器（规格 §9.1 / §9.2 / §9.3）。
+"""API 层的装配依赖：进程内单例（产物仓库 / 作业执行器）与每请求资源（目录库）。
 
 为何用**惰性**单例而不是"只在 lifespan 里构造"：
 ``fastapi.testclient.TestClient`` 若不以上下文管理器方式使用，lifespan 不会执行；
 惰性构造使端点在有/无 lifespan 两种用法下行为一致，测试无需为"是否进了 with"分叉。
 lifespan 仍负责绑定事件循环与停机收线（见 :mod:`aeroforge.api.main`）。
+
+目录库（§7.7）**不做**进程级单例：FastAPI 的同步端点跑在线程池里，跨线程共享
+一条 sqlite 连接会踩 SQLite 的线程归属检查；目录查询是只读短查询，每请求开 /
+关一条连接的代价可忽略，换来「连接的创建、使用、释放恒在同一根线程」。
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from functools import lru_cache
 
 from aeroforge.cache.store import ArtifactStore
+from aeroforge.data.repository import CatalogRepository
+from aeroforge.errors import CatalogNotFoundError
+from aeroforge.paths import data_root
 from aeroforge.worker.jobs import GeometryJobRunner
 
 
@@ -24,6 +32,27 @@ def get_store() -> ArtifactStore:
 def get_runner() -> GeometryJobRunner:
     """几何作业执行器单例（单 worker 线程，规格 §16.3）。"""
     return GeometryJobRunner(get_store())
+
+
+def get_catalog() -> Iterator[CatalogRepository]:
+    """GCAT 目录库只读仓储（每请求一连接；路径与 ``tools/gcat_db.py`` 默认值一致）。
+
+    库未构建时转 :class:`CatalogNotFoundError`（§10.3：可操作建议，而不是
+    一句 500 的「未预期内部错误」——构建目录库是正常的前置步骤）。
+
+    ``DB_NAME`` 走延迟导入：:mod:`aeroforge.data.db` 链上带 pandas，而本模块
+    随 API 装配整体加载——不为了一个文件名常量让全部端点的冷启动吃这份重量。
+    """
+    from aeroforge.data.db import DB_NAME
+
+    try:
+        repository = CatalogRepository(data_root() / DB_NAME)
+    except FileNotFoundError as exc:
+        raise CatalogNotFoundError(str(exc)) from exc
+    try:
+        yield repository
+    finally:
+        repository.close()
 
 
 def reset_singletons() -> None:

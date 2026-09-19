@@ -446,6 +446,72 @@
         }
       }
     },
+    "/api/catalog/materials": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "List Materials",
+        "description": "材料库全量查询（含派生比强度 / 比刚度计算值）。",
+        "operationId": "list_materials_api_catalog_materials_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/catalog/engines": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Engine Catalog",
+        "description": "发动机族谱（§7.4）：缺省返回族清单 + 计数；给 ``family`` 返回该族记录。\n\n无此族返回空记录表（不报错——族清单就在缺省形态里，客户端可先行校验）。",
+        "operationId": "engine_catalog_api_catalog_engines_get",
+        "parameters": [
+          {
+            "name": "family",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Family"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnginesCatalogResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/jobs/{job_id}": {
       "get": {
         "tags": [
@@ -1130,6 +1196,250 @@
         "title": "Engine",
         "description": "发动机（§6.1 Engine 层）。混合比是箱体比例派生的输入（§5.9）。"
       },
+      "EngineFamilySummary": {
+        "properties": {
+          "family": {
+            "type": "string",
+            "title": "Family",
+            "description": "族名（GCAT engines 的 family 列）"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count",
+            "description": "该族的发动机记录数"
+          }
+        },
+        "type": "object",
+        "required": [
+          "family",
+          "count"
+        ],
+        "title": "EngineFamilySummary",
+        "description": "族谱清单中的一行：族名 + 计数。"
+      },
+      "EngineRecordOut": {
+        "properties": {
+          "record_id": {
+            "type": "integer",
+            "title": "Record Id",
+            "description": "记录主键（溯源锚点，provenance 用）"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "型号名称"
+          },
+          "manufacturer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manufacturer",
+            "description": "制造商（机构代码，经 orgs 可解析）"
+          },
+          "family": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Family",
+            "description": "族名"
+          },
+          "oxidizer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oxidizer",
+            "description": "氧化剂（源值原样）"
+          },
+          "fuel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fuel",
+            "description": "燃料（源值原样）"
+          },
+          "loaded_mass_kg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loaded Mass Kg",
+            "description": "满装质量（kg，官方口径：仅固体；GCAT 文档明载为 loaded）"
+          },
+          "total_impulse_ns": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Impulse Ns",
+            "description": "总冲（N·s，多为固体）"
+          },
+          "typical_thrust_n": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Typical Thrust N",
+            "description": "典型推力（N）——⚠ 环境未声明，不参与配对（OI-35）；与推力/总冲禁止互称"
+          },
+          "isp_vacuum_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Isp Vacuum S",
+            "description": "真空比冲（s，官方定义 'vacuum Isp where available'）"
+          },
+          "burn_duration_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Burn Duration S",
+            "description": "典型工作时间（s）"
+          },
+          "first_flight": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Flight",
+            "description": "首次飞行（GCAT Date 列 TEXT 原样，含 ? 尾标等可信度痕迹）"
+          },
+          "usage_notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Usage Notes",
+            "description": "用途 / 状态备注（GCAT Usage 列 TEXT 原样）"
+          },
+          "quality": {
+            "type": "string",
+            "title": "Quality",
+            "description": "§7.6 质量标签（GCAT 全库为 literature）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "record_id",
+          "name",
+          "manufacturer",
+          "family",
+          "oxidizer",
+          "fuel",
+          "loaded_mass_kg",
+          "total_impulse_ns",
+          "typical_thrust_n",
+          "isp_vacuum_s",
+          "burn_duration_s",
+          "first_flight",
+          "usage_notes",
+          "quality"
+        ],
+        "title": "EngineRecordOut",
+        "description": "族谱里的一台发动机（GCAT engines 行的读取侧投影）。\n\n⚠ 不含任何派生字段：推重比**不派生**——``typical_thrust_n`` 环境未声明\n（OI-35），代入任何配对计算都是编造。"
+      },
+      "EnginesCatalogResponse": {
+        "properties": {
+          "snapshot": {
+            "$ref": "#/components/schemas/SnapshotOut",
+            "description": "目录库的快照来源（§7.8 溯源锚点）"
+          },
+          "family": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Family",
+            "description": "查询的族名（仅在按族查询时回显；缺省查询为 null）"
+          },
+          "families": {
+            "items": {
+              "$ref": "#/components/schemas/EngineFamilySummary"
+            },
+            "type": "array",
+            "title": "Families",
+            "description": "族清单 + 每族计数（缺省查询时返回；仅列确有发动机记录的族）",
+            "default": []
+          },
+          "missing_fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing Fields",
+            "description": "GCAT 结构性缺失、须 §7.9 手动补录的字段（按族查询时恒在；禁止编造数值）",
+            "default": []
+          },
+          "engines": {
+            "items": {
+              "$ref": "#/components/schemas/EngineRecordOut"
+            },
+            "type": "array",
+            "title": "Engines",
+            "description": "族内发动机记录（按族查询时返回；无此族为空表）",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "snapshot"
+        ],
+        "title": "EnginesCatalogResponse",
+        "description": "``GET /api/catalog/engines`` 的响应体（两种形态按 ``family`` 参数分岔）。\n\n- 缺省：``families`` 非空（族清单 + 计数），``engines`` 为空；\n- 给 ``family``：回显 ``family``，``missing_fields`` 恒在，``engines`` 为该族记录。"
+      },
       "ErrorBody": {
         "properties": {
           "code": {
@@ -1539,6 +1849,135 @@
         "type": "object",
         "title": "LossFactors",
         "description": "ΔV 损失项系数（§8.6 的损失构成）。\n\nM2 只做**存储与透传**；损失模型 L1 的实算属 M4（§16）。刻意**不设默认值猜测**：\n缺省即 0 并在结果中标注为\"未计入\"，而不是填一个看着合理的经验数（§1.4-4）。"
+      },
+      "MaterialOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "材料 id（Schema material 字段的引用值）"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "牌号名（含热处理态）"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "铝合金",
+              "不锈钢",
+              "钛合金",
+              "复材",
+              "高温合金"
+            ],
+            "title": "Category",
+            "description": "类别：铝合金 / 不锈钢 / 钛合金 / 复材 / 高温合金"
+          },
+          "density_kg_m3": {
+            "type": "number",
+            "title": "Density Kg M3",
+            "description": "密度（kg/m³）"
+          },
+          "elastic_modulus_pa": {
+            "type": "number",
+            "title": "Elastic Modulus Pa",
+            "description": "弹性模量（Pa，室温）"
+          },
+          "yield_strength_pa": {
+            "type": "number",
+            "title": "Yield Strength Pa",
+            "description": "屈服强度（Pa，室温典型值；复材为许用典型）"
+          },
+          "service_temp_min_c": {
+            "type": "number",
+            "title": "Service Temp Min C",
+            "description": "工作温度下限（°C，量级表述）"
+          },
+          "service_temp_max_c": {
+            "type": "number",
+            "title": "Service Temp Max C",
+            "description": "工作温度上限（°C，量级表述）"
+          },
+          "typical_min_wall_thickness_m": {
+            "type": "number",
+            "title": "Typical Min Wall Thickness M",
+            "description": "典型工艺壁厚下限（m，工程惯例典型值；壁厚判据未显式配置时的回落档）"
+          },
+          "heat_treatment": {
+            "type": "string",
+            "title": "Heat Treatment",
+            "description": "热处理 / 试验条件（同一合金不同状态性能差数倍）"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source",
+            "description": "出处文字（公开手册 / 标准 / 厂商 datasheet）；typical 条目可为 null"
+          },
+          "quality": {
+            "type": "string",
+            "enum": [
+              "literature",
+              "typical"
+            ],
+            "title": "Quality",
+            "description": "质量标签：literature = 实测手册值；typical = 工程典型值（不得用于结论性导出）"
+          },
+          "specific_strength_m2_s2": {
+            "type": "number",
+            "title": "Specific Strength M2 S2",
+            "description": "比强度 σ_y/ρ（m²/s²，即 N·m/kg）——派生计算值，不随库存储（P1）"
+          },
+          "specific_stiffness_m2_s2": {
+            "type": "number",
+            "title": "Specific Stiffness M2 S2",
+            "description": "比刚度 E/ρ（m²/s²，即 N·m/kg）——派生计算值，不随库存储（P1）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "category",
+          "density_kg_m3",
+          "elastic_modulus_pa",
+          "yield_strength_pa",
+          "service_temp_min_c",
+          "service_temp_max_c",
+          "typical_min_wall_thickness_m",
+          "heat_treatment",
+          "source",
+          "quality",
+          "specific_strength_m2_s2",
+          "specific_stiffness_m2_s2"
+        ],
+        "title": "MaterialOut",
+        "description": "一条材料记录（§7.4 材料库表 + 派生比强度 / 比刚度计算值）。"
+      },
+      "MaterialsResponse": {
+        "properties": {
+          "materials": {
+            "items": {
+              "$ref": "#/components/schemas/MaterialOut"
+            },
+            "type": "array",
+            "title": "Materials",
+            "description": "材料库全量（§7.4 自建库）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "materials"
+        ],
+        "title": "MaterialsResponse",
+        "description": "``GET /api/catalog/materials`` 的响应体。"
       },
       "MeridianProfile": {
         "properties": {
@@ -2196,6 +2635,33 @@
         "title": "SequenceEvent",
         "description": "一个任务时序事件（§6.1 Sequence 层）。"
       },
+      "SnapshotOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "快照 id（如 gcat-2026Q3）"
+          },
+          "release": {
+            "type": "string",
+            "title": "Release",
+            "description": "GCAT release 号"
+          },
+          "total_records": {
+            "type": "integer",
+            "title": "Total Records",
+            "description": "快照登记的总记录数（六表合计）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "release",
+          "total_records"
+        ],
+        "title": "SnapshotOut",
+        "description": "本目录库的快照来源（§7.8：数值随 provenance 下发的锚点）。"
+      },
       "Stage": {
         "properties": {
           "index": {
@@ -2242,7 +2708,7 @@
           "material": {
             "type": "string",
             "title": "Material",
-            "description": "材料（M3 起由材料库校验）"
+            "description": "材料库引用（/api/catalog/materials；值须为库内材料 id）"
           },
           "structure_coefficient": {
             "type": "number",
@@ -2451,7 +2917,7 @@
           "material": {
             "type": "string",
             "title": "Material",
-            "description": "材料（M3 起由材料库校验）"
+            "description": "材料库引用（/api/catalog/materials；值须为库内材料 id）"
           },
           "fill_fraction": {
             "type": "number",
@@ -3074,7 +3540,7 @@
           "material": {
             "type": "string",
             "title": "Material",
-            "description": "箭体材料（全局默认，可被 Stage 覆盖）"
+            "description": "箭体材料（全局默认，可被 Stage 覆盖）；材料库引用（/api/catalog/materials）"
           },
           "propellant": {
             "type": "string",

@@ -70,8 +70,11 @@ def test_m4_dependent_rules_are_deferred_and_listed(single_stage_vehicle: Vehicl
     """M2 判不了的规则必须进 ``deferred_rule_codes`` 并写明原因，且不得带裁定。
 
     ⚠ 判不了的成因有两类，**不得混为一谈**：① 能力缺口（§6.5 表的这几条要 M4 的
-    Δv / 运力 / 喷管型面结果）；② 本机未配置（贮箱壁厚的工艺下限，见其专属用例）。
+    Δv / 运力 / 喷管型面结果）；② 材料未知且未配置工艺下限（见壁厚专属用例）。
     本用例把①钉死，并要求**其余规则确实判过**——否则"全部 deferred"也能让集合断言通过。
+
+    口径更新（§7.4 QA-3，规格演进非放宽）：夹具材料 al-2219 在库，贮箱壁厚规则
+    经**材料库典型值**真判定，不再因「未配置」进 deferred。
     """
     report = run_diagnostics(single_stage_vehicle, propellant_mass_kg={1: _LIGHT_LOAD_KG})
 
@@ -83,12 +86,12 @@ def test_m4_dependent_rules_are_deferred_and_listed(single_stage_vehicle: Vehicl
     }
     deferred = set(report.deferred_rule_codes)
 
-    assert m4_gap <= deferred
-    assert deferred - m4_gap == {CODE_TANK_WALL}
+    assert deferred == m4_gap
     assert {rule.code for rule in report.rules if not rule.deferred} == {
         CODE_TWR,
         CODE_STRUCTURE_MASS_RATIO,
         CODE_LENGTH_TO_DIAMETER,
+        CODE_TANK_WALL,
     }
     for rule in report.rules:
         assert rule.threshold.strip(), f"{rule.code} 没给出本次生效的阈值"
@@ -269,24 +272,120 @@ def test_structure_mass_ratio_warns_out_of_range(coefficient: float, direction: 
 
 
 # ---------------------------------------------------------------------------
-# 贮箱壁厚（硬，但数值须显式配置）
+# 贮箱壁厚（硬，但数值须显式配置；未配置时回落材料库典型值，§7.4 QA-3）
 # ---------------------------------------------------------------------------
 
 
-def test_tank_wall_is_deferred_until_a_process_minimum_is_configured(
+def _with_tank_material(vehicle: Vehicle, mid: str) -> Vehicle:
+    """把夹具的**两箱**材料换掉（级层与箭体层一并换，保持三层一致）。"""
+    first = vehicle.stages[0]
+    geometry = first.geometry
+    tanks = {
+        "oxidizer_tank": geometry.oxidizer_tank.model_copy(update={"material": mid}),
+        "fuel_tank": geometry.fuel_tank.model_copy(update={"material": mid}),
+    }
+    stage = first.model_copy(
+        update={"geometry": geometry.model_copy(update=tanks), "material": mid}
+    )
+    return vehicle.model_copy(update={"stages": (stage, *vehicle.stages[1:]), "material": mid})
+
+
+def _with_tank_wall(vehicle: Vehicle, wall: float) -> Vehicle:
+    """把夹具的**两箱**壁厚换掉（其余不动——负例只改一处）。"""
+    first = vehicle.stages[0]
+    geometry = first.geometry
+    tanks = {
+        "oxidizer_tank": geometry.oxidizer_tank.model_copy(update={"wall_thickness_m": wall}),
+        "fuel_tank": geometry.fuel_tank.model_copy(update={"wall_thickness_m": wall}),
+    }
+    stage = first.model_copy(update={"geometry": geometry.model_copy(update=tanks)})
+    return vehicle.model_copy(update={"stages": (stage, *vehicle.stages[1:])})
+
+
+def _with_fuel_tank_material(vehicle: Vehicle, mid: str) -> Vehicle:
+    """只换**燃料箱**的材料（混合材料构型：同级两箱不同料）。"""
+    first = vehicle.stages[0]
+    geometry = first.geometry
+    tanks = {"fuel_tank": geometry.fuel_tank.model_copy(update={"material": mid})}
+    stage = first.model_copy(update={"geometry": geometry.model_copy(update=tanks)})
+    return vehicle.model_copy(update={"stages": (stage, *vehicle.stages[1:])})
+
+
+def test_tank_wall_stays_deferred_for_an_unknown_material_without_config(
     single_stage_vehicle: Vehicle,
 ) -> None:
-    """§6.5 表只给判据、没给数值：未配置即不判定，**不得**凭空填一个毫米数。"""
-    report = run_diagnostics(single_stage_vehicle)
+    """§7.4 口径（规格演进）：「未配置即不判定」只保留给**材料未知**的情况。
+
+    材料不在库 ⇒ 无典型工艺下限可回落，维持 OI-31 的 deferred 留痕（不猜）。
+    API 通路里未知材料先被 ``HARD_MATERIAL_UNKNOWN`` 拒为 422，到不了本分支；
+    这里钉的是规则层被直调（如批量离线诊断）时的行为。
+    """
+    report = run_diagnostics(_with_tank_material(single_stage_vehicle, "unobtanium"))
 
     rule = _rule(report, CODE_TANK_WALL)
     assert rule.deferred
     assert "未配置" in (rule.deferred_reason or "")
+    assert "不在材料库" in (rule.deferred_reason or "")
     assert "未配置" in rule.threshold
     assert rule.source == SOURCE_PROCESS_LIMIT
 
 
-def test_tank_wall_fires_once_the_minimum_is_configured(single_stage_vehicle: Vehicle) -> None:
+def test_tank_wall_falls_back_to_the_material_typical_minimum(
+    single_stage_vehicle: Vehicle,
+) -> None:
+    """未配置全局下限 → 逐箱回落材料典型工艺下限（§7.4 QA-3）。
+
+    夹具壁厚 0.005 ≥ al-2219 典型下限 0.002：真判定且通过，账目照实标注
+    「材料库典型值」——留痕语义不变（OI-31：来源与生效值随结果下发）。
+    """
+    report = run_diagnostics(single_stage_vehicle)
+
+    rule = _rule(report, CODE_TANK_WALL)
+    assert not rule.deferred
+    assert rule.diagnostics == ()
+    assert "0.002" in rule.threshold
+    assert "材料库典型值" in rule.threshold
+    assert rule.source == "材料库典型值（材料：al-2219）"
+
+
+def test_tank_wall_warns_below_the_material_typical_minimum(single_stage_vehicle: Vehicle) -> None:
+    """壁厚低于材料典型下限 → **警告**（工程惯例典型值，非强制工艺极限，§7.4）。"""
+    report = run_diagnostics(_with_tank_wall(single_stage_vehicle, 0.001))
+
+    rule = _rule(report, CODE_TANK_WALL)
+    assert not rule.deferred
+    assert [item.field_path for item in rule.diagnostics] == [
+        "stages[0].geometry.oxidizer_tank.wall_thickness_m",
+        "stages[0].geometry.fuel_tank.wall_thickness_m",
+    ]
+    assert {item.level for item in rule.diagnostics} == {"warning"}
+    assert "al-2219" in rule.source
+    assert "非强制工艺极限" in rule.diagnostics[0].suggestion
+
+
+def test_tank_wall_accounts_each_material_separately(single_stage_vehicle: Vehicle) -> None:
+    """混合材料（同级两箱不同料）：阈值逐材料列出、来源聚齐两个 id、判定逐箱独立。
+
+    氧化剂箱 al-2219（典型 2.0 mm）壁厚 2.0 mm 恰好通过；燃料箱 cfrp-epoxy
+    （典型 2.5 mm）同壁厚则警告——「逐箱回落」不是「取最严的一刀切」。
+    """
+    mixed = _with_fuel_tank_material(_with_tank_wall(single_stage_vehicle, 0.002), "cfrp-epoxy")
+
+    rule = _rule(run_diagnostics(mixed), CODE_TANK_WALL)
+
+    assert not rule.deferred
+    assert [item.field_path for item in rule.diagnostics] == [
+        "stages[0].geometry.fuel_tank.wall_thickness_m"
+    ]
+    assert rule.source.startswith("材料库典型值（材料：")
+    assert "al-2219" in rule.source and "cfrp-epoxy" in rule.source
+    assert "0.0025" in rule.threshold and "0.002 m" in rule.threshold
+
+
+def test_tank_wall_fires_hard_once_the_minimum_is_configured(
+    single_stage_vehicle: Vehicle,
+) -> None:
+    """显式配置（§18.4）优先于材料库典型值：违反回到**硬**级（§6.5 表级别）。"""
     thresholds = DiagnosticThresholds(min_tank_wall_thickness_m=0.01)
 
     report = run_diagnostics(single_stage_vehicle, thresholds=thresholds)
@@ -300,6 +399,32 @@ def test_tank_wall_fires_once_the_minimum_is_configured(single_stage_vehicle: Ve
     assert {item.level for item in rule.diagnostics} == {"hard"}
     # 上界（壁厚 < 直径/2）由 §6.3 的安全边界判定，同一违反不得有两个判定码
     assert all("SAFETY_TANK_WALL_TOO_THICK" in note for note in rule.uncovered)
+
+
+def test_tank_wall_configured_source_reports_the_winning_layer(
+    single_stage_vehicle: Vehicle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """来源标注随生效层走：``环境变量 > config.toml``（§18.4 优先级不得写反）。"""
+    monkeypatch.delenv("AEROFORGE_MIN_TANK_WALL_THICKNESS_M", raising=False)
+    path = config_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("min_tank_wall_thickness_m = 0.01\n", encoding="utf-8")
+    try:
+        report = run_diagnostics(single_stage_vehicle)
+        rule = _rule(report, CODE_TANK_WALL)
+        assert not rule.deferred
+        assert {item.level for item in rule.diagnostics} == {"hard"}
+        assert "0.01" in rule.threshold
+        assert rule.source == "config.toml"
+
+        monkeypatch.setenv("AEROFORGE_MIN_TANK_WALL_THICKNESS_M", "0.008")
+        env_report = run_diagnostics(single_stage_vehicle)
+        env_rule = _rule(env_report, CODE_TANK_WALL)
+        assert env_rule.source == "环境变量"
+        assert "0.008" in env_rule.threshold
+    finally:
+        path.unlink()
+    assert not path.exists(), "配置文件未清理会让同会话的后续用例读到它"
 
 
 # ---------------------------------------------------------------------------

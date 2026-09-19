@@ -307,16 +307,19 @@ def test_read_reports_broken_file_instead_of_internal_error(client: TestClient) 
 def test_configuring_the_process_limit_makes_the_rule_judgeable(
     client: TestClient, single_stage_vehicle: Vehicle
 ) -> None:
-    """显式配置后，「贮箱壁厚」规则必须从「未判定」变成**真判定**。
+    """显式配置后，「贮箱壁厚」规则以配置值为生效阈值，来源随之切到 config.toml。
 
-    这是 OI-31 的验收实质：新增的不只是一个设置项，而是"一个之前判不了的硬规则
-    现在判得了"。只断言 PUT 返回 200 会漏掉整条链。
+    口径更新（§7.4 QA-3，规格演进非放宽）：未配置时该规则不再「未判定」，而是
+    回落材料库典型值档（警告级）——配置层是**接管**这档默认，不是从无到有。
+    这是 OI-31 的验收实质：配置真的改变生效值与来源，而不只是多一个设置项。
     """
     before = client.post(
         "/api/params/diagnose", json=single_stage_vehicle.model_dump(mode="json")
     ).json()
-    deferred_before = next(r for r in before["rules"] if r["code"] == CODE_TANK_WALL)
-    assert deferred_before["deferred_reason"], "未配置时该规则本应不判定"
+    material_tier = next(r for r in before["rules"] if r["code"] == CODE_TANK_WALL)
+    assert material_tier["deferred_reason"] is None, "夹具材料在库：典型值档应已判定（§7.4）"
+    assert "材料库典型值" in material_tier["source"]
+    assert "al-2219" in material_tier["threshold"]
 
     client.put("/api/params/thresholds", json={"min_tank_wall_thickness_m": 0.0006})
 
@@ -326,6 +329,7 @@ def test_configuring_the_process_limit_makes_the_rule_judgeable(
     judgeable = next(r for r in after["rules"] if r["code"] == CODE_TANK_WALL)
     assert judgeable["deferred_reason"] is None
     assert "0.0006" in judgeable["threshold"]
+    assert judgeable["source"] == "config.toml"
 
 
 def test_lowering_the_limit_below_the_wall_produces_a_hard_finding(

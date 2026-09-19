@@ -116,3 +116,15 @@ class EngineRecord:
     typical_thrust_n: float | None
     isp_vacuum_s: float | None
     burn_duration_s: float | None
+    #: 首次飞行年份（§7.4 族谱口径）：GCAT ``Date`` 列 TEXT 原样（含 ``?`` 尾标）。
+    first_flight: str | None
+    #: 当前状态 / 用途备注（§7.4 族谱口径）：GCAT ``Usage`` 列 TEXT 原样。
+    usage_notes: str | None
+
+
+@dataclass(frozen=True)
+class EngineFamilyCount:
+    """族谱聚合行（§7.4）：族名 + 该族在 engines 表中的记录数。"""
+
+    family: str
+    count: int

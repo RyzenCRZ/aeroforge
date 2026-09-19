@@ -7,7 +7,9 @@
 ---------------------------
 :class:`DiagnosticThresholds` 的**默认值即规格 §6.5 表内的数值**，可经环境变量
 （``AEROFORGE_`` 前缀）或 ``config.toml`` 覆盖，优先级
-``环境变量 > config.toml > 默认值``。
+``环境变量 > config.toml > 默认值``。M3 第五片起（§7.4 QA-3）贮箱壁厚下限再
+多一档**材料库典型值**回落：``环境变量 > config.toml > 材料库典型值``——低于
+材料典型工艺下限判**警告**（非强制工艺极限），材料未知且未配置才维持不判定。
 
 > ⚠ 全部阈值为**工程惯例值，非权威来源**（§6.5 的强制来源声明）：它们来自公开工程的
 > 量级经验，**没有任何一条可以引用为标准或论文结论**。故每条阈值的 ``description``
@@ -33,6 +35,7 @@ M2 的范围边界（OI-11 裁决）
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from typing import Any
 
@@ -45,14 +48,20 @@ from pydantic_settings import (
 )
 
 from aeroforge.params import dag
+from aeroforge.params.materials import get_material
 from aeroforge.params.report import Diagnostic, Level
-from aeroforge.params.schema import ParamsModel, Vehicle
+from aeroforge.params.schema import ParamsModel, Tank, Vehicle
 from aeroforge.paths import config_file
 
 #: 阈值来源标注（§6.5 强制）。出现在每条阈值字段的 description 里，随 OpenAPI 下发给前端。
 SOURCE_CONVENTION = "工程惯例值，非权威来源（不得引用为标准或论文结论）"
-#: 「最小工艺厚度」的来源标注：§6.5 表只写了判据、**没给数值**，故必须显式配置。
-SOURCE_PROCESS_LIMIT = "工艺下限（§6.5 表未给数值：须显式配置，未配置即不判定）"
+#: 「最小工艺厚度」的来源标注：§6.5 表只写了判据、**没给数值**，故显式配置优先；
+#: 未配置时回落材料库典型值（§7.4 QA-3），材料未知才不判定（不猜）。
+SOURCE_PROCESS_LIMIT = (
+    "工艺下限（§6.5 表未给数值：须显式配置；未配置时回落材料库典型值，材料未知则不判定）"
+)
+#: 材料库典型工艺下限的来源标注（§7.4 QA-3）：前缀 + 材料清单拼入。
+SOURCE_MATERIAL_TYPICAL_PREFIX = "材料库典型值（材料："
 
 #: 判定码（§6.5 表逐行对应；前四条是 M2 可判的，后四条按 OI-11 登记为显式 deferred）。
 CODE_TWR = "TWR_TOO_LOW"
@@ -112,7 +121,8 @@ class DiagnosticThresholds(BaseSettings):
         gt=0.0,
         description=(
             f"贮箱最小工艺厚度（m）。{SOURCE_PROCESS_LIMIT}；"
-            "默认 None = 未配置，此时该条判据**不判定**并留痕，"
+            "默认 None = 未显式配置，此时回落各箱材料的典型工艺下限"
+            "（§7.4 QA-3，警告级）；材料未知才不判定并留痕，"
             "而不是填一个凭空的毫米数（§1.4-4 溯源红线）"
         ),
     )
@@ -340,54 +350,125 @@ def _structure_mass_ratio_rule(
     )
 
 
+def _configured_process_limit_source() -> str:
+    """显式配置的全局工艺下限来自哪一层（§18.4：环境变量 > config.toml）。
+
+    :mod:`aeroforge.params.thresholds` 依赖本模块（顶层 import），故此处**延迟导入**
+    ——运行时两模块均已就绪，不会成环。值经 ``DiagnosticThresholds`` 构造时已按
+    ``init > 环境变量 > config.toml`` 折叠：非空即来自这两层（默认值是 None）。
+    """
+    from aeroforge.params.thresholds import ENV_PREFIX, ORIGIN_ENV, ORIGIN_FILE
+
+    name = f"{ENV_PREFIX}MIN_TANK_WALL_THICKNESS_M"
+    return ORIGIN_ENV if name in os.environ else ORIGIN_FILE
+
+
 def _tank_wall_rule(vehicle: Vehicle, limits: DiagnosticThresholds) -> RuleOutcome:
-    """贮箱壁厚 ≥ 最小工艺厚度（硬）。
+    """贮箱壁厚 ≥ 最小工艺厚度。
 
     ⚠ 只判**下界**：上界（壁厚 < 直径/2）由 §6.3 的安全边界
     ``SAFETY_TANK_WALL_TOO_THICK`` 判定——同一违反不能有两个判定码，
     否则前端会渲染出两条"看起来是两处缺陷"的告警。
-    """
-    lower = limits.min_tank_wall_thickness_m
-    outcome = _rule_head(
-        CODE_TANK_WALL,
-        "贮箱壁厚",
-        "hard",
-        (
-            f"壁厚 ≥ {lower} m（最小工艺厚度，显式配置）"
-            if lower is not None
-            # 未配置时阈值字符串也必须如实说明，不得印一个凭空的数字
-            else "壁厚 ≥ 最小工艺厚度（未配置）"
-        ),
-        SOURCE_PROCESS_LIMIT,
-    )
-    scope = ("上界（壁厚 < 直径/2）由 §6.3 安全边界 SAFETY_TANK_WALL_TOO_THICK 判定，本规则不重复",)
-    if lower is None:
-        return RuleOutcome(
-            **outcome,
-            deferred_reason=(
-                "§6.5 表只给了判据『≥ 最小工艺厚度』、未给数值，且本机未配置"
-                "（AEROFORGE_MIN_TANK_WALL_THICKNESS_M 或 config.toml）——不判定，"
-                "而不是填一个凭空的下界"
-            ),
-        )
 
-    diagnostics: list[Diagnostic] = []
+    生效下限的三层来源（§7.4 QA-3，M3 第五片）：
+    ``环境变量 > config.toml（min_tank_wall_thickness_m）> 材料库典型值``。
+
+    - 显式配置（env / config）→ 全部箱按全局下限判**硬**（§6.5 表级别）；
+    - 未配置 → 逐箱回落材料的 ``typical_min_wall_thickness_m``，低于判**警告**
+      （工程惯例典型值，非强制工艺极限——与 §6.5 的硬工艺下限刻意分档）；
+    - 材料未知且未配置 → 维持 OI-31 的 deferred 留痕（不猜）。
+
+    留痕语义不变（OI-31）：``threshold`` 与 ``source`` 照实下发生效值与来源。
+    """
+    scope = ("上界（壁厚 < 直径/2）由 §6.3 安全边界 SAFETY_TANK_WALL_TOO_THICK 判定，本规则不重复",)
+    tanks: list[tuple[int, int, str, str, Tank]] = []
     for position, stage in enumerate(vehicle.stages):
         for role, key, tank in (
             ("氧化剂箱", "oxidizer_tank", stage.geometry.oxidizer_tank),
             ("燃料箱", "fuel_tank", stage.geometry.fuel_tank),
         ):
+            tanks.append((position, stage.index, role, key, tank))
+
+    lower = limits.min_tank_wall_thickness_m
+    if lower is not None:
+        outcome = _rule_head(
+            CODE_TANK_WALL,
+            "贮箱壁厚",
+            "hard",
+            f"壁厚 ≥ {lower} m（最小工艺厚度，显式配置）",
+            _configured_process_limit_source(),
+        )
+        diagnostics: list[Diagnostic] = []
+        for position, stage_index, role, key, tank in tanks:
             if tank.wall_thickness_m >= lower:
                 continue
             diagnostics.append(
                 _hard(
                     CODE_TANK_WALL,
                     f"stages[{position}].geometry.{key}.wall_thickness_m",
-                    f"第 {stage.index} 级 {role}壁厚 {tank.wall_thickness_m} m 小于"
+                    f"第 {stage_index} 级 {role}壁厚 {tank.wall_thickness_m} m 小于"
                     f"最小工艺厚度 {lower} m",
                 )
             )
-    return RuleOutcome(**outcome, diagnostics=tuple(diagnostics), uncovered=scope)
+        return RuleOutcome(**outcome, diagnostics=tuple(diagnostics), uncovered=scope)
+
+    # 未配置全局下限 → 逐箱回落材料库典型值（§7.4 QA-3）
+    bounds: dict[str, float] = {}
+    unknown: list[str] = []
+    findings: list[Diagnostic] = []
+    for position, stage_index, role, key, tank in tanks:
+        try:
+            material = get_material(tank.material)
+        except KeyError:
+            unknown.append(f"stages[{position}].geometry.{key}.material")
+            continue
+        bounds[tank.material] = material.typical_min_wall_thickness_m
+        if tank.wall_thickness_m >= material.typical_min_wall_thickness_m:
+            continue
+        findings.append(
+            _warn(
+                CODE_TANK_WALL,
+                f"stages[{position}].geometry.{key}.wall_thickness_m",
+                f"第 {stage_index} 级 {role}壁厚 {tank.wall_thickness_m} m 小于材料 "
+                f"{material.id}（{material.name}）的典型工艺下限 "
+                f"{material.typical_min_wall_thickness_m} m",
+                "提升壁厚至该材料典型工艺下限之上，或改选可更薄成形的材料"
+                "（材料库典型值为工程惯例值，非强制工艺极限）",
+            )
+        )
+
+    if not bounds:
+        # 各箱材料均不在库（且未配置全局下限）→ 维持 OI-31：不判定，留痕
+        return RuleOutcome(
+            **_rule_head(
+                CODE_TANK_WALL,
+                "贮箱壁厚",
+                "hard",
+                # 未配置时阈值字符串也必须如实说明，不得印一个凭空的数字
+                "壁厚 ≥ 最小工艺厚度（未配置，且材料不在库）",
+                SOURCE_PROCESS_LIMIT,
+            ),
+            deferred_reason=(
+                "§6.5 表只给了判据『≥ 最小工艺厚度』、未给数值，且本机未配置"
+                "（AEROFORGE_MIN_TANK_WALL_THICKNESS_M 或 config.toml），"
+                f"各箱材料亦不在材料库（{unknown}）——不判定，"
+                "而不是填一个凭空的下界"
+            ),
+        )
+
+    threshold = "；".join(
+        f"壁厚 ≥ {typical} m（材料库典型值，材料：{mid}）"
+        for mid, typical in sorted(bounds.items())
+    )
+    source = SOURCE_MATERIAL_TYPICAL_PREFIX + "、".join(sorted(bounds)) + "）"
+    uncovered = scope + tuple(
+        f"{path} 不在材料库，该箱未判定（未配置全局下限，OI-31：不猜）" for path in unknown
+    )
+    return RuleOutcome(
+        **_rule_head(CODE_TANK_WALL, "贮箱壁厚", "hard", threshold, source),
+        diagnostics=tuple(findings),
+        uncovered=uncovered,
+    )
 
 
 def _length_to_diameter_rule(

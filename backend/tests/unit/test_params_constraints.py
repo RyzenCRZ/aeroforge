@@ -210,6 +210,28 @@ def test_lh2_common_bulkhead_requires_insulation(single_stage_vehicle: Vehicle) 
     )
 
 
+def test_unknown_material_is_hard_at_every_layer(single_stage_vehicle: Vehicle) -> None:
+    """QA-3（§7.4，M3 第五片）：material 三层字段是材料库引用——不在库即拒绝。
+
+    hard 而非警告：壁厚判据要按材料回落典型工艺下限，一个不在库的名字会让
+    整条链静默失守；旧写法（如 "Al-2219"）也必须拒——值域是精确 id。
+    """
+
+    def rename(payload: dict[str, Any]) -> None:
+        payload["material"] = "unobtanium"
+        payload["stages"][0]["material"] = "Al-2219"  # 旧写法同样不在库（id 区分大小写）
+        payload["stages"][0]["geometry"]["oxidizer_tank"]["material"] = "also-not-in-library"
+
+    items = _by_code(_mutate(single_stage_vehicle, rename), "HARD_MATERIAL_UNKNOWN")
+    assert [item.field_path for item in items] == [
+        "material",
+        "stages[0].material",
+        "stages[0].geometry.oxidizer_tank.material",
+    ]
+    assert all(item.level == "hard" for item in items)
+    assert all("api/catalog/materials" in item.suggestion for item in items)
+
+
 def test_tank_diameter_must_not_exceed_stage(single_stage_vehicle: Vehicle) -> None:
     vehicle = _mutate(
         single_stage_vehicle,

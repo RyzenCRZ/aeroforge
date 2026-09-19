@@ -107,8 +107,25 @@ class JobNotFoundError(AeroForgeError):
 
     def __init__(self, message: str, *, suggestion: str | None = None) -> None:
         super().__init__(
+            message, suggestion=suggestion or "确认 job_id 来自 POST /api/geometry/build 的响应"
+        )
+
+
+class CatalogNotFoundError(AeroForgeError):
+    """GCAT 目录库未构建（``data/aeroforge.db`` 缺失）。"""
+
+    code = "CATALOG_NOT_FOUND"
+    stage = "data"
+
+    def __init__(self, message: str, *, suggestion: str | None = None) -> None:
+        super().__init__(
             message,
-            suggestion=suggestion or "确认 job_id 来自 POST /api/geometry/build 的响应",
+            suggestion=suggestion
+            or (
+                "先离线构建目录库（仓库根执行）："
+                "uv run python tools/gcat_etl.py --out data/snapshots/gcat-2026Q3 && "
+                "uv run python tools/gcat_db.py --snapshot data/snapshots/gcat-2026Q3"
+            ),
         )
 
 

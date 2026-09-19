@@ -254,6 +254,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/catalog/materials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Materials
+         * @description 材料库全量查询（含派生比强度 / 比刚度计算值）。
+         */
+        get: operations["list_materials_api_catalog_materials_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/catalog/engines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Engine Catalog
+         * @description 发动机族谱（§7.4）：缺省返回族清单 + 计数；给 ``family`` 返回该族记录。
+         *
+         *     无此族返回空记录表（不报错——族清单就在缺省形态里，客户端可先行校验）。
+         */
+        get: operations["engine_catalog_api_catalog_engines_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}": {
         parameters: {
             query?: never;
@@ -669,6 +711,135 @@ export interface components {
             mixture_ratio: number;
         };
         /**
+         * EngineFamilySummary
+         * @description 族谱清单中的一行：族名 + 计数。
+         */
+        EngineFamilySummary: {
+            /**
+             * Family
+             * @description 族名（GCAT engines 的 family 列）
+             */
+            family: string;
+            /**
+             * Count
+             * @description 该族的发动机记录数
+             */
+            count: number;
+        };
+        /**
+         * EngineRecordOut
+         * @description 族谱里的一台发动机（GCAT engines 行的读取侧投影）。
+         *
+         *     ⚠ 不含任何派生字段：推重比**不派生**——``typical_thrust_n`` 环境未声明
+         *     （OI-35），代入任何配对计算都是编造。
+         */
+        EngineRecordOut: {
+            /**
+             * Record Id
+             * @description 记录主键（溯源锚点，provenance 用）
+             */
+            record_id: number;
+            /**
+             * Name
+             * @description 型号名称
+             */
+            name: string;
+            /**
+             * Manufacturer
+             * @description 制造商（机构代码，经 orgs 可解析）
+             */
+            manufacturer: string | null;
+            /**
+             * Family
+             * @description 族名
+             */
+            family: string | null;
+            /**
+             * Oxidizer
+             * @description 氧化剂（源值原样）
+             */
+            oxidizer: string | null;
+            /**
+             * Fuel
+             * @description 燃料（源值原样）
+             */
+            fuel: string | null;
+            /**
+             * Loaded Mass Kg
+             * @description 满装质量（kg，官方口径：仅固体；GCAT 文档明载为 loaded）
+             */
+            loaded_mass_kg: number | null;
+            /**
+             * Total Impulse Ns
+             * @description 总冲（N·s，多为固体）
+             */
+            total_impulse_ns: number | null;
+            /**
+             * Typical Thrust N
+             * @description 典型推力（N）——⚠ 环境未声明，不参与配对（OI-35）；与推力/总冲禁止互称
+             */
+            typical_thrust_n: number | null;
+            /**
+             * Isp Vacuum S
+             * @description 真空比冲（s，官方定义 'vacuum Isp where available'）
+             */
+            isp_vacuum_s: number | null;
+            /**
+             * Burn Duration S
+             * @description 典型工作时间（s）
+             */
+            burn_duration_s: number | null;
+            /**
+             * First Flight
+             * @description 首次飞行（GCAT Date 列 TEXT 原样，含 ? 尾标等可信度痕迹）
+             */
+            first_flight: string | null;
+            /**
+             * Usage Notes
+             * @description 用途 / 状态备注（GCAT Usage 列 TEXT 原样）
+             */
+            usage_notes: string | null;
+            /**
+             * Quality
+             * @description §7.6 质量标签（GCAT 全库为 literature）
+             */
+            quality: string;
+        };
+        /**
+         * EnginesCatalogResponse
+         * @description ``GET /api/catalog/engines`` 的响应体（两种形态按 ``family`` 参数分岔）。
+         *
+         *     - 缺省：``families`` 非空（族清单 + 计数），``engines`` 为空；
+         *     - 给 ``family``：回显 ``family``，``missing_fields`` 恒在，``engines`` 为该族记录。
+         */
+        EnginesCatalogResponse: {
+            /** @description 目录库的快照来源（§7.8 溯源锚点） */
+            snapshot: components["schemas"]["SnapshotOut"];
+            /**
+             * Family
+             * @description 查询的族名（仅在按族查询时回显；缺省查询为 null）
+             */
+            family?: string | null;
+            /**
+             * Families
+             * @description 族清单 + 每族计数（缺省查询时返回；仅列确有发动机记录的族）
+             * @default []
+             */
+            families: components["schemas"]["EngineFamilySummary"][];
+            /**
+             * Missing Fields
+             * @description GCAT 结构性缺失、须 §7.9 手动补录的字段（按族查询时恒在；禁止编造数值）
+             * @default []
+             */
+            missing_fields: string[];
+            /**
+             * Engines
+             * @description 族内发动机记录（按族查询时返回；无此族为空表）
+             * @default []
+             */
+            engines: components["schemas"]["EngineRecordOut"][];
+        };
+        /**
          * ErrorBody
          * @description §10.3 规定的错误响应体。
          */
@@ -918,6 +1089,95 @@ export interface components {
              * @default 0
              */
             back_pressure: number;
+        };
+        /**
+         * MaterialOut
+         * @description 一条材料记录（§7.4 材料库表 + 派生比强度 / 比刚度计算值）。
+         */
+        MaterialOut: {
+            /**
+             * Id
+             * @description 材料 id（Schema material 字段的引用值）
+             */
+            id: string;
+            /**
+             * Name
+             * @description 牌号名（含热处理态）
+             */
+            name: string;
+            /**
+             * Category
+             * @description 类别：铝合金 / 不锈钢 / 钛合金 / 复材 / 高温合金
+             * @enum {string}
+             */
+            category: "铝合金" | "不锈钢" | "钛合金" | "复材" | "高温合金";
+            /**
+             * Density Kg M3
+             * @description 密度（kg/m³）
+             */
+            density_kg_m3: number;
+            /**
+             * Elastic Modulus Pa
+             * @description 弹性模量（Pa，室温）
+             */
+            elastic_modulus_pa: number;
+            /**
+             * Yield Strength Pa
+             * @description 屈服强度（Pa，室温典型值；复材为许用典型）
+             */
+            yield_strength_pa: number;
+            /**
+             * Service Temp Min C
+             * @description 工作温度下限（°C，量级表述）
+             */
+            service_temp_min_c: number;
+            /**
+             * Service Temp Max C
+             * @description 工作温度上限（°C，量级表述）
+             */
+            service_temp_max_c: number;
+            /**
+             * Typical Min Wall Thickness M
+             * @description 典型工艺壁厚下限（m，工程惯例典型值；壁厚判据未显式配置时的回落档）
+             */
+            typical_min_wall_thickness_m: number;
+            /**
+             * Heat Treatment
+             * @description 热处理 / 试验条件（同一合金不同状态性能差数倍）
+             */
+            heat_treatment: string;
+            /**
+             * Source
+             * @description 出处文字（公开手册 / 标准 / 厂商 datasheet）；typical 条目可为 null
+             */
+            source: string | null;
+            /**
+             * Quality
+             * @description 质量标签：literature = 实测手册值；typical = 工程典型值（不得用于结论性导出）
+             * @enum {string}
+             */
+            quality: "literature" | "typical";
+            /**
+             * Specific Strength M2 S2
+             * @description 比强度 σ_y/ρ（m²/s²，即 N·m/kg）——派生计算值，不随库存储（P1）
+             */
+            specific_strength_m2_s2: number;
+            /**
+             * Specific Stiffness M2 S2
+             * @description 比刚度 E/ρ（m²/s²，即 N·m/kg）——派生计算值，不随库存储（P1）
+             */
+            specific_stiffness_m2_s2: number;
+        };
+        /**
+         * MaterialsResponse
+         * @description ``GET /api/catalog/materials`` 的响应体。
+         */
+        MaterialsResponse: {
+            /**
+             * Materials
+             * @description 材料库全量（§7.4 自建库）
+             */
+            materials: components["schemas"]["MaterialOut"][];
         };
         /**
          * MeridianProfile
@@ -1246,6 +1506,27 @@ export interface components {
             stage_index?: number | null;
         };
         /**
+         * SnapshotOut
+         * @description 本目录库的快照来源（§7.8：数值随 provenance 下发的锚点）。
+         */
+        SnapshotOut: {
+            /**
+             * Id
+             * @description 快照 id（如 gcat-2026Q3）
+             */
+            id: string;
+            /**
+             * Release
+             * @description GCAT release 号
+             */
+            release: string;
+            /**
+             * Total Records
+             * @description 快照登记的总记录数（六表合计）
+             */
+            total_records: number;
+        };
+        /**
          * Stage
          * @description 单级（§6.1 Stage 层）。自下而上编号，``index`` 1 = 第一级。
          */
@@ -1278,7 +1559,7 @@ export interface components {
             wall_thickness_m: number;
             /**
              * Material
-             * @description 材料（M3 起由材料库校验）
+             * @description 材料库引用（/api/catalog/materials；值须为库内材料 id）
              */
             material: string;
             /**
@@ -1380,7 +1661,7 @@ export interface components {
             wall_thickness_m: number;
             /**
              * Material
-             * @description 材料（M3 起由材料库校验）
+             * @description 材料库引用（/api/catalog/materials；值须为库内材料 id）
              */
             material: string;
             /**
@@ -1744,7 +2025,7 @@ export interface components {
             fairing_diameter_m?: number | null;
             /**
              * Material
-             * @description 箭体材料（全局默认，可被 Stage 覆盖）
+             * @description 箭体材料（全局默认，可被 Stage 覆盖）；材料库引用（/api/catalog/materials）
              */
             material: string;
             /**
@@ -2101,6 +2382,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TemplateDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_materials_api_catalog_materials_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterialsResponse"];
+                };
+            };
+        };
+    };
+    engine_catalog_api_catalog_engines_get: {
+        parameters: {
+            query?: {
+                family?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnginesCatalogResponse"];
                 };
             };
             /** @description Validation Error */

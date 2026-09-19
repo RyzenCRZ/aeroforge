@@ -20,10 +20,11 @@ from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from aeroforge import __version__
-from aeroforge.api import artifacts, geometry, jobs
+from aeroforge.api import artifacts, geometry, jobs, params
 from aeroforge.api.deps import get_runner, reset_singletons
 from aeroforge.errors import AeroForgeError, ErrorBody, to_error_body
 from aeroforge.geometry.meridian import MeridianError
+from aeroforge.params.schema import errors_to_diagnostics
 
 #: 错误码 → HTTP 状态。未列出的按 500 处理（未知即内部缺陷，不做猜测）。
 _STATUS_BY_CODE: dict[str, int] = {
@@ -33,6 +34,7 @@ _STATUS_BY_CODE: dict[str, int] = {
     "GEOMETRY_INVALID": 422,
     "GEOMETRY_G1_DISCONTINUITY": 422,
     "GEOMETRY_KERNEL_FAILED": 500,
+    "PARAMS_CONSTRAINT_VIOLATION": 422,
 }
 
 _STATUS_CODES: dict[int, str] = {
@@ -67,6 +69,7 @@ app = FastAPI(
 )
 
 app.include_router(geometry.router)
+app.include_router(params.router)
 app.include_router(jobs.router)
 app.include_router(artifacts.router)
 
@@ -101,14 +104,20 @@ async def handle_meridian_error(request: Request, exc: MeridianError) -> JSONRes
 
 @app.exception_handler(RequestValidationError)
 async def handle_request_validation(request: Request, exc: RequestValidationError) -> JSONResponse:
-    """请求体不符合契约——把 pydantic 的报错翻译成 §10.3 结构，而非默认的 detail 列表。"""
+    """请求体不符合契约——把 pydantic 的报错翻成 §10.3 结构。
+
+    ``details.diagnostics`` 用的是 §6.3 / §6.5 的**六字段形状**（而不是 pydantic 原生的
+    ``loc`` 元组数组）：前端只解析一种裁定结构，字段路径也才能与
+    ``/api/params/diagnose`` 的裁定共用同一张"路径 → 控件"映射。
+    """
+    diagnostics = errors_to_diagnostics(exc.errors())
     return _error_response(
         422,
         ErrorBody(
             code="REQUEST_INVALID",
             stage="params",
             message="请求体不符合接口契约",
-            details={"errors": exc.errors()},
+            details={"diagnostics": [item.model_dump(mode="json") for item in diagnostics]},
             suggestion="按 OpenAPI schema 校正字段名与类型（前端类型由 npm run gen:api 生成）",
         ),
     )

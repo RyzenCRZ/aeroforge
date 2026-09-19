@@ -45,7 +45,7 @@ def _await_job(client: TestClient, job_id: str) -> dict[str, object]:
     """轮询作业直到终态（轮询即 §10.2 的降级路径，顺带把它测到）。"""
     deadline = time.monotonic() + _JOB_TIMEOUT_S
     while time.monotonic() < deadline:
-        body = client.get(f"/api/jobs/{job_id}").json()
+        body: dict[str, object] = client.get(f"/api/jobs/{job_id}").json()
         if body["status"] in ("succeeded", "failed", "cancelled"):
             return body
         time.sleep(0.05)

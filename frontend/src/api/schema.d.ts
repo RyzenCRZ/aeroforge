@@ -90,6 +90,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/params/diagnose": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Diagnose
+         * @description 跑 §6.3 约束 + §6.5 诊断规则集。
+         *
+         *     结构错误（缺字段 / 类型不符 / 超出枚举）在进入本函数之前就被 pydantic 拦下，
+         *     由 ``main`` 的 ``RequestValidationError`` 处理器翻成同一形状的六字段裁定。
+         */
+        post: operations["diagnose_api_params_diagnose_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}": {
         parameters: {
             query?: never;
@@ -176,6 +199,25 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * Aero
+         * @description 气动（简化，§6.1 Aero 层）。
+         *
+         *     ⚠ 二者均为**工程惯例值，非权威来源**（规格表已标注）；MVP 只做简化模型，
+         *     **不做 CFD**（非目标 §1.3）。缺失时按默认值并附 ``warning``。
+         */
+        Aero: {
+            /**
+             * Drag Coefficient
+             * @description 阻力系数 Cd（工程惯例值，非权威来源；M4 起可用基准火箭反标定）
+             */
+            drag_coefficient: number;
+            /**
+             * Reference Area M2
+             * @description 参考面积（m²；省略 = 取最大截面积，由后端派生）
+             */
+            reference_area_m2?: number | null;
+        };
         /**
          * ArcSegment
          * @description 球冠段（圆弧）：半径端半径 R 与轴向跨度 H 唯一确定球半径 ρ=(R²+H²)/2H。
@@ -290,6 +332,62 @@ export interface components {
             profile: components["schemas"]["MeridianProfile"];
         };
         /**
+         * DiagnoseResponse
+         * @description ``POST /api/params/diagnose`` 的响应体。
+         *
+         *     ``constraints`` 只可能含**非硬**裁定：硬违反一律走 422，故前端在 200 里看到的
+         *     每一条都是"警告级或更轻"，不需要再判一次"是不是该拒绝"。
+         */
+        DiagnoseResponse: {
+            /**
+             * Constraints
+             * @description §6.3 的四类约束裁定（进入 200 时必为非硬）
+             */
+            constraints: components["schemas"]["Diagnostic"][];
+            /**
+             * Diagnostics
+             * @description §6.5 规则集产出的诊断（六字段；impact 按 OI-11 归 M4）
+             */
+            diagnostics: components["schemas"]["Diagnostic"][];
+            /**
+             * Rules
+             * @description §6.5 逐规则账目，含**未判定**的规则与其原因（不得省略）
+             */
+            rules: components["schemas"]["RuleOutcome"][];
+        };
+        /**
+         * Diagnostic
+         * @description 一条字段级裁定（校验错误或方案诊断）。
+         */
+        Diagnostic: {
+            /**
+             * Level
+             * @description 裁定：hard = 拒绝（硬约束）；warning = 警告
+             * @enum {string}
+             */
+            level: "hard" | "warning";
+            /**
+             * Code
+             * @description 机器可读的判定码，如 PARAMS_FILL_OVERFILL / TWR_TOO_LOW
+             */
+            code: string;
+            /**
+             * Field Path
+             * @description 字段路径（如 stages[0].engine.mixture_ratio）；整箭层判定用 vehicle 前缀
+             */
+            field_path: string;
+            /**
+             * Message
+             * @description 面向用户的中文说明：实测值是多少、为什么不行
+             */
+            message: string;
+            /**
+             * Suggestion
+             * @description 可操作的修复建议（§10.3 要求必填，禁止「未知错误」）
+             */
+            suggestion: string;
+        };
+        /**
          * EllipseSegment
          * @description 椭圆弧段：半轴 = (半径端半径 R, 轴向跨度 H)，椭圆心在轴线上。
          */
@@ -309,6 +407,63 @@ export interface components {
              * @enum {string}
              */
             type: "ellipse";
+        };
+        /**
+         * Engine
+         * @description 发动机（§6.1 Engine 层）。混合比是箱体比例派生的输入（§5.9）。
+         */
+        Engine: {
+            /**
+             * Model
+             * @description 型号
+             */
+            model: string;
+            /**
+             * Cycle
+             * @description 循环方式
+             * @enum {string}
+             */
+            cycle: "gas_generator" | "staged_combustion" | "expander" | "pressure_fed";
+            /**
+             * Chamber Pressure Pa
+             * @description 室压
+             */
+            chamber_pressure_pa: number;
+            /**
+             * Expansion Ratio
+             * @description 喷管膨胀比 ε（面积比）
+             */
+            expansion_ratio: number;
+            /**
+             * Efficiency Factor
+             * @description 效率因子（c* 或 C_F 效率，1.0 = 理想）
+             */
+            efficiency_factor: number;
+            /**
+             * Thrust Sea Level N
+             * @description 海平面推力
+             */
+            thrust_sea_level_n: number;
+            /**
+             * Thrust Vacuum N
+             * @description 真空推力
+             */
+            thrust_vacuum_n: number;
+            /**
+             * Isp Sea Level S
+             * @description 海平面比冲
+             */
+            isp_sea_level_s: number;
+            /**
+             * Isp Vacuum S
+             * @description 真空比冲
+             */
+            isp_vacuum_s: number;
+            /**
+             * Mixture Ratio
+             * @description 混合比 O/F（氧化剂/燃料 质量比）——§5.9 箱体比例派生的唯一输入
+             */
+            mixture_ratio: number;
         };
         /**
          * ErrorBody
@@ -342,6 +497,46 @@ export interface components {
              * @description 可操作的修复建议（规格 §10.3 要求必填）
              */
             suggestion: string;
+        };
+        /**
+         * Geometry
+         * @description 构型（§6.1 Geometry 层），**每级一个**。
+         *
+         *     整箭外轮廓（§5.2 的母线段列表）挂在 :attr:`Vehicle.profile`：M1 的母线描述的是
+         *     **整箭纵剖面**，而共底 / 储箱排列 / 两箱本身是**逐级**属性——若把二者放进一个
+         *     ``Geometry``，多级火箭就会出现"一份轮廓对应多个构型"的歧义。
+         *
+         *     ⚠ 装配关系（§6.1 的示例字段之一）**不在此层**：它随 M5 装配树一并建模（§16）。
+         */
+        Geometry: {
+            /**
+             * Common Bulkhead
+             * @description 共底设计开关（§5.9 默认关闭）
+             * @default false
+             */
+            common_bulkhead: boolean;
+            /**
+             * Common Bulkhead Type
+             * @description 共底类型（共底开启时必填，由约束引擎判定）
+             */
+            common_bulkhead_type?: ("insulated_sandwich" | "plain") | null;
+            /**
+             * Tank Arrangement
+             * @description 储箱排列（§5.9 非铁律，用户可配置）
+             * @default oxidizer_upper
+             * @enum {string}
+             */
+            tank_arrangement: "oxidizer_upper" | "fuel_upper";
+            /**
+             * Fins Enabled
+             * @description 尾翼 / 稳定面是否启用
+             * @default false
+             */
+            fins_enabled: boolean;
+            /** @description 氧化剂箱 */
+            oxidizer_tank: components["schemas"]["Tank"];
+            /** @description 燃料箱 */
+            fuel_tank: components["schemas"]["Tank"];
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -439,6 +634,35 @@ export interface components {
             severity: "pass" | "warn" | "fail" | "skip";
         };
         /**
+         * LaunchSite
+         * @description 发射场（§6.1 LaunchSite 层）。
+         *
+         *     纬度是**自转加成与转向损失的唯一输入**（§8.6）：计算中不得另设常量，
+         *     否则"改纬度运力不变"这类缺陷会在任何一处悄悄复现。
+         */
+        LaunchSite: {
+            /**
+             * Name
+             * @description 发射场名称
+             */
+            name: string;
+            /**
+             * Latitude Deg
+             * @description 纬度（°，北正南负）
+             */
+            latitude_deg: number;
+            /**
+             * Altitude M
+             * @description 海拔（m，可为负）
+             */
+            altitude_m: number;
+            /**
+             * Azimuth Deg
+             * @description 发射方位角（°，自正北顺时针；默认值，可被 Mission 覆盖）
+             */
+            azimuth_deg: number;
+        };
+        /**
          * LineSegment
          * @description 直线段：柱段（end_radius == 起点半径）或锥段/锥台。
          */
@@ -458,6 +682,39 @@ export interface components {
              * @enum {string}
              */
             type: "line";
+        };
+        /**
+         * LossFactors
+         * @description ΔV 损失项系数（§8.6 的损失构成）。
+         *
+         *     M2 只做**存储与透传**；损失模型 L1 的实算属 M4（§16）。刻意**不设默认值猜测**：
+         *     缺省即 0 并在结果中标注为"未计入"，而不是填一个看着合理的经验数（§1.4-4）。
+         */
+        LossFactors: {
+            /**
+             * Gravity
+             * @description 重力损失（Δv 份额）
+             * @default 0
+             */
+            gravity: number;
+            /**
+             * Drag
+             * @description 气动阻力损失（Δv 份额）
+             * @default 0
+             */
+            drag: number;
+            /**
+             * Steering
+             * @description 转向损失（Δv 份额）
+             * @default 0
+             */
+            steering: number;
+            /**
+             * Back Pressure
+             * @description 背压损失（与「压力/控制余量」同义，§8.8）
+             * @default 0
+             */
+            back_pressure: number;
         };
         /**
          * MeridianProfile
@@ -484,6 +741,344 @@ export interface components {
              * @description 自下而上的段链
              */
             segments: (components["schemas"]["LineSegment"] | components["schemas"]["ArcSegment"] | components["schemas"]["EllipseSegment"])[];
+        };
+        /**
+         * Mission
+         * @description 任务与轨道要素（§6.1 Mission 层；轨道要素由 OI-21 补入）。
+         */
+        Mission: {
+            /**
+             * Orbit Type
+             * @description 目标轨道类型
+             * @enum {string}
+             */
+            orbit_type: "LEO" | "SSO" | "GTO" | "GEO" | "TLI" | "TMI" | "escape" | "custom";
+            /**
+             * Altitude M
+             * @description 圆轨道高度（LEO / SSO / GEO 用）
+             */
+            altitude_m?: number | null;
+            /**
+             * Inclination Deg
+             * @description 轨道倾角（°）
+             */
+            inclination_deg?: number | null;
+            /**
+             * Eccentricity
+             * @description 偏心率
+             */
+            eccentricity?: number | null;
+            /**
+             * Perigee Altitude M
+             * @description 近地点高度（GTO / TLI / TMI 用）
+             */
+            perigee_altitude_m?: number | null;
+            /**
+             * Apogee Altitude M
+             * @description 远地点高度（GTO / TLI / TMI 用）
+             */
+            apogee_altitude_m?: number | null;
+            /** @description 内联发射场（与 id 二选一） */
+            launch_site?: components["schemas"]["LaunchSite"] | null;
+            /**
+             * Launch Site Id
+             * @description 发射场引用（与内联二选一）
+             */
+            launch_site_id?: string | null;
+            /** @description ΔV 损失项系数（§8.6） */
+            loss_factors?: components["schemas"]["LossFactors"] | null;
+            /**
+             * Wind Profile Ref
+             * @description 风廓线引用（M6，可空）
+             */
+            wind_profile_ref?: string | null;
+        };
+        /**
+         * Recovery
+         * @description 回收与复用（§6.1 Recovery 层）。
+         */
+        Recovery: {
+            /**
+             * Enabled
+             * @description 是否回收
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Stage Indices
+             * @description 回收的级号
+             * @default []
+             */
+            stage_indices: number[];
+            /**
+             * Method
+             * @description 回收方式
+             */
+            method?: ("parachute" | "propulsive") | null;
+            /**
+             * Landing Propellant Margin Fraction
+             * @description 着陆推进剂余量（占该级满装量）
+             */
+            landing_propellant_margin_fraction?: number | null;
+            /**
+             * System Mass Kg
+             * @description 回收系统质量代价
+             */
+            system_mass_kg?: number | null;
+        };
+        /**
+         * RuleOutcome
+         * @description 一条 §6.5 规则的执行账目——**含未判定的部分**。
+         */
+        RuleOutcome: {
+            /**
+             * Code
+             * @description 规则判定码
+             */
+            code: string;
+            /**
+             * Title
+             * @description 规则名（§6.5 表「规则」列）
+             */
+            title: string;
+            /**
+             * Level
+             * @description 该规则违反时的级别（§6.5 表「级别」列）
+             * @enum {string}
+             */
+            level: "hard" | "warning";
+            /**
+             * Threshold
+             * @description 本次实际生效的阈值（含来源标注）
+             */
+            threshold: string;
+            /**
+             * Source
+             * @description 阈值来源标注（§6.5 强制携带）
+             */
+            source: string;
+            /**
+             * Diagnostics
+             * @description 本规则产出的裁定；空 = 该规则通过
+             * @default []
+             */
+            diagnostics: components["schemas"]["Diagnostic"][];
+            /**
+             * Deferred Reason
+             * @description **整条规则**未判定的原因（缺输入 / 属后续里程碑）
+             */
+            deferred_reason?: string | null;
+            /**
+             * Uncovered
+             * @description 规则已判、但**判据分支**未启用的说明（空 = 全覆盖）
+             * @default []
+             */
+            uncovered: string[];
+        };
+        /**
+         * Sequence
+         * @description 任务时序（§6.1 Sequence 层）。
+         */
+        Sequence: {
+            /**
+             * Events
+             * @description 事件列表（按发生顺序）
+             */
+            events: components["schemas"]["SequenceEvent"][];
+        };
+        /**
+         * SequenceEvent
+         * @description 一个任务时序事件（§6.1 Sequence 层）。
+         */
+        SequenceEvent: {
+            /**
+             * Event
+             * @description 事件类型
+             * @enum {string}
+             */
+            event: "ignition" | "stage_separation" | "fairing_jettison" | "orbit_insertion" | "landing";
+            /**
+             * Time S
+             * @description 相对时刻（s）
+             */
+            time_s?: number | null;
+            /**
+             * Trigger
+             * @description 触发条件（自由文本，如「燃尽压降 5%」）
+             */
+            trigger?: string | null;
+            /**
+             * Stage Index
+             * @description 关联级号（可空）
+             */
+            stage_index?: number | null;
+        };
+        /**
+         * Stage
+         * @description 单级（§6.1 Stage 层）。自下而上编号，``index`` 1 = 第一级。
+         */
+        Stage: {
+            /**
+             * Index
+             * @description 级序号：1 = 第一级（自下而上）
+             */
+            index: number;
+            /**
+             * Propellant
+             * @description 该级推进剂组合
+             * @enum {string}
+             */
+            propellant: "LOX/RP-1" | "LOX/LH2" | "LOX/CH4" | "N2O4/UDMH";
+            /**
+             * Diameter M
+             * @description 级直径
+             */
+            diameter_m: number;
+            /**
+             * Length M
+             * @description 级高度（含级间段）
+             */
+            length_m: number;
+            /**
+             * Wall Thickness M
+             * @description 级壁厚
+             */
+            wall_thickness_m: number;
+            /**
+             * Material
+             * @description 材料（M3 起由材料库校验）
+             */
+            material: string;
+            /**
+             * Structure Coefficient
+             * @description 结构系数 σ = m_dry/(m_dry+m_prop)（**存储权威**，§6.1）
+             */
+            structure_coefficient: number;
+            /**
+             * Fill Fraction
+             * @description 加注比例（上限 1.0，OI-03）
+             */
+            fill_fraction: number;
+            /**
+             * Max Fill Mass Kg
+             * @description 最大允许加注量（仅超装场景显式启用）
+             */
+            max_fill_mass_kg?: number | null;
+            /**
+             * Engine Count
+             * @description 发动机台数
+             */
+            engine_count: number;
+            /** @description 该级发动机定义 */
+            engine: components["schemas"]["Engine"];
+            /**
+             * Engine Height M
+             * @description 发动机高度（安装基准面 → 喷管出口端面，含喷管）
+             */
+            engine_height_m: number;
+            /**
+             * Engine Height Nozzle Excluded M
+             * @description 发动机高度（不含喷管）
+             */
+            engine_height_nozzle_excluded_m?: number | null;
+            /**
+             * Burn Time S
+             * @description 工作时间（s）；省略时由后端按 m_prop/ṁ 派生
+             */
+            burn_time_s?: number | null;
+            /**
+             * Interstage Type
+             * @description 级间段类型（该级与其**上级之间**的分离段；不是级间舱，§5.9 共性 2）
+             * @enum {string}
+             */
+            interstage_type: "cold_staging" | "hot_staging" | "none";
+            /**
+             * Isp Vacuum S
+             * @description 该级实际使用的真空比冲
+             */
+            isp_vacuum_s: number;
+            /**
+             * Isp Sea Level S
+             * @description 该级实际使用的海平面比冲
+             */
+            isp_sea_level_s: number;
+            /**
+             * Isp Source
+             * @description 比冲来源：default = 取自 engine 定义（须一致）；custom = 用户覆写
+             * @enum {string}
+             */
+            isp_source: "default" | "custom";
+            /**
+             * Recoverable
+             * @description 可回收性（回收方案见 Recovery 层）
+             * @default false
+             */
+            recoverable: boolean;
+            /** @description 该级构型（共底 / 储箱排列 / 两箱） */
+            geometry: components["schemas"]["Geometry"];
+        };
+        /**
+         * Tank
+         * @description 贮箱（§6.1 Tank 层）。
+         *
+         *     ``volume_m3`` / ``nominal_full_mass_kg`` / ``liquid_level_m`` 是**派生量**，
+         *     不在此层存储（唯一权威原则）——它们由后端算出并随结果下发。
+         */
+        Tank: {
+            /**
+             * Tank Type
+             * @description 贮箱类型：非共底 / 共底
+             * @enum {string}
+             */
+            tank_type: "separate" | "common_bulkhead";
+            /**
+             * Diameter M
+             * @description 贮箱直径（省略 = 继承该级直径）
+             */
+            diameter_m?: number | null;
+            /**
+             * Length M
+             * @description 用户显式给定的箱长（省略 = 由后端按 §5.9 派生）
+             */
+            length_m?: number | null;
+            /**
+             * Wall Thickness M
+             * @description 壁厚
+             */
+            wall_thickness_m: number;
+            /**
+             * Material
+             * @description 材料（M3 起由材料库校验）
+             */
+            material: string;
+            /**
+             * Fill Fraction
+             * @description 加注比例 = 实际加注量 / 满装量；上限 1.0（OI-03，由约束引擎判定）
+             */
+            fill_fraction: number;
+            /**
+             * Max Fill Mass Kg
+             * @description 最大允许加注量（仅在超装场景显式启用，§6.1 / OI-03）
+             */
+            max_fill_mass_kg?: number | null;
+            /**
+             * Feed System
+             * @description 输送方式：泵压式 / 挤压式
+             * @enum {string}
+             */
+            feed_system: "pump_fed" | "pressure_fed";
+            /**
+             * Delivery Pipe Routing
+             * @description 输送管走法（§5.9 默认外置沿箭体）
+             * @default external
+             * @enum {string}
+             */
+            delivery_pipe_routing: "external" | "internal";
+            /**
+             * Common Bulkhead Insulation M
+             * @description 共底隔热层厚度（共底且 LH₂ 侧必填，§5.9 口径 2）
+             */
+            common_bulkhead_insulation_m?: number | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -547,6 +1142,62 @@ export interface components {
             max_radius: number;
             /** Total Length */
             total_length: number;
+        };
+        /**
+         * Vehicle
+         * @description 飞行器总纲（§6.1 Vehicle 层）——前端与后端之间传递的唯一顶层参数对象。
+         *
+         *     ``total_length_m`` / ``max_diameter_m`` 等**派生量不在此层**：它们由
+         *     :mod:`aeroforge.params.dag` 算出并随结果下发（前端零几何计算，ADR-011）。
+         */
+        Vehicle: {
+            /**
+             * Schema Version
+             * @description 参数 Schema 版本号
+             * @default 1
+             */
+            schema_version: string;
+            /**
+             * Name
+             * @description 火箭名称
+             */
+            name: string;
+            /**
+             * Stages
+             * @description 自下而上（index 1 = 第一级）
+             */
+            stages: components["schemas"]["Stage"][];
+            /**
+             * Payload Mass Kg
+             * @description 有效载荷质量
+             */
+            payload_mass_kg: number;
+            /**
+             * Fairing Diameter M
+             * @description 整流罩直径
+             */
+            fairing_diameter_m?: number | null;
+            /**
+             * Material
+             * @description 箭体材料（全局默认，可被 Stage 覆盖）
+             */
+            material: string;
+            /**
+             * Propellant
+             * @description 推进剂组合（全局默认，可被 Stage 覆盖）
+             * @enum {string}
+             */
+            propellant: "LOX/RP-1" | "LOX/LH2" | "LOX/CH4" | "N2O4/UDMH";
+            /** @description 气动（缺失时按默认值并附 warning） */
+            aero?: components["schemas"]["Aero"] | null;
+            /** @description 整箭母线剖面（§5.2 的 2D→3D 入口；M1 已落地） */
+            profile?: components["schemas"]["MeridianProfile"] | null;
+            /** @description 任务与轨道 */
+            mission: components["schemas"]["Mission"];
+            /** @description 任务时序 */
+            sequence?: components["schemas"]["Sequence"] | null;
+            /** @description 回收与复用 */
+            recovery?: components["schemas"]["Recovery"] | null;
         };
     };
     responses: never;
@@ -675,6 +1326,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BuildResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    diagnose_api_params_diagnose_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Vehicle"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiagnoseResponse"];
                 };
             };
             /** @description Validation Error */

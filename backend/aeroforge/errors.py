@@ -61,6 +61,17 @@ class KernelError(AeroForgeError):
     stage = "solid"
 
 
+class ParamsError(AeroForgeError):
+    """参数域错误：**硬约束**被违反（§6.3「拒绝并返回字段级错误」）。
+
+    与 :class:`GeometryError` 分开，是因为二者虽同为 422，但阶段标签不同——
+    §10.3 的 ``stage`` 要能定位到"哪一层拒绝了这次请求"。
+    """
+
+    code = "PARAMS_CONSTRAINT_VIOLATION"
+    stage = "params"
+
+
 class ArtifactNotFoundError(AeroForgeError):
     """产物不存在。"""
 

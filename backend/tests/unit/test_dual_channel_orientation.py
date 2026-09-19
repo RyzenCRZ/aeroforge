@@ -103,7 +103,8 @@ def _glb_json(path: Path) -> dict[str, Any]:
         chunk_length = int.from_bytes(raw[offset : offset + 4], "little")
         if raw[offset + 4 : offset + 8] == b"JSON":
             payload = raw[offset + 8 : offset + 8 + chunk_length]
-            return json.loads(payload.decode("utf-8"))
+            parsed: dict[str, Any] = json.loads(payload.decode("utf-8"))
+            return parsed
         offset += 8 + chunk_length + (-chunk_length % 4)
     msg = f"GLB 缺少 JSON 块：{path}"
     raise RuntimeError(msg)

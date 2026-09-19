@@ -55,6 +55,17 @@ def contours_root() -> Path:
     return data_root() / "contours"
 
 
+def config_file() -> Path:
+    """配置文件路径（规格 §18.4：来源优先级 ``环境变量 > config.toml > 默认值``）。
+
+    刻意**从 :func:`data_root` 派生**而不是各写一份路径解析：源码态落在仓库根
+    （``data/`` 的上一级），冻结态落在用户目录；更重要的是——测试一旦用
+    ``AEROFORGE_DATA_DIR`` 重定向数据根，本路径**自动**跟着进临时区，
+    不会读到开发机上那份 ``config.toml`` 而让结论随机器而变（§13.8 测试隔离门禁）。
+    """
+    return data_root().parent / "config.toml"
+
+
 def ensure_dir(path: Path) -> Path:
     """确保目录存在并返回它。"""
     path.mkdir(parents=True, exist_ok=True)

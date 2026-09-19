@@ -15,7 +15,29 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from aeroforge.paths import artifacts_root, contours_root, data_root, ensure_dir
+from aeroforge.paths import (
+    ENV_DATA_DIR,
+    artifacts_root,
+    contours_root,
+    data_root,
+    ensure_dir,
+)
+
+
+def test_data_root_resolves_env_override(monkeypatch, tmp_path: Path) -> None:
+    """``data_root()`` 对环境变量覆盖值必须返回**规范形**（resolve）。
+
+    为什么值得单独钉住：GitHub Actions 的 Windows runner 里 ``%TEMP%`` 是 8.3
+    短名（``C:\\Users\\RUNNER~1\\...``），而隔离夹具与隔离门禁都依赖
+    "夹具写入的路径 == data_root() 返回的路径"。后者一旦不再 resolve，同一物理
+    目录就有两种字符串形态，三个隔离门禁会在 CI 上集体误报——本机（用户名
+    ``29659`` 无短名差异）永远复现不了。这里用 ``..`` 拼出一条"字面不同、
+    物理相同"的路径，在**任何**环境都能等价复现该分叉。
+    """
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    monkeypatch.setenv(ENV_DATA_DIR, str(data_dir / ".." / "data"))
+    assert data_root() == data_dir.resolve()
 
 
 def test_writable_roots_live_inside_session_tmp(isolated_data_dir: Path) -> None:

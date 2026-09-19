@@ -41,7 +41,13 @@ def isolated_data_dir() -> Iterator[Path]:
     ``cache_hit`` 意外为 True）。
     """
     with tempfile.TemporaryDirectory(prefix="aeroforge-tests-") as tmp:
-        data_dir = Path(tmp) / "data"
+        # ⚠ 必须先 resolve 再写入环境变量：GitHub Actions 的 Windows runner 里
+        # %TEMP% 是 8.3 短名（C:\Users\RUNNER~1\AppData\Local\Temp），而
+        # data_root() 会把该值 resolve 成长名（C:\Users\runneradmin\...）——
+        # 同一物理目录、两种字符串形态，test_test_isolation 的三个门禁会
+        # 误报"可写根逃出临时区"（CI 三连红即此因；本机用户名无短名差异，
+        # 故本地从未复现）。在夹具边界统一成规范形，两侧口径天然一致。
+        data_dir = Path(tmp).resolve() / "data"
         data_dir.mkdir()
         os.environ[ENV_DATA_DIR] = str(data_dir)
         from aeroforge.api import deps

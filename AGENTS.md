@@ -37,7 +37,7 @@
 - 几何闭环验证（解析 vs 内核体积、双通道包络、母线往返）：`uv run pytest backend/tests/unit/test_geometry_closed_loop.py`
 - 工程自检门禁（文档命令可执行性 / 附录 D 同步 / 测试隔离 / 夹具合法性 / 验收记录留白 / 性能预算，规格 §13.8）：随 `uv run pytest -q` 一并运行
 - 桌面端本地运行（不经浏览器）：`uv run python desktop/launcher.py`
-- 桌面端打包（onedir，产物在 `dist-desktop/`）：`uv run pyinstaller desktop/packaging/aeroforge.spec`
+- 桌面端打包（onedir，产物在 `dist-desktop/`）：`uv run pyinstaller desktop/packaging/aeroforge.spec --distpath dist-desktop --workpath .tools/pyinstaller-build --noconfirm`
 - 桌面端冒烟（冻结后仍能起后端 + 渲染 3D）：见规格 §16.2 退出准则
 
 ## 禁止操作

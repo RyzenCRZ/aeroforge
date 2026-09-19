@@ -4,6 +4,7 @@ import {
   ApiError,
   artifactUrl,
   fetchJob,
+  JOB_HANDSHAKE_TIMEOUT_MS,
   loadContour,
   openJobStream,
   validateProfile,
@@ -69,6 +70,7 @@ function nonJsonResponse(status: number): Response {
 }
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
@@ -183,9 +185,10 @@ describe('错误契约（§10.3）', () => {
 })
 
 describe('作业进度流（§10.2，WS 不可用时的降级入口）', () => {
-  /** WS 替身：只保留被测代码真正依赖的四个成员。 */
+  /** WS 替身：只保留被测代码真正依赖的成员。 */
   class FakeSocket {
     static latest: FakeSocket | null = null
+    onopen: ((event: Event) => void) | null = null
     onmessage: ((event: MessageEvent) => void) | null = null
     onerror: ((event: Event) => void) | null = null
     onclose: ((event: CloseEvent) => void) | null = null
@@ -250,5 +253,51 @@ describe('作业进度流（§10.2，WS 不可用时的降级入口）', () => {
     expect(onError).toHaveBeenCalledTimes(1)
     expect(onError.mock.calls[0][0]).toBeInstanceOf(ApiError)
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('握手挂住（既不 open 也不 error/close）时按超时降级，不得静默卡住', () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('WebSocket', FakeSocket)
+    const onError = vi.fn()
+    const onRecord = vi.fn()
+
+    const stream = openJobStream('job-1', { onRecord, onError })
+
+    // 反向代理未转发 WS 升级请求时，socket 会无限停在 CONNECTING：
+    // 三个回调一个都不会来，只有握手超时能救。
+    vi.advanceTimersByTime(JOB_HANDSHAKE_TIMEOUT_MS - 1)
+    expect(onError).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(1)
+    expect(onError).toHaveBeenCalledTimes(1)
+    const error = onError.mock.calls[0][0] as ApiError
+    expect(error).toBeInstanceOf(ApiError)
+    expect(error.code).toBe('JOB_STREAM_HANDSHAKE_TIMEOUT')
+    expect(error.suggestion).not.toBe('')
+
+    // 放弃后迟到事件不得回流（回调已摘除），也不得重复降级
+    const socket = FakeSocket.latest
+    socket?.onopen?.({} as Event)
+    socket?.onmessage?.({ data: JSON.stringify(RECORD) } as MessageEvent)
+    socket?.onclose?.({} as CloseEvent)
+    vi.advanceTimersByTime(JOB_HANDSHAKE_TIMEOUT_MS * 2)
+    expect(onError).toHaveBeenCalledTimes(1)
+    expect(onRecord).not.toHaveBeenCalled()
+
+    stream.close()
+  })
+
+  it('握手成功（open）后超时不再触发降级', () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('WebSocket', FakeSocket)
+    const onError = vi.fn()
+
+    const stream = openJobStream('job-1', { onRecord: vi.fn(), onError })
+    FakeSocket.latest?.onopen?.({} as Event)
+
+    vi.advanceTimersByTime(JOB_HANDSHAKE_TIMEOUT_MS * 3)
+    expect(onError).not.toHaveBeenCalled()
+
+    stream.close()
   })
 })

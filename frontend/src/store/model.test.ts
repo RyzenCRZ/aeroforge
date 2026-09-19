@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { ValidationReport } from '../api/geometry'
-import { VALIDATE_DEBOUNCE_MS, useModelStore } from './model'
+import { JOB_HANDSHAKE_TIMEOUT_MS, type ValidationReport } from '../api/geometry'
+import { JOB_POLL_INTERVAL_MS, VALIDATE_DEBOUNCE_MS, useModelStore } from './model'
 import { DEFAULT_PROFILE, useParamsStore } from './params'
 
 /**
@@ -179,6 +179,43 @@ describe('双通道切换（ADR-012 / R-25）', () => {
     success.useSchematic()
     expect(useModelStore.getState().channel).toBe('schematic')
     expect(useModelStore.getState().authoritativeKey).toBe('sha256-job-key')
+  })
+
+  it('WS 握手挂住时经握手超时降级为轮询，作业照样收敛（不再卡在"排队中"）', async () => {
+    const fetchMock = vi.fn(async (path: string) => {
+      if (path === '/api/geometry/build') {
+        return jsonResponse({ cache_hit: false, key: 'k', job_id: 'job-1' })
+      }
+      return jsonResponse({
+        job_id: 'job-1',
+        status: 'succeeded',
+        stage: 'done',
+        progress: 1,
+        result_key: 'sha256-polled-key',
+        metrics: { volume: 5.2 },
+        created_at: '2026-09-19T00:00:00Z',
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('WebSocket', FakeSocket)
+
+    await useModelStore.getState().startBuild()
+    expect(useModelStore.getState().building).toBe(true)
+
+    // 握手悬置：替身既不 open 也不 error/close。没有握手超时的话，job 会恒为 null、
+    // building 恒为 true，界面就一直显示"排队中（0%）"（实测 2.5 分钟以上）。
+    expect(useModelStore.getState().job).toBeNull()
+    await vi.advanceTimersByTimeAsync(JOB_HANDSHAKE_TIMEOUT_MS)
+    expect(useModelStore.getState().building).toBe(true)
+
+    await vi.advanceTimersByTimeAsync(JOB_POLL_INTERVAL_MS)
+    await flushMicrotasks()
+
+    const state = useModelStore.getState()
+    expect(state.building).toBe(false)
+    expect(state.channel).toBe('authoritative')
+    expect(state.authoritativeKey).toBe('sha256-polled-key')
+    expect(fetchMock.mock.calls.map((call) => call[0])).toContain('/api/jobs/job-1')
   })
 
   it('构建参数取自母线草稿（唯一可写来源，§11.6 SSOT）', async () => {

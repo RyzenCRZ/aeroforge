@@ -252,6 +252,13 @@ export interface JobStream {
 }
 
 /**
+ * WS 握手超时：超过此时长仍未 `open` 即视同失败，触发降级（§10.2）。
+ *
+ * 取值远大于本机握手的正常耗时（实测直连 < 10 ms），又远小于用户能忍受的"卡住"感知。
+ */
+export const JOB_HANDSHAKE_TIMEOUT_MS = 3_000
+
+/**
  * WS 地址：由当前页面协议与主机推导（同源），禁止硬编码主机名或端口。
  *
  * 桌面壳（pywebview）与 Vite dev server 的端口都不同，写死任一端口都会使另一形态失效。
@@ -264,11 +271,55 @@ function jobStreamUrl(jobId: string): string {
 /**
  * 订阅作业进度流。
  *
- * 构造失败会**同步抛出**，由调用方（store）降级为轮询；连接建立后的传输异常走 `onError`。
+ * 构造失败会**同步抛出**，由调用方（store）降级为轮询；连接建立后的传输异常走 `onError`；
+ * 握手阶段卡住则走下面的**握手超时**兜底。
  */
 export function openJobStream(jobId: string, handlers: JobStreamHandlers): JobStream {
   const socket = new WebSocket(jobStreamUrl(jobId))
   let closed = false
+  let handshaken = false
+  let handshakeTimer: number | null = null
+
+  const clearHandshakeTimer = (): void => {
+    if (handshakeTimer !== null) {
+      window.clearTimeout(handshakeTimer)
+      handshakeTimer = null
+    }
+  }
+
+  /** 放弃当前 socket（幂等）：清定时器、摘回调、关闭连接，避免迟到事件回流。 */
+  const abandon = (): void => {
+    closed = true
+    clearHandshakeTimer()
+    socket.onopen = null
+    socket.onmessage = null
+    socket.onerror = null
+    socket.onclose = null
+    socket.close()
+  }
+
+  // 握手兜底（§10.2）：连接建立阶段的失败**既不派发 error 也不派发 close**——实测当反向
+  // 代理未转发 WS 升级请求（例如 Vite 缺 /ws 代理）时，socket 会无限停在 CONNECTING
+  // （readyState = 0）。只依赖 onerror/onclose 的话，降级轮询永不启动，界面会静默卡在
+  // "排队中（0%）"，而后端作业其实早已跑完。这类"既不成功也不失败"的挂起必须显式兜住。
+  handshakeTimer = window.setTimeout(() => {
+    if (closed || handshaken) return
+    abandon()
+    handlers.onError?.(
+      new ApiError({
+        code: 'JOB_STREAM_HANDSHAKE_TIMEOUT',
+        stage: 'api',
+        message: `作业 ${jobId} 的进度通道在 ${JOB_HANDSHAKE_TIMEOUT_MS} ms 内未建立`,
+        suggestion:
+          '已降级为轮询 GET /api/jobs/{job_id}；开发态若持续出现，检查 Vite 代理是否转发了 /ws（server.proxy 需含 ws: true）',
+      }),
+    )
+  }, JOB_HANDSHAKE_TIMEOUT_MS)
+
+  socket.onopen = () => {
+    handshaken = true
+    clearHandshakeTimer()
+  }
 
   socket.onmessage = (event: MessageEvent) => {
     let parsed: unknown
@@ -281,6 +332,7 @@ export function openJobStream(jobId: string, handlers: JobStreamHandlers): JobSt
   }
 
   socket.onerror = () => {
+    clearHandshakeTimer()
     handlers.onError?.(
       new ApiError({
         code: 'JOB_STREAM_ERROR',
@@ -292,17 +344,14 @@ export function openJobStream(jobId: string, handlers: JobStreamHandlers): JobSt
   }
 
   socket.onclose = () => {
+    clearHandshakeTimer()
     handlers.onClose?.()
   }
 
   return {
     close: () => {
       if (closed) return
-      closed = true
-      socket.onmessage = null
-      socket.onerror = null
-      socket.onclose = null
-      socket.close()
+      abandon()
     },
   }
 }

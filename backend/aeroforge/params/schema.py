@@ -162,10 +162,29 @@ class Engine(ParamsModel):
     efficiency_factor: float = Field(
         gt=0.0, le=1.0, description="效率因子（c* 或 C_F 效率，1.0 = 理想）"
     )
-    thrust_sea_level_n: float = si_field("force", "海平面推力", gt=0.0)
-    thrust_vacuum_n: float = si_field("force", "真空推力", gt=0.0)
-    isp_sea_level_s: float = si_field("isp", "海平面比冲", gt=0.0)
-    isp_vacuum_s: float = si_field("isp", "真空比冲", gt=0.0)
+    # 环境条件口径（§1.7.5 OI-35）：海平面 = ISA 标准海平面（0 m、15 °C、101.325 kPa）；
+    # 真空 = 理想真空（背压 0）。字段名必须携带 _sea_level_ / _vacuum_，无环境限定的
+    # "推力/比冲"视为缺陷；配对规则：ṁ 只用真空配真空，T/W 只用海平面总推力配 GLOW。
+    thrust_sea_level_n: float = si_field(
+        "force",
+        "海平面推力（ISA 标准海平面：海拔 0 m、15 °C、101.325 kPa）",
+        gt=0.0,
+    )
+    thrust_vacuum_n: float = si_field(
+        "force",
+        "真空推力（理想真空、背压 0 的理论值）",
+        gt=0.0,
+    )
+    isp_sea_level_s: float = si_field(
+        "isp",
+        "海平面比冲（ISA 标准海平面：海拔 0 m、15 °C、101.325 kPa）",
+        gt=0.0,
+    )
+    isp_vacuum_s: float = si_field(
+        "isp",
+        "真空比冲（理想真空、背压 0 的理论值）",
+        gt=0.0,
+    )
     mixture_ratio: float = Field(
         gt=0.0, description="混合比 O/F（氧化剂/燃料 质量比）——§5.9 箱体比例派生的唯一输入"
     )

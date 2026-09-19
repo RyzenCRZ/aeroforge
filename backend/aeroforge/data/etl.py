@@ -63,6 +63,9 @@ LV_FIELDS: tuple[FieldMap, ...] = (
     FieldMap("LEO_Capacity", "payload_leo_kg", "kg"),
     FieldMap("GTO_Capacity", "payload_gto_kg", "kg"),
     FieldMap("TO_Thrust", "liftoff_thrust_n", "kN"),
+    # ↑ GCAT 文档只写 "Launch thrust, kN"，未显式声明环境；按行业惯例判为**海平面
+    #   起飞推力**（N-1 45.3 MN 与公开海平面起飞推力一致），供 §6.5 T/W 判据的
+    #   海平面侧（OI-35）。⚠ 若 M4 需要真空侧须另觅来源，不得复用本字段。
     FieldMap("Class", "vehicle_class"),
     FieldMap("LFlag", "source_flags", keep_raw=True),
     FieldMap("MFlag", "source_flags", keep_raw=True),
@@ -97,10 +100,13 @@ ENGINE_FIELDS: tuple[FieldMap, ...] = (
     FieldMap("Family", "family"),
     FieldMap("Oxidizer", "oxidizer"),
     FieldMap("Fuel", "fuel"),
-    # 官方文档：Mass, kg, loaded (solids only)
+    # 官方文档：Mass, kg, loaded (solids only)——是**满装**质量，不是干重
     FieldMap("Mass", "loaded_mass_kg", "kg"),
     # 官方文档：Total impulse, kNs (mostly for solids)——SI 目标 N·s
     FieldMap("Impulse", "total_impulse_ns", "kNs"),
+    # ⚠ 官方文档只写 "Typical thrust (kN)"，**未声明环境口径**（对照 stages 表则明确
+    #   真空/海平面分列）。故按口径中立命名 + 标注"环境未声明"，不参与海平面/真空
+    #   配对计算（§1.7.5 OI-35；§7.5 规则 2：无法确定即标记，不猜）
     FieldMap("Thrust", "typical_thrust_n", "kN"),
     # 官方文档：Typical Isp (s), (vacuum Isp where available)——§7.5 规则 3 的真空口径
     FieldMap("Isp", "isp_vacuum_s", "s"),

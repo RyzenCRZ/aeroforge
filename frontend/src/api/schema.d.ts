@@ -558,22 +558,22 @@ export interface components {
             efficiency_factor: number;
             /**
              * Thrust Sea Level N
-             * @description 海平面推力
+             * @description 海平面推力（ISA 标准海平面：海拔 0 m、15 °C、101.325 kPa）
              */
             thrust_sea_level_n: number;
             /**
              * Thrust Vacuum N
-             * @description 真空推力
+             * @description 真空推力（理想真空、背压 0 的理论值）
              */
             thrust_vacuum_n: number;
             /**
              * Isp Sea Level S
-             * @description 海平面比冲
+             * @description 海平面比冲（ISA 标准海平面：海拔 0 m、15 °C、101.325 kPa）
              */
             isp_sea_level_s: number;
             /**
              * Isp Vacuum S
-             * @description 真空比冲
+             * @description 真空比冲（理想真空、背压 0 的理论值）
              */
             isp_vacuum_s: number;
             /**

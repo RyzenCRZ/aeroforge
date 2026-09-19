@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from aeroforge.paths import (
     ENV_DATA_DIR,
     artifacts_root,
@@ -24,7 +26,9 @@ from aeroforge.paths import (
 )
 
 
-def test_data_root_resolves_env_override(monkeypatch, tmp_path: Path) -> None:
+def test_data_root_resolves_env_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """``data_root()`` 对环境变量覆盖值必须返回**规范形**（resolve）。
 
     为什么值得单独钉住：GitHub Actions 的 Windows runner 里 ``%TEMP%`` 是 8.3

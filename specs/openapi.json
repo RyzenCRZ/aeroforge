@@ -939,7 +939,7 @@
             "type": "number",
             "exclusiveMinimum": 0.0,
             "title": "Thrust Sea Level N",
-            "description": "海平面推力",
+            "description": "海平面推力（ISA 标准海平面：海拔 0 m、15 °C、101.325 kPa）",
             "display_unit": "kN",
             "unit": "N"
           },
@@ -947,7 +947,7 @@
             "type": "number",
             "exclusiveMinimum": 0.0,
             "title": "Thrust Vacuum N",
-            "description": "真空推力",
+            "description": "真空推力（理想真空、背压 0 的理论值）",
             "display_unit": "kN",
             "unit": "N"
           },
@@ -955,7 +955,7 @@
             "type": "number",
             "exclusiveMinimum": 0.0,
             "title": "Isp Sea Level S",
-            "description": "海平面比冲",
+            "description": "海平面比冲（ISA 标准海平面：海拔 0 m、15 °C、101.325 kPa）",
             "display_unit": "s",
             "unit": "s"
           },
@@ -963,7 +963,7 @@
             "type": "number",
             "exclusiveMinimum": 0.0,
             "title": "Isp Vacuum S",
-            "description": "真空比冲",
+            "description": "真空比冲（理想真空、背压 0 的理论值）",
             "display_unit": "s",
             "unit": "s"
           },

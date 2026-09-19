@@ -158,14 +158,16 @@ def test_row_count_parity_fails_when_parsed_rows_drift(
     out = tmp_path / "gcat-2026Q3"
     fetch_snapshot(out, release="1.8.7", downloader=downloader(per_file_payload()))
 
-    import aeroforge.data.etl as etl
-
-    real = etl.read_table
+    from aeroforge.data.snapshot import read_table as real_read_table
 
     def dropping_read_table(text: str) -> tuple[list[str], list[dict[str, str]]]:
-        header, rows = real(text)
+        header, rows = real_read_table(text)
         return header, rows[:-1]  # 偷偷丢一行，模拟"解析吞行"
 
+    import aeroforge.data.etl as etl
+
+    # 打补丁的目标是 etl 命名空间里的名字（run_etl 经模块全局调用它）；
+    # 真函数本体取自 snapshot（单一来源，etl 只是导入使用，不做隐式再导出）。
     monkeypatch.setattr(etl, "read_table", dropping_read_table)
     with pytest.raises(ValueError, match="解析丢行"):
         run_etl(out)

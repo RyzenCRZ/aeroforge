@@ -1,0 +1,91 @@
+# 本工作流是规格 §13.9 的实体。在此之前规格有 22 处提到「CI」，而仓库里没有任何工作流文件
+# （R-36：门禁只存在于文档、没有执行者）。
+#
+# 设计要点：
+# 1. 单一 job、步骤严格按序——这样「前端构建」先于「后端测试」发生，
+#    test_perf_budget.py 的前端包体积预算才是真的被 CI 实测，而不是每轮 skip。
+# 2. 契约新鲜度检查分两步：先由后端重建 specs/openapi.json，再由前端重新生成 schema.d.ts。
+#    只做第二步发现不了「后端接口改了、openapi.json 没重导」这一类漂移（R-31）。
+# 3. 不构建冻结产物：含 OCCT + CEA 的 onedir 冻结是数百 MB 级且需 Windows 环境，
+#    属产物实测范畴（规格 §16.2），不在 CI 内做。
+# 4. 三项人工/产物实测不进本工作流：端到端预览延迟、--probe 首帧、断网复跑——
+#    它们需要真实浏览器、冻结产物或真实断网，在 CI 上只能被伪造成假绿（§13.5.1 / §13.9）。
+# 5. 运行器选 windows-latest：本平台是 Windows 优先交付（ADR-015），
+#    uv.lock 也按 Windows 解析；换成 Linux 会改变原生依赖（OCCT / CEA）的实际解析结果。
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    name: 全量门禁
+    runs-on: windows-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # ── 后端：依赖 ────────────────────────────────────────────────────
+      - name: 后端依赖（严格按 uv.lock，不允许 CI 上改锁文件）
+        run: uv sync --frozen
+
+      # ── 后端：静态检查（规格 §13.4）──────────────────────────────────
+      - name: 后端格式检查
+        run: uv run ruff format --check .
+
+      - name: 后端静态检查
+        run: uv run ruff check .
+
+      - name: 后端类型检查（mypy --strict，见 pyproject.toml）
+        run: uv run mypy
+
+      # ── 前端：依赖与门禁（规格 §13.1 / §13.4 / §13.6）─────────────────
+      - name: 前端依赖
+        working-directory: frontend
+        run: npm ci
+
+      - name: 前端类型检查
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: 前端单元测试（含 §13.6 非功能项）
+        working-directory: frontend
+        run: npm run test
+
+      - name: 前端构建
+        working-directory: frontend
+        run: npm run build
+
+      # ── 契约新鲜度（R-31）：两步缺一不可 ──────────────────────────────
+      - name: 重建 OpenAPI 契约
+        run: uv run python -c "import json,pathlib;from aeroforge.api.main import app;pathlib.Path('specs/openapi.json').write_text(json.dumps(app.openapi(),ensure_ascii=False,indent=2)+chr(10),encoding='utf-8')"
+
+      - name: 契约新鲜度·后端侧（specs/openapi.json 不得漂移）
+        run: git diff --exit-code -- specs/openapi.json
+
+      - name: 前端类型生成
+        working-directory: frontend
+        run: npm run gen:api
+
+      - name: 契约新鲜度·前端侧（schema.d.ts 不得漂移）
+        run: git diff --exit-code -- frontend/src/api/schema.d.ts
+
+      # ── 后端：测试（含 §13.8 工程自检门禁与 §13.5.1 的 CI 实测预算）──
+      # 必须排在「前端构建」之后：包体积预算量的是 frontend/dist/assets/*.js。
+      - name: 后端测试
+        run: uv run pytest

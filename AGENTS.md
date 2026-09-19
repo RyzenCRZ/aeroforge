@@ -12,6 +12,8 @@
 - /data/       数据快照与 CEA 预计算表（不可变，禁止手改）+ `contours/<id>.json` 母线存档（M1 起由 `POST /api/geometry/contour` 写入）
 - /artifacts/  内容寻址产物：`<key>/{model.step, model_lod1.glb, model_lod2.glb, metrics.json, provenance.json}`，`key = sha256(canonical_json + kernel_version + spec_version)`（§16.3）。派生数据，不入库
 - /tools/      preflight.py（环境预检 CLI，仅转调 `aeroforge.selfcheck`——R-30 要求唯一实现）；cea_tablegen.py / gcat_etl.py / model_import.py / benchmark.py 随 M3–M5 落地，**当前不存在**
+- /docs/       未采纳想法与留白索引：`backlog.md`（R-16 / R-20 的落点，OI-14）· `adr/`（占位）
+- /.github/    持续集成：`workflows/ci.yml`（规格 §13.9）
 - AeroForge-Spec.md  唯一真理源，架构级变更必须先改本文档
 
 > **交付形态**：Windows 桌面应用，**双击 exe 启动**，不是网页、不是在线服务（ADR-015）。
@@ -39,6 +41,7 @@
 - 桌面端本地运行（不经浏览器）：`uv run python desktop/launcher.py`
 - 桌面端打包（onedir，产物在 `dist-desktop/`）：`uv run pyinstaller desktop/packaging/aeroforge.spec --distpath dist-desktop --workpath .tools/pyinstaller-build --noconfirm`
 - 桌面端冒烟（冻结后仍能起后端 + 渲染 3D）：见规格 §16.2 退出准则
+- 持续集成（规格 §13.9）：`push` / `pull_request` 触发，跑后端 `ruff format --check` / `ruff check` / `mypy` / `pytest`、前端 `typecheck` / `test` / `build`，以及 OpenAPI 契约新鲜度两步比对；**端到端预览延迟、`--probe` 首帧、断网复跑三项不在 CI 内**（属人工 / 产物实测，见规格 §13.5.1 / §16.2）
 
 ## 禁止操作
 - 不要修改 /data/snapshots/ 与 /data/tables/ 下的已发布数据（快照不可变）
@@ -66,6 +69,10 @@
 - 不要用网格（GLB/STL）作为任何计算的输入
 - 不要引入新依赖（须先走 AeroForge-Spec.md §3.4 审计流程）
 - 不要在无来源的情况下输出数值结论
+- **不要引入 i18n / 多语言框架**（规格 §1.3 非目标：界面文案只做简体中文，OI-09）
+- **不要在组件里就地格式化单位**（规格 §6.4：显示单位固定一套，换算只在 API 边界发生，OI-07）
+- **不要用经验系数编造方案诊断的 `impact`**（规格 §6.5：必须由 §8.7 敏感度实算，M2 不输出该字段、M4 起补，OI-11）
+- **不要把未采纳的想法直接排期**（先进 `docs/backlog.md`；要"毕业"须回到 `AeroForge-Spec.md` 走 §1.7 裁决或立 ADR，R-16 / R-20 / OI-14）
 
 ## 领域规则
 - 所有几何参数必须有物理约束校验（壁厚 < 直径/2 等）

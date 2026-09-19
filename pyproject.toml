@@ -85,5 +85,12 @@ follow_imports = "skip"
 module = ["scipy", "scipy.*"]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+# pandas 同样无 py.typed（§7.5 ETL 用）。边界收口策略：DataFrame 的构造与
+# to_parquet 都封装在 aeroforge.data.etl 内，行数据来自本模块的显式 dict，
+# 不让 Any 逃逸到领域层。
+module = ["pandas", "pandas.*"]
+ignore_missing_imports = true
+
 [tool.coverage.run]
 source = ["backend/aeroforge"]

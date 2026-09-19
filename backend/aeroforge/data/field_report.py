@@ -9,11 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from aeroforge.data.snapshot import SNAPSHOT_TABLES, load_manifest, read_table
-
-#: 缺失记号：GCAT 用 ``-`` / ``..`` 等表示"该字段无值"。``?`` 不算缺失
-#: （是"值存在但未经证实"），它会作为非数值样本出现在单位疑点里。
-MISSING_TOKENS = {"", "-", "..", "..."}
+from aeroforge.data.snapshot import MISSING_TOKENS, SNAPSHOT_TABLES, load_manifest, read_table
 
 #: §7.1 登记的条数（写规格时点的官方计数）。快照实测与它的差值只登记、不判失败：
 #: 目录是活的，数字会随 release 演进——但偏离过大（翻倍级）就该停下来查口径。

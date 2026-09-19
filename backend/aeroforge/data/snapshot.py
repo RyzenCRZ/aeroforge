@@ -43,6 +43,10 @@ SNAPSHOT_TABLES: dict[str, str] = {
 
 MANIFEST_NAME = "snapshot.json"
 
+#: 缺失记号：GCAT 用 ``-`` / ``..`` 等表示"该字段无值"。``?`` 不算缺失
+#: （是"值存在但未经证实"），由 ETL 的量纲甄别与 field_report 的疑点样本处理。
+MISSING_TOKENS = {"", "-", "..", "..."}
+
 #: 快照 id 命名约定（§7.1 示例 ``gcat-2026Q3``）：季度一批，不可变。
 _SNAPSHOT_ID_RE = re.compile(r"^gcat-\d{4}Q[1-4]$")
 

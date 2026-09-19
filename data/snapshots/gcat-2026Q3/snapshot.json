@@ -1,0 +1,56 @@
+{
+  "source": "GCAT",
+  "source_url": "https://planet4589.org/space/gcat/",
+  "gcat_release": "1.8.7",
+  "fetched_at": "2026-09-19T11:22:34+00:00",
+  "tables": [
+    {
+      "table": "family",
+      "file": "family.tsv",
+      "url": "https://planet4589.org/space/gcat/tsv/tables/family.tsv",
+      "sha256": "e128d3d85676a7f1dafb4cc028c6aeafebbd21ad1d2866738fad9b55fa84565f",
+      "size_bytes": 4813,
+      "records": 676
+    },
+    {
+      "table": "orgs",
+      "file": "orgs.tsv",
+      "url": "https://planet4589.org/space/gcat/tsv/tables/orgs.tsv",
+      "sha256": "fd6c02af52164bef0c279bde236e25c408a3fd190a17e05d3e55c272fcc9242a",
+      "size_bytes": 706802,
+      "records": 4111
+    },
+    {
+      "table": "lv",
+      "file": "lv.tsv",
+      "url": "https://planet4589.org/space/gcat/tsv/tables/lv.tsv",
+      "sha256": "e4d62ca395beda6b473a229834647fbf47befe01a9190260a663b089a7a2cf6d",
+      "size_bytes": 219719,
+      "records": 1836
+    },
+    {
+      "table": "lvs",
+      "file": "lvs.tsv",
+      "url": "https://planet4589.org/space/gcat/tsv/tables/lvs.tsv",
+      "sha256": "377112bd9a4d69deae4ec1b927e6a23b68aa172a2cbdf2a7dfcb915071e1077d",
+      "size_bytes": 294221,
+      "records": 4744
+    },
+    {
+      "table": "stages",
+      "file": "stages.tsv",
+      "url": "https://planet4589.org/space/gcat/tsv/tables/stages.tsv",
+      "sha256": "a7bcef59f67b4bf82bdb156bcc7e87aa4adfd8c0adf76a3f6be977b1ba41db87",
+      "size_bytes": 171940,
+      "records": 1626
+    },
+    {
+      "table": "engines",
+      "file": "engines.tsv",
+      "url": "https://planet4589.org/space/gcat/tsv/tables/engines.tsv",
+      "sha256": "70a712317b0cc493c30411fbaad865d20410df14066cb13ca701b585b669baef",
+      "size_bytes": 149374,
+      "records": 1488
+    }
+  ]
+}

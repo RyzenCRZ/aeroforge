@@ -1111,17 +1111,17 @@ export interface components {
             interstage_type: "cold_staging" | "hot_staging" | "none";
             /**
              * Isp Vacuum S
-             * @description 该级实际使用的真空比冲
+             * @description 该级真空比冲（仅 isp_source=custom 时填写；省略 = 取发动机标称值）
              */
-            isp_vacuum_s: number;
+            isp_vacuum_s?: number | null;
             /**
              * Isp Sea Level S
-             * @description 该级实际使用的海平面比冲
+             * @description 该级海平面比冲（仅 isp_source=custom 时填写；省略 = 取发动机标称值）
              */
-            isp_sea_level_s: number;
+            isp_sea_level_s?: number | null;
             /**
              * Isp Source
-             * @description 比冲来源：default = 取自 engine 定义（须一致）；custom = 用户覆写
+             * @description 比冲来源：default = 取自 engine 定义（省略 isp_* 字段）；custom = 用户覆写（必填）
              * @enum {string}
              */
             isp_source: "default" | "custom";

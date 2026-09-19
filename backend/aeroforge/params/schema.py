@@ -291,10 +291,25 @@ class Stage(ParamsModel):
     interstage_type: StageSeparationType = Field(
         description="级间段类型（该级与其**上级之间**的分离段；不是级间舱，§5.9 共性 2）"
     )
-    isp_vacuum_s: float = si_field("isp", "该级实际使用的真空比冲", gt=0.0)
-    isp_sea_level_s: float = si_field("isp", "该级实际使用的海平面比冲", gt=0.0)
+    # 唯一权威原则（QA-1，v0.6.1 续）：发动机标称比冲是权威，级层只在**覆写**时才存值。
+    # isp_source="default" ⇒ 两字段必须省略，后端从 engine 复制下发；
+    # "custom" ⇒ 两字段必填（约束引擎判定 HARD_ISP_CUSTOM_REQUIRES_VALUES）。
+    isp_vacuum_s: float | None = si_field(
+        "isp",
+        "该级真空比冲（仅 isp_source=custom 时填写；省略 = 取发动机标称值）",
+        default=None,
+        gt=0.0,
+    )
+    isp_sea_level_s: float | None = si_field(
+        "isp",
+        "该级海平面比冲（仅 isp_source=custom 时填写；省略 = 取发动机标称值）",
+        default=None,
+        gt=0.0,
+    )
     isp_source: IspSource = Field(
-        description="比冲来源：default = 取自 engine 定义（须一致）；custom = 用户覆写"
+        description=(
+            "比冲来源：default = 取自 engine 定义（省略 isp_* 字段）；custom = 用户覆写（必填）"
+        )
     )
     recoverable: bool = Field(default=False, description="可回收性（回收方案见 Recovery 层）")
     geometry: Geometry = Field(description="该级构型（共底 / 储箱排列 / 两箱）")

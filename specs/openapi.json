@@ -1953,18 +1953,32 @@
             "description": "级间段类型（该级与其**上级之间**的分离段；不是级间舱，§5.9 共性 2）"
           },
           "isp_vacuum_s": {
-            "type": "number",
-            "exclusiveMinimum": 0.0,
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Isp Vacuum S",
-            "description": "该级实际使用的真空比冲",
+            "description": "该级真空比冲（仅 isp_source=custom 时填写；省略 = 取发动机标称值）",
             "display_unit": "s",
             "unit": "s"
           },
           "isp_sea_level_s": {
-            "type": "number",
-            "exclusiveMinimum": 0.0,
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Isp Sea Level S",
-            "description": "该级实际使用的海平面比冲",
+            "description": "该级海平面比冲（仅 isp_source=custom 时填写；省略 = 取发动机标称值）",
             "display_unit": "s",
             "unit": "s"
           },
@@ -1975,7 +1989,7 @@
               "custom"
             ],
             "title": "Isp Source",
-            "description": "比冲来源：default = 取自 engine 定义（须一致）；custom = 用户覆写"
+            "description": "比冲来源：default = 取自 engine 定义（省略 isp_* 字段）；custom = 用户覆写（必填）"
           },
           "recoverable": {
             "type": "boolean",
@@ -2003,8 +2017,6 @@
           "engine",
           "engine_height_m",
           "interstage_type",
-          "isp_vacuum_s",
-          "isp_sea_level_s",
           "isp_source",
           "geometry"
         ],

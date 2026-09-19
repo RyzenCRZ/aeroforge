@@ -144,7 +144,8 @@ interface NumberFieldProps {
   label: string
   unitText: string
   step: number
-  value: number
+  /** `null` = 尚未填写（仅 custom 比冲这类"条件必填"字段会出现） */
+  value: number | null
   unsourced: boolean
   onCommit: (value: number) => void
 }
@@ -156,10 +157,10 @@ interface NumberFieldProps {
  * 在 `Number` 下会退化成 `0`，逐字符重置会把小数点吃掉（壁厚、O/F 这类小数首当其冲）。
  */
 function NumberField({ fieldPath, label, unitText, step, value, unsourced, onCommit }: NumberFieldProps) {
-  const [draft, setDraft] = useState(String(value))
+  const [draft, setDraft] = useState(value === null ? '' : String(value))
 
   useEffect(() => {
-    setDraft(String(value))
+    setDraft(value === null ? '' : String(value))
   }, [value])
 
   return (
@@ -240,8 +241,14 @@ function Field({ spec, fieldPath, value, unitTable, sourced, onCommit }: FieldPr
   }
 
   // 数值型：契约里是 SI，界面按后端下发的 factor 换算（§6.4 / OI-32）。
-  const siValue = typeof value === 'number' ? value : 0
-  const display = spec.quantity === null ? siValue : toDisplayValue(unitTable, spec.quantity, siValue)
+  // 未填写（null）显示空串而不是 0——把"没填"渲染成 0 会诱导用户提交假值（§1.4-4）。
+  const siValue = typeof value === 'number' ? value : null
+  const display =
+    siValue === null
+      ? null
+      : spec.quantity === null
+        ? siValue
+        : toDisplayValue(unitTable, spec.quantity, siValue)
 
   return (
     <NumberField
@@ -271,6 +278,19 @@ export function VehiclePanel() {
   const loadTemplate = useVehicleStore((state) => state.loadTemplate)
   const setField = useVehicleStore((state) => state.setField)
   const unitTable = useUnitTable()
+
+  /**
+   * 提交包装（QA-1，v0.6.2）：把比冲来源切回 `default` 时**同时清空**两个级层比冲字段
+   * ——留着旧覆写值，后端会判 HARD_ISP_DEFAULT_MISMATCH；null 写回即从载荷中移除语义。
+   */
+  const commitField = (path: string, value: unknown) => {
+    setField(path, value)
+    if (value === 'default' && path.endsWith('.isp_source')) {
+      const prefix = path.slice(0, -'isp_source'.length)
+      setField(`${prefix}isp_vacuum_s`, null)
+      setField(`${prefix}isp_sea_level_s`, null)
+    }
+  }
 
   // 起始箭只在首次挂载时取一次：空面板对用户没有意义，且它**只能**来自后端（§11.5 ① 第 6 条）。
   const requested = useRef(false)
@@ -324,7 +344,7 @@ export function VehiclePanel() {
           value={readFieldPath(vehicle, fieldPath)}
           unitTable={unitTable}
           sourced={sourcedFields[fieldPath]}
-          onCommit={setField}
+          onCommit={commitField}
         />
       )
     })
@@ -348,13 +368,24 @@ export function VehiclePanel() {
           {renderFields(VEHICLE_FIELDS, '')}
         </div>
 
-        {vehicle.stages.map((stage, index) => (
-          <div className="vehicle-panel__group" key={`stage-${index}`}>
-            <h3 className="label">{`第 ${stage.index} 级（自下而上 · stages[${index}]）`}</h3>
-            {renderFields(STAGE_FIELDS, `stages[${index}].`)}
-            {renderFields(TANK_FIELDS, `stages[${index}].`)}
-          </div>
-        ))}
+        {vehicle.stages.map((stage, index) => {
+          const prefix = `stages[${index}].`
+          // 唯一权威（QA-1，v0.6.2）：default 语义下级层不存比冲——控件随之隐藏，
+          // 载荷里也就不含这两个字段（后端取发动机标称值）。
+          const ispOverridden = readFieldPath(vehicle, `${prefix}isp_source`) === 'custom'
+          const stageSpecs = ispOverridden
+            ? STAGE_FIELDS
+            : STAGE_FIELDS.filter(
+                (spec) => spec.path !== 'isp_vacuum_s' && spec.path !== 'isp_sea_level_s',
+              )
+          return (
+            <div className="vehicle-panel__group" key={`stage-${index}`}>
+              <h3 className="label">{`第 ${stage.index} 级（自下而上 · stages[${index}]）`}</h3>
+              {renderFields(stageSpecs, prefix)}
+              {renderFields(TANK_FIELDS, prefix)}
+            </div>
+          )
+        })}
 
         <div className="vehicle-panel__group">
           <h3 className="label">任务</h3>

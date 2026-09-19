@@ -108,8 +108,7 @@ def make_stage(
         # 级间段类型描述的是"该级与其**上级**之间的分离段"（§5.9 共性 2），
         # 故最上级只能是 none。
         interstage_type=interstage_type,
-        isp_vacuum_s=311.0,
-        isp_sea_level_s=282.0,
+        # 唯一权威（QA-1，v0.6.2）：default 语义下级层**省略** isp_*，后端取发动机标称值
         isp_source="default",
         geometry=Geometry(oxidizer_tank=tank, fuel_tank=tank.model_copy()),
     )

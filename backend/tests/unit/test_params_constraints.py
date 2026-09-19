@@ -249,23 +249,64 @@ def test_engine_must_fit_inside_the_stage(single_stage_vehicle: Vehicle) -> None
     assert [item.field_path for item in items] == ["stages[0].length_m"]
 
 
-def test_default_isp_must_match_the_engine_nominal(single_stage_vehicle: Vehicle) -> None:
-    """来源标 default 却与发动机标称值不一致 = "改了值却没改来源"，必须提示（UI 最容易漏）。"""
+def test_default_isp_with_a_conflicting_value_is_hard(
+    single_stage_vehicle: Vehicle,
+) -> None:
+    """QA-1（v0.6.1 续）：来源标 default 却填了不同的数 = 两份真相矛盾。
+
+    判 **hard** 而非过去的警告：DAG 的比冲输入取的就是级层值，警告挡不住
+    "计算默默用了用户那份"——矛盾必须在诊断处拦下。
+    """
     vehicle = _mutate(
         single_stage_vehicle, lambda payload: payload["stages"][0].update({"isp_vacuum_s": 330.0})
     )
 
-    items = _by_code(vehicle, "ENGINEER_ISP_SOURCE_MISMATCH")
+    items = _by_code(vehicle, "HARD_ISP_DEFAULT_MISMATCH")
     assert [item.field_path for item in items] == ["stages[0].isp_vacuum_s"]
+    assert all(item.level == "hard" for item in items)
 
-    # 标为 custom 即视为用户有意覆写，不再提示
+    # 标为 custom 即视为用户有意覆写，不再提示不一致
     custom = _mutate(
         single_stage_vehicle,
         lambda payload: payload["stages"][0].update(
             {"isp_vacuum_s": 330.0, "isp_source": "custom"}
         ),
     )
-    assert _by_code(custom, "ENGINEER_ISP_SOURCE_MISMATCH") == []
+    assert _by_code(custom, "HARD_ISP_DEFAULT_MISMATCH") == []
+
+
+def test_default_isp_with_a_redundant_equal_value_warns(
+    single_stage_vehicle: Vehicle,
+) -> None:
+    """default 且与发动机**一致**的副本：不违法但属多余存储，迟早漂移——警告提示清理。"""
+    vehicle = _mutate(
+        single_stage_vehicle,
+        lambda payload: payload["stages"][0].update(
+            {"isp_vacuum_s": 311.0, "isp_sea_level_s": 282.0}
+        ),
+    )
+
+    items = _by_code(vehicle, "ENGINEER_ISP_DEFAULT_REDUNDANT")
+    assert [item.field_path for item in items] == [
+        "stages[0].isp_vacuum_s",
+        "stages[0].isp_sea_level_s",
+    ]
+    assert all(item.level == "warning" for item in items)
+
+
+def test_custom_isp_requires_both_values(single_stage_vehicle: Vehicle) -> None:
+    """QA-1（v0.6.1 续）：custom 语义 = 用户覆写，两个比冲都必须给出，否则 DAG 无从取值。"""
+    vehicle = _mutate(
+        single_stage_vehicle,
+        lambda payload: payload["stages"][0].update({"isp_source": "custom"}),
+    )
+
+    items = _by_code(vehicle, "HARD_ISP_CUSTOM_REQUIRES_VALUES")
+    assert [item.field_path for item in items] == [
+        "stages[0].isp_vacuum_s",
+        "stages[0].isp_sea_level_s",
+    ]
+    assert all(item.level == "hard" for item in items)
 
 
 def test_solid_phase_warns_that_liquid_only_fields_do_not_apply(
@@ -395,8 +436,12 @@ def test_levels_are_only_hard_or_warning(single_stage_vehicle: Vehicle) -> None:
         single_stage_vehicle,
         lambda payload: payload["stages"][0].update({"fill_fraction": 1.5}),
     )
+    # QA-1 后 default+不一致已升 hard；警告级样例改用"与发动机一致的冗余副本"
     warning_case = _mutate(
-        single_stage_vehicle, lambda payload: payload["stages"][0].update({"isp_vacuum_s": 330.0})
+        single_stage_vehicle,
+        lambda payload: payload["stages"][0].update(
+            {"isp_vacuum_s": 311.0, "isp_sea_level_s": 282.0}
+        ),
     )
 
     assert {item.level for item in _diagnostics(hard_case)} == {"hard"}

@@ -572,7 +572,17 @@ def vehicle_inputs(
         provided[f"{prefix}.engine_count"] = float(stage.engine_count)
         provided[f"{prefix}.engine_thrust_sea_level_n"] = stage.engine.thrust_sea_level_n
         provided[f"{prefix}.engine_thrust_vacuum_n"] = stage.engine.thrust_vacuum_n
-        provided[f"{prefix}.isp_vacuum_s"] = stage.isp_vacuum_s
+        # 唯一权威（QA-1，v0.6.2）：级层省略 isp_* 即取发动机标称值；
+        # custom 却缺值属约束引擎的 hard 违反——这里不再兜底（兜底会掩盖违约），
+        # 直接拒绝，防止绕过诊断直调本函数时把 None 静默带进图。
+        if stage.isp_vacuum_s is not None:
+            provided[f"{prefix}.isp_vacuum_s"] = stage.isp_vacuum_s
+        elif stage.isp_source == "custom":
+            raise ValueError(
+                f"第 {stage.index} 级 isp_source=custom 但未提供 isp_vacuum_s（先跑诊断）"
+            )
+        else:
+            provided[f"{prefix}.isp_vacuum_s"] = stage.engine.isp_vacuum_s
         mass = masses.get(stage.index)
         if mass is not None:
             provided[f"{prefix}.propellant_mass_kg"] = mass

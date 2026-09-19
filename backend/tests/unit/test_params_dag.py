@@ -126,6 +126,35 @@ def test_deferred_nodes_are_not_in_derived_values(single_stage_vehicle: Vehicle)
     )
 
 
+def test_omitted_stage_isp_resolves_to_engine_nominal(single_stage_vehicle: Vehicle) -> None:
+    """QA-1（v0.6.1 续）：default 语义下级层省略 isp_*，DAG 取**发动机标称值**。
+
+    判据用反证：夹具发动机标称 311.0 s，若解析错了（比如取 0 或缺输入），
+    质量流量 = F_vac/(Isp·g₀) 立刻偏离。
+    """
+    result = dag.propagate_vehicle(single_stage_vehicle)
+
+    assert result.values["stage1.isp_vacuum_s"] == pytest.approx(311.0)
+    assert result.sources["stage1.isp_vacuum_s"] is dag.Source.USER
+
+    # §6.1：ṁ = F/(Isp·g₀)（按**单机**真空推力计）
+    expected_mass_flow = 981_000.0 / (311.0 * dag.G0)
+    assert result.values["stage1.mass_flow_kg_s"] == pytest.approx(expected_mass_flow)
+
+
+def test_custom_isp_without_values_is_rejected_before_the_graph(
+    single_stage_vehicle: Vehicle,
+) -> None:
+    """绕过诊断直调 DAG 且 custom 缺值：必须炸而不是静默取发动机值（掩盖违约）。"""
+    payload_vehicle = _legal_vehicle("custom 缺值", (make_stage(1, length_m=41.2),))
+    mutated = payload_vehicle.model_copy(
+        update={"stages": (payload_vehicle.stages[0].model_copy(update={"isp_source": "custom"}),)}
+    )
+
+    with pytest.raises(ValueError, match="custom"):
+        dag.propagate_vehicle(mutated)
+
+
 def test_provided_derived_node_keeps_user_source(single_stage_vehicle: Vehicle) -> None:
     """调用方直接给定派生节点时来源标 ``user``（§6.2），不得被静默重算覆盖。"""
     provided = dag.vehicle_inputs(single_stage_vehicle)

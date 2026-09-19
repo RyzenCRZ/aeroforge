@@ -194,6 +194,7 @@ def _check_stage(stage: Stage, position: int) -> list[Diagnostic]:
         )
 
     engine = stage.engine
+    # 唯一权威（QA-1，v0.6.2）：发动机标称比冲是权威，级层只在覆写时才存值。
     if stage.isp_source == "default":
         for label, stage_value, engine_value, path in (
             ("真空比冲", stage.isp_vacuum_s, engine.isp_vacuum_s, f"{prefix}.isp_vacuum_s"),
@@ -204,14 +205,44 @@ def _check_stage(stage: Stage, position: int) -> list[Diagnostic]:
                 f"{prefix}.isp_sea_level_s",
             ),
         ):
+            if stage_value is None:
+                continue
             if abs(stage_value - engine_value) > _ISP_CONSISTENCY_TOL * engine_value:
+                # 判 **hard** 而非过去的警告：DAG 的比冲输入取的就是级层值，
+                # "标为 default 却填了不同的数"意味着两份数字矛盾而计算默默取了
+                # 用户那份——警告挡不住这一点（"没报错 ≠ 正确"）。
                 items.append(
-                    _warn(
-                        "ENGINEER_ISP_SOURCE_MISMATCH",
+                    _hard(
+                        "HARD_ISP_DEFAULT_MISMATCH",
                         path,
                         f"第 {stage.index} 级{label} {stage_value} s 与发动机标称值 "
                         f"{engine_value} s 不一致，但来源标为 default",
-                        "若确实要覆写发动机标称值，请把 isp_source 改为 custom",
+                        "删除该字段以取发动机标称值，或把 isp_source 改为 custom 以显式覆写",
+                    )
+                )
+            else:
+                # 与发动机一致的多余副本：同样的两份真相，只是暂时相同——迟早漂移
+                items.append(
+                    _warn(
+                        "ENGINEER_ISP_DEFAULT_REDUNDANT",
+                        path,
+                        f"第 {stage.index} 级{label} 与发动机标称值相同，"
+                        "但来源标为 default 时无需填写",
+                        "删除该字段（省略 = 取发动机标称值，唯一权威）",
+                    )
+                )
+    elif stage.isp_source == "custom":
+        for label, stage_value, path in (
+            ("真空比冲", stage.isp_vacuum_s, f"{prefix}.isp_vacuum_s"),
+            ("海平面比冲", stage.isp_sea_level_s, f"{prefix}.isp_sea_level_s"),
+        ):
+            if stage_value is None:
+                items.append(
+                    _hard(
+                        "HARD_ISP_CUSTOM_REQUIRES_VALUES",
+                        path,
+                        f"第 {stage.index} 级比冲来源标为 custom，但未提供{label}",
+                        "填写该级实际使用的比冲，或改 isp_source 为 default（省略即取标称值）",
                     )
                 )
 

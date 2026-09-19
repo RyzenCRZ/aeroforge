@@ -56,8 +56,6 @@ SOURCED_FIELDS: dict[str, str] = {
     "stages[0].engine.expansion_ratio": "规格 §3.2：黄金锚点工况 ε = 40",
     "stages[0].engine.isp_vacuum_s": "规格 §3.2：LOX/RP-1 黄金锚点真空比冲 356.6 s",
     "stages[0].engine.isp_sea_level_s": "规格 §3.2：LOX/RP-1 黄金锚点海平面比冲 339.1 s",
-    "stages[0].isp_vacuum_s": "同上（isp_source = default 时须与发动机标称值一致，§6.3）",
-    "stages[0].isp_sea_level_s": "同上（isp_source = default 时须与发动机标称值一致，§6.3）",
     "mission.orbit_type": "规格 §13.2：基准火箭的目标轨道列（LEO）",
 }
 
@@ -104,8 +102,7 @@ def skeleton_vehicle() -> Vehicle:
         engine_height_m=2.0,
         # 级间段描述的是"该级与其**上级**之间的分离段"，最上级只能是 none（§5.9 共性 2）
         interstage_type="none",
-        isp_vacuum_s=isp_vacuum_s,
-        isp_sea_level_s=isp_sea_level_s,
+        # 唯一权威（QA-1，v0.6.2）：default 语义下级层省略 isp_*，取发动机标称值
         isp_source="default",
         geometry=Geometry(oxidizer_tank=tank, fuel_tank=tank.model_copy()),
     )

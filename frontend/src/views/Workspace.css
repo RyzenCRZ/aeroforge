@@ -1,0 +1,54 @@
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.26fr) minmax(320px, 1fr) minmax(280px, 0.34fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 12px 16px;
+}
+
+/* 三栏都要能独立滚动而不撑破视口（min-height: 0 让 grid item 允许收缩） */
+.workspace__pane {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  padding: 12px;
+  overflow-y: auto;
+}
+
+.workspace__pane--center {
+  padding: 0;
+  overflow: hidden;
+}
+
+.workspace__controls {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background-color: var(--color-bg-surface);
+  backdrop-filter: blur(12px);
+}
+
+.workspace__control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.workspace__control input[type='range'] {
+  width: 120px;
+  accent-color: var(--color-accent);
+}
+
+.workspace__control input[type='checkbox'] {
+  accent-color: var(--color-accent);
+}

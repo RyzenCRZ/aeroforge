@@ -1,0 +1,28 @@
+.scale-overlay {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background-color: var(--color-bg-surface);
+  backdrop-filter: blur(12px);
+  pointer-events: none;
+  max-width: calc(100% - 24px);
+}
+
+.scale-overlay__channel {
+  color: var(--color-accent);
+}
+
+.scale-overlay__size {
+  color: var(--color-data-highlight);
+}
+
+.scale-overlay__notice {
+  color: var(--color-status-warn);
+  font-size: 12px;
+}

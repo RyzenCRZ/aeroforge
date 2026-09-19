@@ -1,0 +1,72 @@
+/* ============================================================================
+ * AeroForge 设计 token（规格 §11.2 / ADR-013）
+ *
+ * 分两层，职责严格分离：
+ *   第 1 层 语义层 —— 登记"组件唯一允许引用的名字"。组件代码中出现 # 字面量由
+ *                    stylelint 阻断（NFR-05），因此本文件是全工程唯一的色值来源。
+ *   第 2 层 主题层 —— 只负责给语义 token 赋值，不新增任何名字。
+ *
+ * 主题经根节点 class 切换（index.html 默认挂 theme-default-dark），
+ * 切换主题不修改任何组件代码。
+ * ==========================================================================*/
+
+/* ---------------------------------------------------------------------------
+ * 第 1 层 · 语义层：跨主题恒定部分
+ * 状态色与推进剂编码色承载语义（危险等级、推进剂种类），不随视觉偏好变化。
+ * ------------------------------------------------------------------------- */
+:root {
+  color-scheme: dark;
+
+  /* 状态（语义固定，跨主题不变） */
+  --color-status-ok: #3fb950;
+  --color-status-warn: #d29922;
+  --color-status-error: #f85149;
+
+  /* 推进剂数据编码色（2D 剖面图用，见 §11.10；跨主题不变）
+   * 色相依据补充需求手册：液态甲烷 = 绿色、液氧 = 蓝色、煤油 = 黄色。
+   * ⚠ 手册只给色相未给色值，下方 hex 为暂定值，待 §11.2 补齐后替换。 */
+  --color-prop-lox: #3b8fff;
+  --color-prop-ch4: #3fb950;
+  --color-prop-kero: #e3b341;
+  --color-prop-lh2: #a371f7;
+
+  /* 排版（规格 §11.2） */
+  --font-ui: Inter, 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Mono', Consolas, monospace;
+}
+
+/* ---------------------------------------------------------------------------
+ * 第 2 层 · 主题层：仅赋值
+ * ------------------------------------------------------------------------- */
+
+/* default-dark（默认主题，§1.7 OI-05）
+ * 背景不用纯黑以降低 OLED 刺眼感；正文不用纯白以降低长时间阅读疲劳；
+ * 边框仅 8% 不透明度以保持极简视觉分隔。 */
+.theme-default-dark {
+  /* 表面 */
+  --color-bg-app: #0f0f1a;
+  --color-bg-surface: rgba(255, 255, 255, 0.04);
+  --color-border: rgba(255, 255, 255, 0.08);
+  /* 文本 */
+  --color-text-primary: rgba(255, 255, 255, 0.9);
+  --color-text-secondary: rgba(255, 255, 255, 0.45);
+  /* 强调 */
+  --color-accent: #00d4ff;
+  --color-accent-alt: #7c5dfa;
+  --color-data-highlight: #00d4ff;
+}
+
+/* vscode-dark（备选主题，源自补充需求手册的配色） */
+.theme-vscode-dark {
+  /* 表面 */
+  --color-bg-app: #1e1e1e;
+  --color-bg-surface: #252526;
+  --color-border: #3c3c3c;
+  /* 文本 */
+  --color-text-primary: #d4d4d4;
+  --color-text-secondary: #9d9d9d;
+  /* 强调 */
+  --color-accent: #007acc;
+  --color-accent-alt: #4ec9b0;
+  --color-data-highlight: #4ec9b0;
+}

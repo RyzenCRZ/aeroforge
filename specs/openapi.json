@@ -1,0 +1,1052 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AeroForge",
+    "description": "航天飞行器参数化建模与性能评估平台",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/geometry/contour": {
+      "post": {
+        "tags": [
+          "geometry"
+        ],
+        "summary": "Save Contour",
+        "description": "保存母线：归一化为 canonical JSON 落盘 ``data/contours/<id>.json``。\n\n落盘内容就是 canonical JSON 本体（不含包装元数据），因此\n\"读取 → 再规范化\" 必须与原文件**逐字节相同**——这正是往返一致的判据。",
+        "operationId": "save_contour_api_geometry_contour_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContourSaveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContourResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/geometry/contour/{contour_id}": {
+      "get": {
+        "tags": [
+          "geometry"
+        ],
+        "summary": "Load Contour",
+        "description": "载入母线。文件不存在时返回 404（由 :class:`ArtifactNotFoundError` 映射）。",
+        "operationId": "load_contour_api_geometry_contour__contour_id__get",
+        "parameters": [
+          {
+            "name": "contour_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+              "description": "母线标识",
+              "title": "Contour Id"
+            },
+            "description": "母线标识"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContourResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/geometry/validate": {
+      "post": {
+        "tags": [
+          "geometry"
+        ],
+        "summary": "Validate Profile",
+        "description": "母线层校验（纯 Python，无内核）：几何自洽 + G1 + 尖点 + 设计意图断言。\n\n响应**同时返回分段采样点**（``sample`` / ``outline``），供前端 2D 剖面与示意通道消费。\n这是 ADR-011 的落实方式：端点数值全部来自后端，前端不做任何几何计算。",
+        "operationId": "validate_profile_api_geometry_validate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeridianProfile"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationReport"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/geometry/build": {
+      "post": {
+        "tags": [
+          "geometry"
+        ],
+        "summary": "Build Geometry",
+        "description": "构建回转几何：**命中即同步返回**，未命中建异步作业（规格 §9.3）。",
+        "operationId": "build_geometry_api_geometry_build_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeridianProfile"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BuildResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Get Job",
+        "description": "查询作业快照。作业不存在时返回 404。",
+        "operationId": "get_job_api_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRecord"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/artifacts/{key}/{file}": {
+      "get": {
+        "tags": [
+          "artifacts"
+        ],
+        "summary": "Get Artifact",
+        "description": "返回产物文件；不在白名单或文件缺失时 404。",
+        "operationId": "get_artifact_api_artifacts__key___file__get",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "description": "内容寻址缓存键",
+              "title": "Key"
+            },
+            "description": "内容寻址缓存键"
+          },
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "File"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/provenance/{key}": {
+      "get": {
+        "tags": [
+          "artifacts"
+        ],
+        "summary": "Get Provenance",
+        "description": "返回产物清单（provenance.json 内容），供溯源与排障（§9.2 / R-14）。",
+        "operationId": "get_provenance_api_provenance__key__get",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "description": "内容寻址缓存键",
+              "title": "Key"
+            },
+            "description": "内容寻址缓存键"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Provenance Api Provenance  Key  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "summary": "Health",
+        "description": "存活探针。\n\nM0 验收项（规格 §16）：必须返回版本号，供前端与 CI 核对后端已就绪。",
+        "operationId": "health_api_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ArcSegment": {
+        "properties": {
+          "length": {
+            "type": "number",
+            "title": "Length",
+            "description": "轴向跨度（m），正 = 沿 +Z 推进"
+          },
+          "end_radius": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "End Radius",
+            "description": "本段结束处的半径（m）"
+          },
+          "type": {
+            "type": "string",
+            "const": "arc",
+            "title": "Type",
+            "default": "arc"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "length",
+          "end_radius"
+        ],
+        "title": "ArcSegment",
+        "description": "球冠段（圆弧）：半径端半径 R 与轴向跨度 H 唯一确定球半径 ρ=(R²+H²)/2H。"
+      },
+      "BuildResponse": {
+        "properties": {
+          "cache_hit": {
+            "type": "boolean",
+            "title": "Cache Hit",
+            "description": "True 表示产物已存在，metrics 直接可用，未创建作业"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key",
+            "description": "内容寻址缓存键（sha256 十六进制）"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id",
+            "description": "未命中时返回；用 /ws/jobs/{job_id} 订阅进度"
+          },
+          "metrics": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metrics",
+            "description": "命中时的产物指标"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cache_hit",
+          "key"
+        ],
+        "title": "BuildResponse",
+        "description": "``POST /api/geometry/build`` 的响应体（§9.3 缓存优先）。"
+      },
+      "CheckResult": {
+        "properties": {
+          "check": {
+            "type": "string",
+            "title": "Check",
+            "description": "检查项名称"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "warn",
+              "fail",
+              "skip"
+            ],
+            "title": "Severity",
+            "description": "裁定：pass / warn / fail / skip"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail",
+            "description": "人类可读的说明"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value",
+            "description": "实测值"
+          },
+          "expected": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected",
+            "description": "期望值"
+          },
+          "relative_error": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relative Error",
+            "description": "相对误差"
+          }
+        },
+        "type": "object",
+        "required": [
+          "check",
+          "severity",
+          "detail"
+        ],
+        "title": "CheckResult",
+        "description": "单项检查结果。"
+      },
+      "ContourResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "canonical": {
+            "type": "string",
+            "title": "Canonical",
+            "description": "canonical JSON：键序固定、浮点定量、无多余空白"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/MeridianProfile"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "canonical",
+          "profile"
+        ],
+        "title": "ContourResponse",
+        "description": "母线响应体。``canonical`` 即落盘内容，往返一致的判据（规格 §16.3）。"
+      },
+      "ContourSaveRequest": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id",
+            "description": "母线标识；省略时按 name 派生或随机生成"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/MeridianProfile",
+            "description": "母线剖面（段链，单位米）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "profile"
+        ],
+        "title": "ContourSaveRequest",
+        "description": "保存母线的请求体。"
+      },
+      "EllipseSegment": {
+        "properties": {
+          "length": {
+            "type": "number",
+            "title": "Length",
+            "description": "轴向跨度（m），正 = 沿 +Z 推进"
+          },
+          "end_radius": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "End Radius",
+            "description": "本段结束处的半径（m）"
+          },
+          "type": {
+            "type": "string",
+            "const": "ellipse",
+            "title": "Type",
+            "default": "ellipse"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "length",
+          "end_radius"
+        ],
+        "title": "EllipseSegment",
+        "description": "椭圆弧段：半轴 = (半径端半径 R, 轴向跨度 H)，椭圆心在轴线上。"
+      },
+      "ErrorBody": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code",
+            "description": "机器可读的错误码，如 GEOMETRY_G1_DISCONTINUITY"
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage",
+            "description": "发生阶段：params / meridian / solid / mesh / step / …"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "面向用户的中文说明"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details",
+            "description": "结构化上下文"
+          },
+          "suggestion": {
+            "type": "string",
+            "title": "Suggestion",
+            "description": "可操作的修复建议（规格 §10.3 要求必填）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "stage",
+          "message",
+          "suggestion"
+        ],
+        "title": "ErrorBody",
+        "description": "§10.3 规定的错误响应体。"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "name",
+          "version"
+        ],
+        "title": "HealthResponse",
+        "description": "``GET /api/health`` 的响应体。\n\n作为 OpenAPI schema 的来源，前端 TS 类型由此生成（规格 §18.2：禁止手写重复类型）。"
+      },
+      "JobRecord": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/JobStage",
+            "default": "queued"
+          },
+          "progress": {
+            "type": "number",
+            "title": "Progress",
+            "default": 0.0
+          },
+          "result_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Key"
+          },
+          "metrics": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metrics"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "timings_ms": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Timings Ms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "created_at"
+        ],
+        "title": "JobRecord",
+        "description": "作业状态快照（跨线程传递的**纯数据**，不含任何几何对象）。"
+      },
+      "JobStage": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "meridian",
+          "solid",
+          "mesh",
+          "step",
+          "done"
+        ],
+        "title": "JobStage",
+        "description": "§9.3 的进度阶段（M1 子集：几何链 ``meridian → solid → mesh → step → done``）。"
+      },
+      "JobStatus": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "running",
+          "succeeded",
+          "failed",
+          "cancelled"
+        ],
+        "title": "JobStatus",
+        "description": "§9.3 的作业生命周期状态。"
+      },
+      "JointCheck": {
+        "properties": {
+          "index": {
+            "type": "integer",
+            "title": "Index",
+            "description": "接头序号：段 index 与 index+1 之间"
+          },
+          "z": {
+            "type": "number",
+            "title": "Z"
+          },
+          "radius": {
+            "type": "number",
+            "title": "Radius"
+          },
+          "angle_deg": {
+            "type": "number",
+            "title": "Angle Deg",
+            "description": "两侧切向夹角（度）"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "g1",
+              "pinch"
+            ],
+            "title": "Kind",
+            "description": "g1 = 常规切向；pinch = 轴处反向尖点"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "warn",
+              "fail",
+              "skip"
+            ],
+            "title": "Severity"
+          }
+        },
+        "type": "object",
+        "required": [
+          "index",
+          "z",
+          "radius",
+          "angle_deg",
+          "kind",
+          "severity"
+        ],
+        "title": "JointCheck",
+        "description": "段间接头（G0 由结构保证，此处校 G1）。"
+      },
+      "LineSegment": {
+        "properties": {
+          "length": {
+            "type": "number",
+            "title": "Length",
+            "description": "轴向跨度（m），正 = 沿 +Z 推进"
+          },
+          "end_radius": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "End Radius",
+            "description": "本段结束处的半径（m）"
+          },
+          "type": {
+            "type": "string",
+            "const": "line",
+            "title": "Type",
+            "default": "line"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "length",
+          "end_radius"
+        ],
+        "title": "LineSegment",
+        "description": "直线段：柱段（end_radius == 起点半径）或锥段/锥台。"
+      },
+      "MeridianProfile": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "剖面名称（仅用于展示，不参与几何）",
+            "default": ""
+          },
+          "base_radius": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Base Radius",
+            "description": "z=0 处的半径（m）"
+          },
+          "segments": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/LineSegment"
+                },
+                {
+                  "$ref": "#/components/schemas/ArcSegment"
+                },
+                {
+                  "$ref": "#/components/schemas/EllipseSegment"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "type",
+                "mapping": {
+                  "arc": "#/components/schemas/ArcSegment",
+                  "ellipse": "#/components/schemas/EllipseSegment",
+                  "line": "#/components/schemas/LineSegment"
+                }
+              }
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Segments",
+            "description": "自下而上的段链"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "base_radius",
+          "segments"
+        ],
+        "title": "MeridianProfile",
+        "description": "母线剖面：底部半径 + 自下而上的段链（规格 §5.2）。\n\n剖面在 (r, z) 平面内描述，回转轴为 Z 轴，单位米。\n实体 = 区域 ``{(r, z)}`` 绕 Z 轴回转 360°，其中区域由\n``(0,0) → (base_radius,0) → [段链] → (r_end,z_end) → (0,z_end) → (0,0)`` 围成。"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "ValidationReport": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/CheckResult"
+            },
+            "type": "array",
+            "title": "Checks"
+          },
+          "joints": {
+            "items": {
+              "$ref": "#/components/schemas/JointCheck"
+            },
+            "type": "array",
+            "title": "Joints"
+          },
+          "sample": {
+            "items": {
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array",
+              "maxItems": 2,
+              "minItems": 2
+            },
+            "type": "array",
+            "title": "Sample",
+            "description": "剖面采样点 (r, z)，米"
+          },
+          "outline": {
+            "items": {
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array",
+              "maxItems": 2,
+              "minItems": 2
+            },
+            "type": "array",
+            "title": "Outline",
+            "description": "闭合轮廓 (r, z)，米"
+          },
+          "envelope": {
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Envelope",
+            "description": "解析包络 (2R, 2R, L)，米"
+          },
+          "volume": {
+            "type": "number",
+            "title": "Volume",
+            "description": "解析体积（m³）"
+          },
+          "surface_area": {
+            "type": "number",
+            "title": "Surface Area"
+          },
+          "centroid_z": {
+            "type": "number",
+            "title": "Centroid Z"
+          },
+          "max_radius": {
+            "type": "number",
+            "title": "Max Radius"
+          },
+          "total_length": {
+            "type": "number",
+            "title": "Total Length"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok",
+          "checks",
+          "joints",
+          "sample",
+          "outline",
+          "envelope",
+          "volume",
+          "surface_area",
+          "centroid_z",
+          "max_radius",
+          "total_length"
+        ],
+        "title": "ValidationReport",
+        "description": "母线层校验报告（同步接口返回体）。"
+      }
+    }
+  }
+}

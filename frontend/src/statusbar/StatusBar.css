@@ -1,0 +1,47 @@
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
+}
+
+.status-bar__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.status-bar__dot--ok {
+  background-color: var(--color-status-ok);
+}
+
+.status-bar__dot--warn {
+  background-color: var(--color-status-warn);
+}
+
+.status-bar__dot--error {
+  background-color: var(--color-status-error);
+}
+
+.status-bar__text {
+  font-size: 12px;
+  color: var(--color-text-primary);
+}
+
+.status-bar__error {
+  font-size: 12px;
+  color: var(--color-status-error);
+  max-width: 40%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.status-bar__meta {
+  margin-left: auto;
+}

@@ -1,0 +1,89 @@
+[project]
+name = "aeroforge"
+version = "0.1.0"
+description = "AeroForge — 航天飞行器参数化建模与性能评估平台"
+readme = "AeroForge-Spec.md"
+requires-python = ">=3.12,<3.13"
+
+dependencies = [
+  "build123d>=0.11,<0.12",
+  "cea>=3.3,<4",
+  "numpy>=2.0",
+  "scipy>=1.14",
+  "pandas>=2.2",
+  "pyarrow>=17",
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "pydantic>=2.9",
+  "pydantic-settings>=2.6",
+  "sqlalchemy>=2.0",
+  "websockets>=13",
+  # 桌面交付（ADR-015）：原生窗口承载前端。Windows 侧走 EdgeChromium(WebView2) 后端。
+  "pywebview>=5.3",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio",
+  "pytest-cov",
+  "hypothesis>=6",
+  "ruff>=0.7",
+  "mypy>=1.13",
+  "httpx",
+  "pytest-benchmark",
+  # 桌面打包（ADR-015）：仅构建期工具；许可为 GPL-2.0 WITH bootloader exception，
+  # 该例外明确允许按任意许可分发打包产物，故不传染本项目源码（规格 §3.4 例外一）。
+  "pyinstaller>=6.11",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend/aeroforge"]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "PTH", "RUF"]
+# RUF001/002/003 报告"不明确的全角标点"。本项目文档、注释与面向用户的消息以中文为主
+# （规格 §3.5：文档语言全中文优先），全角标点是正确用法而非缺陷，故豁免。
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.isort]
+# 源码位于 backend/ 下（非标准布局），显式声明第一方包，避免 aeroforge 被误判为第三方而扰乱导入分组。
+known-first-party = ["aeroforge"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["backend/aeroforge"]
+# 使下方 cea 覆盖项的 follow_imports="skip" 对 .pyi 也生效——mypy 默认总是跟随 stub 文件，
+# 而 cea 的问题恰在 stub 内（见下）。
+follow_imports_for_stubs = true
+
+[[tool.mypy.overrides]]
+# cea 随包提供的 `cea/lib/libcea.pyi` 有语法级缺陷（`libcea.pyi:215` 必填参数跟在默认
+# 参数之后），mypy 解析该文件即中断（[syntax] 错误，且 ignore_errors 无法抑制）。
+# 因此不跟随 cea 的 stub：该边界一律按 Any 处理。量纲与调用契约由 ADR-014 的运行时
+# 门禁保证（aeroforge/selfcheck.py 的三重校验），不依赖 stub 的静态表达。
+module = ["cea", "cea.*"]
+follow_imports = "skip"
+
+[[tool.mypy.overrides]]
+# scipy 未提供类型标注（无 py.typed），strict 下会报 import-untyped。
+# 本工程只用到 scipy.integrate.quad 这一纯数值积分函数，接口自 2001 年起稳定，
+# 故按 Any 处理并在调用点以 float() 显式收口，而不引入第三方 stub 包。
+module = ["scipy", "scipy.*"]
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["backend/aeroforge"]

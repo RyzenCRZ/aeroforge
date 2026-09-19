@@ -1,0 +1,118 @@
+.segment-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.segment-panel__tree {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.segment-panel__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: left;
+}
+
+.segment-panel__row--button {
+  cursor: pointer;
+}
+
+.segment-panel__row--button:hover {
+  border-color: var(--color-border);
+}
+
+.segment-panel__row--selected {
+  border-color: var(--color-accent);
+}
+
+.segment-panel__row--root {
+  border-bottom: 1px solid var(--color-border);
+  border-radius: 0;
+  cursor: default;
+}
+
+.segment-panel__name {
+  font-size: 12px;
+}
+
+.segment-panel__summary {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.segment-panel__fields {
+  display: flex;
+  flex-direction: column;
+}
+
+.segment-panel__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.segment-panel__field input,
+.segment-panel__field select {
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.segment-panel__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.segment-panel__button {
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.segment-panel__button:hover:enabled {
+  border-color: var(--color-accent);
+}
+
+.segment-panel__button:disabled {
+  color: var(--color-text-secondary);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.segment-panel__hint {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.segment-panel__hint--warn {
+  color: var(--color-status-warn);
+  font-size: 12px;
+}

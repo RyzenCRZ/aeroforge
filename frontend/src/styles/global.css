@@ -1,0 +1,60 @@
+@import './tokens.css';
+
+/* 基础重置 */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background-color: var(--color-bg-app);
+  color: var(--color-text-primary);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 面板表面：暗色基底 + 玻璃拟态（规格 §11.2） */
+.surface {
+  background-color: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  backdrop-filter: blur(12px);
+}
+
+/* 标签：11px / 500 / 全大写 + 字距 0.05em（规格 §11.2） */
+.label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+}
+
+/* 物理量数值：必须等宽并右对齐，便于逐位比对（规格 §11.2 排版规则） */
+.num {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* 面板：三栏内的分区容器（左栏组件树/参数、右栏剖面/校验/构建共用） */
+.panel {
+  padding: 10px 12px;
+}
+
+.panel__title {
+  margin: 0;
+}

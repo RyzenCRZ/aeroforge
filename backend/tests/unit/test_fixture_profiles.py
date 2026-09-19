@@ -18,7 +18,9 @@ M1 期间测试夹具曾用 ``base_radius=1.0`` 配 ``arc(1.0 → 0.0)``——�
 
 from __future__ import annotations
 
+import importlib
 import inspect
+import pkgutil
 from types import ModuleType
 
 import pytest
@@ -26,14 +28,22 @@ import pytest
 from aeroforge.geometry.meridian import MeridianProfile
 from aeroforge.geometry.validate import validate_meridian
 
-from . import test_api_geometry, test_cache_store, test_geometry_closed_loop, test_meridian
 
-SCANNED_MODULES: tuple[ModuleType, ...] = (
-    test_api_geometry,
-    test_cache_store,
-    test_geometry_closed_loop,
-    test_meridian,
-)
+def _test_modules() -> tuple[ModuleType, ...]:
+    """自动发现本包内全部 ``test_*`` 模块。
+
+    曾用一张**手写的模块清单**——那等于给"新模块里的夹具"留了后门：不登记就永不检查，
+    与"未归类的新夹具即失败"自相矛盾。改为按包扫描后，新增测试文件自动纳入。
+    """
+    package_name = __package__ or "tests.unit"
+    package = importlib.import_module(package_name)
+    discovered: list[ModuleType] = []
+    for info in pkgutil.iter_modules(package.__path__, prefix=f"{package_name}."):
+        if not info.name.rsplit(".", 1)[-1].startswith("test_"):
+            continue
+        discovered.append(importlib.import_module(info.name))
+    return tuple(discovered)
+
 
 #: 必须通过校验的夹具
 LEGAL = frozenset(
@@ -45,6 +55,8 @@ LEGAL = frozenset(
         "_common_bulkhead",
         "_profile",
         "_g1_clean",
+        "_axial_cylinder",
+        "_axial_capsule",
     }
 )
 
@@ -58,7 +70,7 @@ ILLEGAL = frozenset({"_g1_violation"})
 def _factories() -> dict[str, MeridianProfile]:
     """发现测试模块顶层的剖面工厂，并即时调用取一个实例。"""
     found: dict[str, MeridianProfile] = {}
-    for module in SCANNED_MODULES:
+    for module in _test_modules():
         for name, member in inspect.getmembers(module, inspect.isfunction):
             if not name.startswith("_"):
                 continue

@@ -4,8 +4,10 @@
 
 1. **解析解 vs 教科书闭式解** —— 若解析模块本身写错，内核也就无从对照。
 2. **内核 vs 解析解**（门禁 < 0.1%）—— 这是 M1 的首要验收项。
-3. **GLB accessor 包围盒 vs 解析包络**（门禁 ≤ 1%）—— 权威通道的**唯一**判据：
+3. **GLB 世界包围盒 vs 解析包络**（门禁 ≤ 1%）—— 权威通道的**唯一**判据：
    STEP 内部单位正确不代表 GLB 导出单位正确，漏传 ``unit=Unit.M`` 只有在这一步才暴露。
+   ⚠ 比对的是 GLB 的**世界**坐标（含场景图节点变换，即 glTF 的 Y-up），不是访问器的局部
+   min/max——两者轴向不同（见 ``glb_bounding_box`` 与 ``test_dual_channel_orientation``）。
 
 ⚠ 第 2 项之所以是真对照，是因为两侧算法**完全独立**：内核走 OCCT 精确弧，解析走闭式积分解。
 若任一侧改用采样折线逼近，误差会趋零但检验失效（自证），见 meridian.py 的模块说明。
@@ -131,23 +133,31 @@ def test_kernel_matches_analytic(name: str, profile: MeridianProfile, expected: 
 def test_glb_envelope_matches_analytic(
     tmp_path: Path, name: str, profile: MeridianProfile, expected: float
 ) -> None:
-    """双通道一致性的权威侧：GLB 顶点包围盒 vs 解析包络 ≤ 1%。
+    """双通道一致性的权威侧：GLB **世界**包围盒 vs 解析包络 ≤ 1%。
 
     用 LOD2（细网格）：圆周长被离散化为内接多边形，半径方向恒**略小**，
     取细网格才能让该项门禁的余量反映真实精度而非离散化步长。
+
+    ⚠ **不可逐轴 zip**：解析包络是内核的 Z-up `(2R, 2R, L)`，而 GLB 的世界坐标已是 glTF 的
+    Y-up `(2R, L, 2R)`（导出器给根节点写了 `Rx(-90°)`）。按轴序硬对齐会在"轴向落在哪根轴"
+    上失真——M2 首项查出的缺陷正是这一类（详见 ``test_dual_channel_orientation``）。
     """
     part = build_solid(profile)
     target = tmp_path / "model.glb"
     export_glb(part, target, deflection=LOD2_DEFLECTION, angular=LOD2_ANGULAR)
 
     (min_x, min_y, min_z), (max_x, max_y, max_z) = glb_bounding_box(target)
-    size = (max_x - min_x, max_y - min_y, max_z - min_z)
-    envelope = analyze(resolve(profile)).envelope
+    envelope = analyze(resolve(profile)).envelope  # 内核口径：(2R, 2R, L)
+    expected_diameter, expected_length = envelope[0], envelope[2]
 
-    for axis, (actual, wanted) in enumerate(zip(size, envelope, strict=True)):
+    for label, actual, wanted in (
+        ("世界 X（径向）", max_x - min_x, expected_diameter),
+        ("世界 Y（轴向）", max_y - min_y, expected_length),
+        ("世界 Z（径向）", max_z - min_z, expected_diameter),
+    ):
         error = relative_error(actual, wanted)
         assert error < ENVELOPE_GATE, (
-            f"{name} 轴 {axis}：GLB {actual} vs 解析 {wanted}，误差 {error:.3e}"
+            f"{name} {label}：GLB {actual} vs 解析 {wanted}，误差 {error:.3e}"
         )
 
 

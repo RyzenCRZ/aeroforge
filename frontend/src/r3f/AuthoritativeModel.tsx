@@ -4,6 +4,7 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 
 import { artifactUrl } from '../api/geometry'
+import { AUTHORITATIVE_ROTATION } from './orientation'
 
 /** 权威通道固定消费 LOD2（§11.3：交互中降级用 LOD2，M1 尚未接入距离驱动的 LOD 切换）。 */
 const AUTHORITATIVE_FILE = 'model_lod2.glb'
@@ -32,9 +33,10 @@ function AuthoritativeScene({ url }: { url: string }) {
   }, [gltf, url])
 
   return (
-    // 后端 Z 轴是回转轴，three 世界默认 Y 轴向上：绕 X 轴 -90° 使模型立起来，
-    // 与 LatheGeometry（轴即 Y 轴）的示意通道保持同一朝向（ADR-012 双通道可切换）。
-    <group rotation={[-Math.PI / 2, 0, 0]}>
+    // 朝向契约见 `orientation.ts`：GLB 场景图自带 Rx(-90°)，渲染器看到的已是 Y-up，
+    // 与示意通道（Lathe 的轴即 Y）同向，故此处**必须保持恒等**（ADR-012 双通道可切换）。
+    // 改动须同步 `orientation.test.ts` 与后端 `test_dual_channel_orientation.py`。
+    <group rotation={AUTHORITATIVE_ROTATION}>
       <primitive object={gltf.scene} />
     </group>
   )

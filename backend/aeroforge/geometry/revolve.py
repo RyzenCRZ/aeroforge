@@ -207,12 +207,90 @@ def export_glb(part: bd.Part, path: Path, *, deflection: float, angular: float) 
         raise RuntimeError(msg)
 
 
-def glb_bounding_box(path: Path) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
-    """自 GLB 文件读回 POSITION 访问器的 min/max，合并为包围盒。
+def _node_matrix(node: dict[str, Any]) -> list[float]:
+    """节点的局部变换矩阵，**列主序 16 元素**（glTF 的 `matrix` 或 TRS 二选一）。
 
-    这是双通道一致性检验中**权威通道**的一侧（§13.6 / §16.3）：
-    比对的是**实际导出的网格**，而非内存中的实体——导出的单位错误（如漏传 ``unit=Unit.M``）
+    glTF 约定 ``M = T · R · S``：先缩放、再旋转、最后平移。
+    """
+    matrix = node.get("matrix")
+    if matrix is not None:
+        return [float(value) for value in matrix]
+
+    translation = [float(value) for value in node.get("translation", (0.0, 0.0, 0.0))]
+    quaternion = [float(value) for value in node.get("rotation", (0.0, 0.0, 0.0, 1.0))]
+    scale = [float(value) for value in node.get("scale", (1.0, 1.0, 1.0))]
+
+    x, y, z, w = quaternion
+    xx, yy, zz = x * x, y * y, z * z
+    xy, xz, yz = x * y, x * z, y * z
+    wx, wy, wz = w * x, w * y, w * z
+    # 行主序的旋转矩阵（第 row 行第 col 列 → row_major[row * 3 + col]）
+    row_major = [
+        1.0 - 2.0 * (yy + zz),
+        2.0 * (xy - wz),
+        2.0 * (xz + wy),
+        2.0 * (xy + wz),
+        1.0 - 2.0 * (xx + zz),
+        2.0 * (yz - wx),
+        2.0 * (xz - wy),
+        2.0 * (yz + wx),
+        1.0 - 2.0 * (xx + yy),
+    ]
+    # `R · S`：缩放是对角阵，等价于把 R 的第 j 列整体乘 s_j；再按列主序摊平
+    return [
+        row_major[0] * scale[0],
+        row_major[3] * scale[0],
+        row_major[6] * scale[0],
+        0.0,
+        row_major[1] * scale[1],
+        row_major[4] * scale[1],
+        row_major[7] * scale[1],
+        0.0,
+        row_major[2] * scale[2],
+        row_major[5] * scale[2],
+        row_major[8] * scale[2],
+        0.0,
+        translation[0],
+        translation[1],
+        translation[2],
+        1.0,
+    ]
+
+
+def _matrix_multiply(parent: list[float], local: list[float]) -> list[float]:
+    """列主序 4×4 相乘：``parent · local``。"""
+    result = [0.0] * 16
+    for column in range(4):
+        for row in range(4):
+            result[column * 4 + row] = sum(
+                parent[k * 4 + row] * local[column * 4 + k] for k in range(4)
+            )
+    return result
+
+
+def _transform_point(
+    matrix: list[float], point: tuple[float, float, float]
+) -> tuple[float, float, float]:
+    """列主序矩阵左乘点（齐次坐标 w = 1），返回世界坐标。"""
+    coordinates = [
+        sum(matrix[column * 4 + row] * point[column] for column in range(3)) + matrix[12 + row]
+        for row in range(3)
+    ]
+    return (coordinates[0], coordinates[1], coordinates[2])
+
+
+def glb_bounding_box(path: Path) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    """GLB 在**世界坐标**下的包围盒（已施加场景图的节点变换）。
+
+    这是双通道一致性检验中**权威通道**的一侧（§13.6 / §16.3）：比对的是**渲染器实际
+    看到的空间**，而非访问器里的原始数据——导出的单位错误（如漏传 ``unit=Unit.M``）
     只有在此处才暴露。
+
+    ⚠ **必须走节点变换**：OCCT 导出器按 glTF 规范把 Z-up 转成 Y-up，方式是给根节点写一个
+    ``Rx(-90°)`` 的四元数旋转，而**访问器里的 min/max 仍是 Z-up 的局部坐标**（实测本工程
+    柱 r=1 L=3 的访问器为 ``x/y ∈ ±1、z ∈ [0, 3]``，节点 rotation 为 ``[-0.7071, 0, 0, 0.7071]``）。
+    只读访问器会得到"轴向在 z"的错误结论，进而让前端多做一次 -90°，把模型转倒——
+    这正是 M2 首项目视核对查出的缺陷，故此处按场景图求世界坐标。
     """
     raw = path.read_bytes()
     if len(raw) < 12 or raw[:4] != b"glTF":
@@ -234,30 +312,68 @@ def glb_bounding_box(path: Path) -> tuple[tuple[float, float, float], tuple[floa
         msg = f"GLB 缺少 JSON 块：{path}"
         raise RuntimeError(msg)
 
-    accessors = gltf.get("accessors", [])
-    indices: set[int] = set()
-    for mesh in gltf.get("meshes", []):
-        for primitive in mesh.get("primitives", []):
-            position = primitive.get("attributes", {}).get("POSITION")
-            if position is not None:
-                indices.add(int(position))
-
-    if not indices:
-        msg = f"GLB 内无 POSITION 访问器：{path}"
+    nodes: list[dict[str, Any]] = gltf.get("nodes", [])
+    if not nodes:
+        msg = f"GLB 内无节点，无法确定世界坐标：{path}"
         raise RuntimeError(msg)
 
+    scenes: list[dict[str, Any]] = gltf.get("scenes", [])
+    scene_index = gltf.get("scene")
+    if isinstance(scene_index, int) and 0 <= scene_index < len(scenes):
+        roots = [int(index) for index in scenes[scene_index].get("nodes", [])]
+    elif scenes:
+        roots = [int(index) for index in scenes[0].get("nodes", [])]
+    else:
+        roots = list(range(len(nodes)))
+
+    accessors = gltf.get("accessors", [])
+    identity = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
     lows = [math.inf, math.inf, math.inf]
     highs = [-math.inf, -math.inf, -math.inf]
-    for index in sorted(indices):
-        accessor = accessors[index]
-        low = accessor.get("min")
-        high = accessor.get("max")
-        if low is None or high is None:
-            msg = f"GLB 的 POSITION 访问器缺少 min/max，无法核对包络：{path}"
-            raise RuntimeError(msg)
-        for axis in range(3):
-            lows[axis] = min(lows[axis], float(low[axis]))
-            highs[axis] = max(highs[axis], float(high[axis]))
+    visited: set[tuple[int, int]] = set()
+    positioned = False
+
+    def visit(node_index: int, parent: list[float]) -> None:
+        nonlocal positioned
+        if not 0 <= node_index < len(nodes):
+            return
+        node = nodes[node_index]
+        world_matrix = _matrix_multiply(parent, _node_matrix(node))
+
+        mesh_index = node.get("mesh")
+        if mesh_index is not None:
+            for primitive in gltf.get("meshes", [])[int(mesh_index)].get("primitives", []):
+                accessor_index = primitive.get("attributes", {}).get("POSITION")
+                if accessor_index is None:
+                    continue
+                if (node_index, int(accessor_index)) in visited:
+                    continue
+                visited.add((node_index, int(accessor_index)))
+                accessor = accessors[int(accessor_index)]
+                low = accessor.get("min")
+                high = accessor.get("max")
+                if low is None or high is None:
+                    msg = f"GLB 的 POSITION 访问器缺少 min/max，无法核对包络：{path}"
+                    raise RuntimeError(msg)
+                # 局部包围盒的 8 个角点各自变换后再取包围盒（旋转后不能只取 min/max 两端）
+                for corner_x in (float(low[0]), float(high[0])):
+                    for corner_y in (float(low[1]), float(high[1])):
+                        for corner_z in (float(low[2]), float(high[2])):
+                            point = _transform_point(world_matrix, (corner_x, corner_y, corner_z))
+                            for axis in range(3):
+                                lows[axis] = min(lows[axis], point[axis])
+                                highs[axis] = max(highs[axis], point[axis])
+                positioned = True
+
+        for child in node.get("children", []):
+            visit(int(child), world_matrix)
+
+    for root in roots:
+        visit(root, identity)
+
+    if not positioned:
+        msg = f"GLB 内无 POSITION 访问器：{path}"
+        raise RuntimeError(msg)
 
     return (lows[0], lows[1], lows[2]), (highs[0], highs[1], highs[2])
 

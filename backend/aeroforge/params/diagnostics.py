@@ -83,8 +83,8 @@ class DiagnosticThresholds(BaseSettings):
         default=1.5,
         gt=0.0,
         description=(
-            f"起飞推重比下界（固体助推）。{SOURCE_CONVENTION}；"
-            "⚠ M2 的 Schema 尚无固体助推标识，本阈值暂不参与判定（见规则 uncovered）"
+            f"起飞推重比下界（固体助推档）。{SOURCE_CONVENTION}；"
+            "档位取**第一级**发动机的 propellant_phase（§1.7.3 OI-30），solid 才走本档"
         ),
     )
     structure_mass_ratio_min: float = Field(
@@ -232,14 +232,41 @@ def _rule_head(code: str, title: str, level: Level, threshold: str, source: str)
     return {"code": code, "title": title, "level": level, "threshold": threshold, "source": source}
 
 
-def _twr_rule(result: dag.PropagationResult, limits: DiagnosticThresholds) -> RuleOutcome:
-    """起飞推重比 ≥ 下界（硬）。值的来源是 DAG 的 ``vehicle.twr_liftoff``。"""
+def _twr_tier(phase: str, limits: DiagnosticThresholds) -> tuple[float, str]:
+    """按**第一级**的相态选 §6.5 的推重比档位（§1.7.3 OI-30）。
+
+    规格表只给了两档，故只有 ``solid`` 走 1.5 档；``liquid`` 与 ``hybrid`` 都走 1.2 档
+    ——混合发动机的起飞推重比需求与液体同级，规格未为它另立一档。返回
+    ``(下界, 档位名)``，档位名会被写进账目，使"用了哪一档"始终可见。
+    """
+    if phase == "solid":
+        return limits.twr_solid_min, "固体助推"
+    return limits.twr_liquid_min, "液体"
+
+
+def _twr_rule(
+    result: dag.PropagationResult, limits: DiagnosticThresholds, *, phase: str
+) -> RuleOutcome:
+    """起飞推重比 ≥ 下界（硬）。值的来源是 DAG 的 ``vehicle.twr_liftoff``。
+
+    档位取第一级的 ``engine.propellant_phase``（§1.7.3 OI-30）；实际使用的档位与依据
+    一律写进 ``threshold``，并在 ``uncovered`` 里记明"只看第一级"这一残留分支——
+    混合构型（如液体芯级 + 固体助推分属不同级）的加权判据§6.5 表未定义，
+    不得假装它已被覆盖。
+    """
+    lower, tier = _twr_tier(phase, limits)
     outcome = _rule_head(
-        CODE_TWR, "起飞推重比", "hard", f"T/W ≥ {limits.twr_liquid_min}（液体）", SOURCE_CONVENTION
+        CODE_TWR,
+        "起飞推重比",
+        "hard",
+        f"T/W ≥ {lower}（{tier}档；依据第一级 propellant_phase = {phase!r}）",
+        SOURCE_CONVENTION,
     )
-    # ⚠ Schema 里没有"固体助推"标识，故 §6.5 表的第二档阈值**判不了**——登记为留痕，
-    # 而不是把 1.2 悄悄套到所有构型上还说"全部规则已覆盖"。
-    partial = ("固体助推阈值（§6.5 表：1.5）未参与判定：Schema 尚无固体助推标识",)
+    note = (
+        f"档位只看**第一级**相态（{phase!r} → {tier}档 {lower}）；"
+        "其余级的相态不参与本规则——§6.5 表只按「是否固体助推」给两档，"
+        "未定义混合构型（如液体芯级 + 固体助推分属不同级）的加权判据",
+    )
 
     value = result.values.get("vehicle.twr_liftoff")
     if value is None:
@@ -249,21 +276,22 @@ def _twr_rule(result: dag.PropagationResult, limits: DiagnosticThresholds) -> Ru
                 "起飞推重比需要起飞质量 GLOW，而 GLOW 需要各级推进剂质量——"
                 "该量是 M4 定尺求解的输出（§6.2），当前未提供"
             ),
+            uncovered=note,
         )
-    if value < limits.twr_liquid_min:
+    if value < lower:
         return RuleOutcome(
             **outcome,
             diagnostics=(
                 _hard(
                     CODE_TWR,
                     "vehicle",
-                    f"起飞推重比 {value:.3f} 低于下界 {limits.twr_liquid_min}"
+                    f"起飞推重比 {value:.3f} 低于下界 {lower}（{tier}档）"
                     "（推力不足以在重力损失吃掉运力前离塔）",
                 ),
             ),
-            uncovered=partial,
+            uncovered=note,
         )
-    return RuleOutcome(**outcome, uncovered=partial)
+    return RuleOutcome(**outcome, uncovered=note)
 
 
 def _structure_mass_ratio_rule(
@@ -416,7 +444,7 @@ def run_diagnostics(
     indices = tuple(stage.index for stage in vehicle.stages)
 
     rules = (
-        _twr_rule(result, limits),
+        _twr_rule(result, limits, phase=vehicle.stages[0].engine.propellant_phase),
         _structure_mass_ratio_rule(result, limits, first_stage=indices[0]),
         _tank_wall_rule(vehicle, limits),
         _length_to_diameter_rule(result, limits, indices=indices),

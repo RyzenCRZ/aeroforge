@@ -1,4 +1,10 @@
+import { ApiError, getJson, isRecord, postJson } from './client'
 import type { components } from './schema'
+
+// 传输层设施统一在 `./client`（几何域与参数域共用一套错误还原与契约校验）；
+// 这里**转出** ApiError，使既有调用方（store / 测试）的 import 路径保持不变。
+export { ApiError } from './client'
+export type { ErrorBody } from './client'
 
 /**
  * 几何 API 的契约类型。
@@ -17,7 +23,6 @@ export type JobRecord = components['schemas']['JobRecord']
 export type JobStage = JobRecord['stage']
 export type JobStatus = JobRecord['status']
 export type ContourResponse = components['schemas']['ContourResponse']
-export type ErrorBody = components['schemas']['ErrorBody']
 
 /** `GET /api/artifacts/{key}/{file}` 的白名单文件名（§16.3 产物目录）。 */
 export type ArtifactFile =
@@ -27,48 +32,12 @@ export type ArtifactFile =
   | 'metrics.json'
   | 'provenance.json'
 
-/**
- * §10.3 错误体的 JS 异常形态。
- *
- * `suggestion` 是契约必填项，UI 必须把它展示给用户（不得只显示 message）。
- */
-export class ApiError extends Error {
-  readonly code: string
-  readonly stage: string
-  readonly suggestion: string
-  readonly details: Record<string, unknown> | undefined
-
-  constructor(body: ErrorBody) {
-    super(body.message)
-    this.name = 'ApiError'
-    this.code = body.code
-    this.stage = body.stage
-    this.suggestion = body.suggestion
-    this.details = body.details
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
-}
-
 function isNumberPair(value: unknown): value is [number, number] {
   return Array.isArray(value) && value.length === 2 && value.every((item) => typeof item === 'number')
 }
 
 function isNumberTriple(value: unknown): value is [number, number, number] {
   return Array.isArray(value) && value.length === 3 && value.every((item) => typeof item === 'number')
-}
-
-/** 收窄 §10.3 错误体；字段不全时返回 false（调用方退回通用文案）。 */
-export function isErrorBody(value: unknown): value is ErrorBody {
-  if (!isRecord(value)) return false
-  return (
-    typeof value.code === 'string' &&
-    typeof value.stage === 'string' &&
-    typeof value.message === 'string' &&
-    typeof value.suggestion === 'string'
-  )
 }
 
 function isCheckResult(value: unknown): boolean {
@@ -140,64 +109,7 @@ function isContourResponse(value: unknown): value is ContourResponse {
   return typeof value.id === 'string' && typeof value.canonical === 'string' && isRecord(value.profile)
 }
 
-/** 契约不符（响应形状与 OpenAPI 不一致）时抛出，避免下游拿着坏数据继续算。 */
-function contractError(path: string): ApiError {
-  return new ApiError({
-    code: 'CONTRACT_MISMATCH',
-    stage: 'api',
-    message: `响应不符合接口契约：${path}`,
-    suggestion: '确认前端 schema.d.ts 与后端一致（重跑 npm run gen:api），并检查请求路径是否正确',
-  })
-}
-
-/**
- * 把 `{error: {...}}` 还原成异常；无法解析时退回可操作的通用文案。
- *
- * 前端一律以同源相对路径访问（开发期由 Vite 代理转发，生产期由桌面壳同源托管），
- * 本模块只做传输与边界校验，不参与任何计算（ADR-011）。
- */
-async function readErrorBody(response: Response): Promise<ErrorBody> {
-  try {
-    const body: unknown = await response.json()
-    if (isRecord(body) && isErrorBody(body.error)) return body.error
-  } catch {
-    // 错误体不是 JSON：退回通用文案，不吞掉 HTTP 状态码。
-  }
-  return {
-    code: `HTTP_${response.status}`,
-    stage: 'api',
-    message: `请求失败：HTTP ${response.status}`,
-    suggestion: '确认后端已启动（GET /api/health），必要时查看后端日志',
-  }
-}
-
-async function postJson<T>(
-  path: string,
-  body: unknown,
-  isBody: (value: unknown) => value is T,
-  signal?: AbortSignal,
-): Promise<T> {
-  const response = await fetch(path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal,
-  })
-  if (!response.ok) throw new ApiError(await readErrorBody(response))
-
-  const parsed: unknown = await response.json()
-  if (!isBody(parsed)) throw contractError(path)
-  return parsed
-}
-
-async function getJson<T>(path: string, isBody: (value: unknown) => value is T): Promise<T> {
-  const response = await fetch(path)
-  if (!response.ok) throw new ApiError(await readErrorBody(response))
-
-  const parsed: unknown = await response.json()
-  if (!isBody(parsed)) throw contractError(path)
-  return parsed
-}
+// 传输（postJson / getJson）与错误还原（readErrorBody / contractError）见 `./client`。
 
 /**
  * 母线层校验（纯 Python，无内核）。

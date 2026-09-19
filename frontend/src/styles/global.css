@@ -58,3 +58,14 @@ body {
 .panel__title {
   margin: 0;
 }
+
+/*
+ * 「路径 → 控件」定位高亮（规格 §1.7.3 OI-32 / §11.5 ① 第 3 条）。
+ *
+ * 由诊断清单在点击时**直接挂到目标控件的 DOM 节点上**（跨组件，不经过 React 状态），
+ * 故样式必须放在全局层：写进某个组件的 CSS 会让"谁负责这个类"变得含糊。
+ */
+.field-located {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}

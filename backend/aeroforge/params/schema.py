@@ -72,6 +72,20 @@ IspSource = Literal["default", "custom"]
 EngineCycle = Literal["gas_generator", "staged_combustion", "expander", "pressure_fed"]
 """发动机循环方式。"""
 
+PropellantPhase = Literal["liquid", "solid", "hybrid"]
+"""发动机的推进剂相态（§1.7.3 OI-30）。
+
+业界通行做法是把它做成**发动机上的一个枚举属性**——OpenRocket 的发动机定义带
+``Type ∈ {single-use, hybrid, reloadable}``，RocketPy 直接把电机分成
+``SolidMotor`` / ``HybridMotor`` / ``LiquidMotor`` 等变体类。**不**由别处（如推进剂
+组合或贮箱构成）推导，也**不**另设"是否固体助推"布尔字段——那会与相态形成两份真相
+（唯一权威原则 §6.1 的同族错误，R-28）。
+
+默认 ``liquid``：绝大多在役运载火箭为液体构型，且 Schema 扩展不得破坏既有参数
+（与 OI-21～OI-26 同口径）。本次实际采用的档位会写进 §6.5 推重比规则的账目并随报告
+下发，故默认值**不构成隐式判定**。
+"""
+
 OrbitType = Literal["LEO", "SSO", "GTO", "GEO", "TLI", "TMI", "escape", "custom"]
 """目标轨道类型（§6.1 Mission 层；TLI / TMI 由 OI-22 补入）。"""
 
@@ -135,6 +149,13 @@ class Engine(ParamsModel):
     """发动机（§6.1 Engine 层）。混合比是箱体比例派生的输入（§5.9）。"""
 
     model: str = Field(description="型号")
+    propellant_phase: PropellantPhase = Field(
+        default="liquid",
+        description=(
+            "推进剂相态（§1.7.3 OI-30）：§6.5 起飞推重比**固体档（1.5）的唯一判据**。"
+            "默认 liquid —— 实际采用的档位会印在推重比规则的账目里，故非隐式判定"
+        ),
+    )
     cycle: EngineCycle = Field(description="循环方式")
     chamber_pressure_pa: float = si_field("pressure", "室压", gt=0.0)
     expansion_ratio: float = Field(gt=1.0, description="喷管膨胀比 ε（面积比）")

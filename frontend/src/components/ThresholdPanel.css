@@ -1,0 +1,110 @@
+.thresholds__hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+
+/* 提示行里混用了 `.label`，会被全局大写化；这里显式还原为正常书写（路径大小写敏感） */
+p.thresholds__hint.label {
+  text-transform: none;
+  letter-spacing: 0;
+  word-break: break-all;
+}
+
+.thresholds__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.thresholds__row {
+  padding: 6px 0 8px;
+  border-top: 1px solid var(--color-border);
+}
+
+.thresholds__row:first-child {
+  border-top: none;
+}
+
+.thresholds__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.thresholds__label {
+  font-size: 12px;
+  color: var(--color-text-primary);
+}
+
+.thresholds__origin {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+/* 「未配置」是一个**必须可见**的状态，不是排版细节（§18.4 / §1.7.3 OI-31） */
+.thresholds__origin--unset {
+  color: var(--color-status-warn);
+}
+
+.thresholds__edit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.thresholds__edit input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-primary);
+}
+
+.thresholds__value {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.thresholds__source {
+  margin: 4px 0 0;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.thresholds__note {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+
+.thresholds__key {
+  margin: 4px 0 0;
+  text-transform: none;
+  letter-spacing: 0;
+  word-break: break-all;
+}
+
+.thresholds__error {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--color-status-error);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.thresholds__error p {
+  margin: 0;
+}

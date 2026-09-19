@@ -1,0 +1,139 @@
+.diagnostics__section {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+}
+
+.diagnostics__section h3 {
+  margin: 0;
+}
+
+.diagnostics__hint {
+  margin: 6px 0 0;
+  line-height: 1.6;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.diagnostics__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.diagnostics__item {
+  padding: 6px 8px;
+  border: 1px solid var(--color-border);
+  border-left-width: 3px;
+  border-radius: 6px;
+}
+
+/* 级别分色（§11.5 ① 第 1 条）：硬约束红、警告黄 */
+.diagnostics__item--hard {
+  border-left-color: var(--color-status-error);
+}
+
+.diagnostics__item--warning {
+  border-left-color: var(--color-status-warn);
+}
+
+.diagnostics__item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.diagnostics__code {
+  color: var(--color-data-highlight);
+  text-align: left;
+}
+
+.diagnostics__rule-title {
+  font-size: 12px;
+  color: var(--color-text-primary);
+}
+
+.diagnostics__message {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.diagnostics__suggestion {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--color-accent-alt);
+}
+
+.diagnostics__threshold,
+.diagnostics__source {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* 「缺什么」：未判定规则的成因，必须是这一栏里最显眼的一行 */
+.diagnostics__deferred {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--color-status-warn);
+}
+
+.diagnostics__path-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.diagnostics__path {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  text-align: left;
+  word-break: break-all;
+}
+
+.diagnostics__locate {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.diagnostics__locate:hover {
+  border-color: var(--color-accent);
+}
+
+/* 定位失败时的降级提示：该条**仍然显示**，只是不可点击跳转（§11.5 ① 第 4 条） */
+.diagnostics__path-fallback {
+  margin: 4px 0 0;
+  color: var(--color-status-warn);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.diagnostics__error {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--color-status-error);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.diagnostics__error p {
+  margin: 0;
+}

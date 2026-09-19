@@ -40,6 +40,9 @@ from tests.conftest import _legal_vehicle, make_stage
 _LIGHT_LOAD_KG = 450_000.0
 #: 让起飞推重比落到 1.2 之下的推进剂质量（一级）。
 _HEAVY_LOAD_KG = 700_000.0
+#: 让起飞推重比落在**两档之间**（≈1.36）的推进剂质量：液体档通过、固体档不通过。
+#: 两档的差异只有在这么一段载荷上才看得见——这正是 OI-30 要判出来的东西。
+_MID_LOAD_KG = 520_000.0
 
 
 def _rule(report: diag.DiagnosticsReport, code: str) -> RuleOutcome:
@@ -150,13 +153,84 @@ def test_twr_fires_below_the_threshold(single_stage_vehicle: Vehicle) -> None:
 
 
 def test_twr_passes_but_still_reports_the_uncovered_branch(single_stage_vehicle: Vehicle) -> None:
-    """通过也要留痕：§6.5 表第二档（固体助推 1.5）在 M2 判不了，必须显式登记。"""
+    """通过也要留痕：档位只按**第一级**相态取（§1.7.3 OI-30），其余级不参与本规则。
+
+    §6.5 表只按「是否固体助推」给两档，未定义混合构型（液体芯级 + 固体助推分属不同级）
+    的加权判据——这条分支**确实**未覆盖，故不得因为"档位判出来了"就省掉留痕。
+    """
     report = run_diagnostics(single_stage_vehicle, propellant_mass_kg={1: _LIGHT_LOAD_KG})
 
     rule = _rule(report, CODE_TWR)
     assert rule.diagnostics == ()
     assert rule.uncovered, "通过且无留痕 = 把「未覆盖的分支」伪装成已验证"
-    assert any("固体助推" in note for note in rule.uncovered)
+    assert any("第一级" in note for note in rule.uncovered)
+
+
+def _with_phase(vehicle: Vehicle, phase: str) -> Vehicle:
+    """把**第一级**发动机的相态换掉（§1.7.3 OI-30 的判据所在）。"""
+    first = vehicle.stages[0]
+    engine = first.engine.model_copy(update={"propellant_phase": phase})
+    stages = (first.model_copy(update={"engine": engine}), *vehicle.stages[1:])
+    return vehicle.model_copy(update={"stages": stages})
+
+
+def test_twr_uses_the_solid_tier_for_a_solid_first_stage(single_stage_vehicle: Vehicle) -> None:
+    """固体第一级走 1.5 档：**同一个 T/W** 液体档通过、固体档被拒（§1.7.3 OI-30）。
+
+    这是"固体档判不了"的正面反证——若档位仍写死 1.2，本用例的固体档会假通过
+    （而那正是 M2 留白第 3 项的原形态）。
+    """
+    solid = _with_phase(single_stage_vehicle, "solid")
+
+    liquid_rule = _rule(
+        run_diagnostics(single_stage_vehicle, propellant_mass_kg={1: _MID_LOAD_KG}), CODE_TWR
+    )
+    solid_rule = _rule(run_diagnostics(solid, propellant_mass_kg={1: _MID_LOAD_KG}), CODE_TWR)
+
+    assert liquid_rule.diagnostics == (), "本例的 T/W 应高于液体档下界 1.2"
+    assert len(solid_rule.diagnostics) == 1, "同一个 T/W 应低于固体档下界 1.5"
+    assert "低于下界 1.5（固体助推档）" in solid_rule.diagnostics[0].message
+    assert solid_rule.diagnostics[0].level == "hard"
+
+    # 档位与依据必须随报告下发：档位选择不得隐式，否则"用了哪一档"无从复核
+    assert "固体助推" in solid_rule.threshold
+    assert "propellant_phase = 'solid'" in solid_rule.threshold
+    assert "液体档" in liquid_rule.threshold
+    assert "propellant_phase = 'liquid'" in liquid_rule.threshold
+
+
+@pytest.mark.parametrize("phase", ["liquid", "hybrid"])
+def test_twr_hybrid_and_liquid_share_the_liquid_tier(
+    single_stage_vehicle: Vehicle, phase: str
+) -> None:
+    """规格 §6.5 只给两档：``hybrid`` 与 ``liquid`` 同走 1.2 档（§1.7.3 OI-30）。
+
+    与上一条互为对照：同样的载荷，``solid`` 被拒而 ``hybrid`` 通过——档位确实由相态决定，
+    而不是"凡非液体即固体"这类想当然的映射。
+    """
+    vehicle = _with_phase(single_stage_vehicle, phase)
+
+    rule = _rule(run_diagnostics(vehicle, propellant_mass_kg={1: _MID_LOAD_KG}), CODE_TWR)
+
+    assert rule.diagnostics == ()
+    assert f"propellant_phase = {phase!r}" in rule.threshold
+
+
+def test_twr_solid_tier_is_also_recorded_when_the_rule_is_deferred(
+    single_stage_vehicle: Vehicle,
+) -> None:
+    """缺 M4 的定尺结果时规则整体 deferred，但**档位仍须先算出来并记下**。
+
+    否则一旦 M4 补上载荷，账目里的档位会"突然出现"，那时再回头核对就晚了。
+    """
+    solid = _with_phase(single_stage_vehicle, "solid")
+
+    rule = _rule(run_diagnostics(solid), CODE_TWR)
+
+    assert rule.deferred
+    assert "1.5" in rule.threshold
+    assert "固体助推" in rule.threshold
+    assert rule.diagnostics == ()
 
 
 # ---------------------------------------------------------------------------

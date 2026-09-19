@@ -161,6 +161,27 @@ def test_si_field_publishes_display_unit(single_stage_vehicle: Vehicle) -> None:
     assert payload_mass["display_unit"] == "t"
 
 
+def test_propellant_phase_defaults_to_liquid_without_breaking_existing_payloads(
+    single_stage_vehicle: Vehicle,
+) -> None:
+    """§1.7.3 OI-30：相态默认 ``liquid``，**不带该字段的既有参数仍须原样通过**。
+
+    这不是"顺手给个默认值"：默认值一旦缺失，这次 Schema 扩展就会让所有既有飞行器
+    校验失败（与 OI-21～OI-26 同口径——扩展不得破坏既有参数）。
+    """
+    assert single_stage_vehicle.stages[0].engine.propellant_phase == "liquid"
+
+    payload = single_stage_vehicle.model_dump(mode="json")
+    for stage in payload["stages"]:
+        stage["engine"].pop("propellant_phase")
+
+    assert Vehicle.model_validate(payload).stages[0].engine.propellant_phase == "liquid"
+
+    # 该字段是 §6.5 固体档的**唯一判据**，故必须出现在契约里（前端才能编辑它）
+    properties = Vehicle.model_json_schema()["$defs"]["Engine"]["properties"]
+    assert properties["propellant_phase"]["enum"] == ["liquid", "solid", "hybrid"]
+
+
 def _declared_models() -> list[type[ParamsModel]]:
     """§6.1 里声明的全部 pydantic 模型（顺序固定，便于参数化测试的稳定 id）。"""
     return sorted(

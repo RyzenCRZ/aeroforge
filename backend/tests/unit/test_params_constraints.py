@@ -268,6 +268,50 @@ def test_default_isp_must_match_the_engine_nominal(single_stage_vehicle: Vehicle
     assert _by_code(custom, "ENGINEER_ISP_SOURCE_MISMATCH") == []
 
 
+def test_solid_phase_warns_that_liquid_only_fields_do_not_apply(
+    single_stage_vehicle: Vehicle,
+) -> None:
+    """§1.7.3 OI-30：固体级的共底 / 储箱排列 / 混合比 / 加注比例语义不成立。
+
+    判**警告**而非硬约束：Schema 是多级共用的一份结构，固体助推级与液体芯级并存时
+    不得因助推级是固体就判整箭非法；但也**不得**沉默——沉默会让人以为那些字段生效
+    （"没报错 ≠ 正确"）。
+    """
+    solid = _mutate(
+        single_stage_vehicle,
+        lambda payload: payload["stages"][0]["engine"].update({"propellant_phase": "solid"}),
+    )
+
+    items = _by_code(solid, "COMPAT_SOLID_PHASE_LIQUID_FIELDS")
+    assert [item.field_path for item in items] == ["stages[0].engine.propellant_phase"]
+    assert not has_hard(items), "相态为固体不是非法构型——本约束是提示，不是拒绝"
+    assert "混合比" in items[0].message
+
+
+def test_only_solid_phase_triggers_the_liquid_fields_warning(
+    single_stage_vehicle: Vehicle, two_stage_vehicle: Vehicle
+) -> None:
+    """``liquid``（含默认）与 ``hybrid`` 都不得触发——否则每条液体构型都带一条噪声警告。
+
+    默认值那条尤其重要：Schema 扩展若让既有参数凭空多出警告，用户会先怀疑产品而不是相态。
+    """
+    assert _by_code(single_stage_vehicle, "COMPAT_SOLID_PHASE_LIQUID_FIELDS") == []
+
+    hybrid = _mutate(
+        single_stage_vehicle,
+        lambda payload: payload["stages"][0]["engine"].update({"propellant_phase": "hybrid"}),
+    )
+    assert _by_code(hybrid, "COMPAT_SOLID_PHASE_LIQUID_FIELDS") == []
+
+    # 该警告是**逐级**的：一级固体、二级液体时只点名一级
+    two_stage = _mutate(
+        two_stage_vehicle,
+        lambda payload: payload["stages"][0]["engine"].update({"propellant_phase": "solid"}),
+    )
+    items = _by_code(two_stage, "COMPAT_SOLID_PHASE_LIQUID_FIELDS")
+    assert [item.field_path for item in items] == ["stages[0].engine.propellant_phase"]
+
+
 def test_missing_aero_and_small_fairing_warn(single_stage_vehicle: Vehicle) -> None:
     """气动缺失按默认处理但必须留痕；整流罩小于最大级直径要提示确认。"""
 

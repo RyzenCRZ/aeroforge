@@ -1,0 +1,89 @@
+.vehicle-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.vehicle-panel__source-name {
+  margin: 8px 0 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+.vehicle-panel__hint {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+
+.vehicle-panel__group {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+}
+
+.vehicle-panel__group h3 {
+  margin: 0;
+}
+
+.vehicle-panel__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.vehicle-panel__label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 占位值标记：该字段在 sourced_fields 里没有出处（§1.4-4） */
+.vehicle-panel__placeholder {
+  padding: 0 4px;
+  border: 1px solid var(--color-status-warn);
+  border-radius: 4px;
+  color: var(--color-status-warn);
+  font-size: 10px;
+}
+
+.vehicle-panel__field input,
+.vehicle-panel__field select {
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.vehicle-panel__field input[type='text'] {
+  font-family: var(--font-ui);
+}
+
+.vehicle-panel__error {
+  margin: 8px 0 0;
+  color: var(--color-status-error);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.vehicle-panel__button {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.vehicle-panel__button:hover {
+  border-color: var(--color-accent);
+}

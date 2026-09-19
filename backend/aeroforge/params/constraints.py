@@ -215,6 +215,22 @@ def _check_stage(stage: Stage, position: int) -> list[Diagnostic]:
                     )
                 )
 
+    # 相容约束（§1.7.3 OI-30）：固体级的液体构型字段语义不成立。
+    # 判**警告**而非硬约束：Schema 是多级共用的一份结构，固体助推级与液体芯级并存时
+    # 不得因助推级是固体就判整箭非法；但也**不得**默认沉默——沉默等于让用户以为
+    # 那些字段对固体级也生效（"没报错 ≠ 正确"）。
+    if engine.propellant_phase == "solid":
+        items.append(
+            _warn(
+                "COMPAT_SOLID_PHASE_LIQUID_FIELDS",
+                f"{prefix}.engine.propellant_phase",
+                f"第 {stage.index} 级相态为固体，但同级仍带着共底 / 储箱排列 / 混合比 O/F / "
+                "加注比例——固体药柱无贮箱、无 O/F，这些字段对该级不生效",
+                "若该级确为固体（药柱 + 壳体），忽略本提示即可；保留这些字段是为多级火箭"
+                "共用同一 Schema（液体级仍需它们）",
+            )
+        )
+
     return items
 
 

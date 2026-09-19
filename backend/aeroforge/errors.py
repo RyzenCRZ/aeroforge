@@ -72,6 +72,19 @@ class ParamsError(AeroForgeError):
     stage = "params"
 
 
+class ConfigError(AeroForgeError):
+    """配置文件（``config.toml``）不可用：语法错 / 阈值越界 / 出现未声明的键。
+
+    自 §1.7.3 OI-31 起 ``config.toml`` 是**用户可见可编辑**的文件（界面设置项会写它，
+    仓库里也有 ``config.example.toml`` 作参照），故它出错时必须走 §10.3 的带建议结构，
+    而不是让 ``tomllib`` / pydantic 的原生异常以 ``INTERNAL_ERROR`` 冒到界面上——
+    那样用户拿到的是一句"未预期的内部错误"，与"配置文件第 3 行写错了"差之千里。
+    """
+
+    code = "CONFIG_INVALID"
+    stage = "config"
+
+
 class ArtifactNotFoundError(AeroForgeError):
     """产物不存在。"""
 

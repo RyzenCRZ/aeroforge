@@ -113,6 +113,84 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/params/units": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Units
+         * @description 下发 §6.4 的显示单位全表。
+         *
+         *     这是**只读呈现口径**：不改变存储 / 计算 / 缓存键，故调整显示单位**不得**使
+         *     ``artifacts/`` 缓存失效（§9.2）。
+         */
+        get: operations["units_api_params_units_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/params/thresholds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Thresholds
+         * @description 返回阈值的生效值与来源。
+         *
+         *     刻意返回**生效值**而不是"文件里的值"：``PUT`` 之后环境变量仍然覆盖 ``config.toml``，
+         *     若界面显示的是文件内容，用户会看到一个"保存了却不生效"的数字而找不到原因。
+         */
+        get: operations["read_thresholds_api_params_thresholds_get"];
+        /**
+         * Write Thresholds
+         * @description 把补丁写进 ``config.toml``，然后返回**重新读出的**生效状态。
+         *
+         *     请求体是扁平的 ``{键: 值}``；值为 ``null`` 即**清空该键**（回到「未配置」，
+         *     对最小工艺厚度而言就是回到"不判定"）。键必须是 §6.5 已声明的阈值——
+         *     多一个键即 422，而不是静默忽略（忽略会让用户以为保存成功）。
+         */
+        put: operations["write_thresholds_api_params_thresholds_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/params/template": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Template
+         * @description 返回界面可编辑的示例骨架（§1.7.3 OI-32 的前置）。
+         *
+         *     ⚠ 这**不是** OI-29 的内置示例模板——模板库须逐条核对公开来源，归 M3。
+         *     本端点只提供一份标注为「未经来源核对」的骨架，使参数面板不必自建一份
+         *     "看起来像真的"的数字（那会形成与 §13.2 基准表冲突的第二套数字，违反 P1）。
+         */
+        get: operations["read_template_api_params_template_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}": {
         parameters: {
             query?: never;
@@ -388,6 +466,38 @@ export interface components {
             suggestion: string;
         };
         /**
+         * DisplayUnitOut
+         * @description 一个量的显示口径（§6.4 表逐行）。
+         */
+        DisplayUnitOut: {
+            /**
+             * Quantity
+             * @description 量（规格 §6.4 表的「量」列）
+             * @enum {string}
+             */
+            quantity: "force" | "mass" | "length" | "isp" | "velocity" | "pressure" | "temperature" | "density";
+            /**
+             * Label
+             * @description 中文名（规格原文）
+             */
+            label: string;
+            /**
+             * Symbol
+             * @description 显示单位符号（界面与导出用）
+             */
+            symbol: string;
+            /**
+             * Si Symbol
+             * @description 内部 SI 符号（存储 / 计算 / 缓存键用）
+             */
+            si_symbol: string;
+            /**
+             * Factor
+             * @description 换算系数，方向固定 **SI = 显示值 × factor**（方向写反是本表最易犯的错）
+             */
+            factor: number;
+        };
+        /**
          * EllipseSegment
          * @description 椭圆弧段：半轴 = (半径端半径 R, 轴向跨度 H)，椭圆心在轴线上。
          */
@@ -418,6 +528,13 @@ export interface components {
              * @description 型号
              */
             model: string;
+            /**
+             * Propellant Phase
+             * @description 推进剂相态（§1.7.3 OI-30）：§6.5 起飞推重比**固体档（1.5）的唯一判据**。默认 liquid —— 实际采用的档位会印在推重比规则的账目里，故非隐式判定
+             * @default liquid
+             * @enum {string}
+             */
+            propellant_phase: "liquid" | "solid" | "hybrid";
             /**
              * Cycle
              * @description 循环方式
@@ -1080,6 +1197,99 @@ export interface components {
              */
             common_bulkhead_insulation_m?: number | null;
         };
+        /**
+         * TemplateResponse
+         * @description ``GET /api/params/template`` 的响应体（界面可编辑的起始箭）。
+         */
+        TemplateResponse: {
+            /**
+             * Template Id
+             * @description 骨架标识
+             */
+            template_id: string;
+            /**
+             * Label
+             * @description 界面显示名（含「未经来源核对」字样）
+             */
+            label: string;
+            /**
+             * Note
+             * @description 必须原样呈现的说明；不得改写为更肯定的措辞
+             */
+            note: string;
+            /**
+             * Sourced Fields
+             * @description 有出处的字段路径 → 出处。**不在本表里的数值一律是占位值**（§1.4-4）；路径口径与 §6.3 / §6.5 的 field_path 逐字一致
+             */
+            sourced_fields: {
+                [key: string]: string;
+            };
+            /** @description 起始箭本体（结构合法，可直接提交诊断） */
+            vehicle: components["schemas"]["Vehicle"];
+        };
+        /**
+         * ThresholdEntry
+         * @description 一个阈值的**生效**状态（界面设置项直接消费）。
+         */
+        ThresholdEntry: {
+            /**
+             * Key
+             * @description 配置键（config.toml 的顶层键名）
+             */
+            key: string;
+            /**
+             * Label
+             * @description 中文名
+             */
+            label: string;
+            /**
+             * Value
+             * @description **生效值**；null = 未配置（该判据不判定）
+             */
+            value: number | null;
+            /**
+             * Source
+             * @description §6.5 强制的来源标注（界面不得自拟措辞）
+             */
+            source: string;
+            /**
+             * Origin
+             * @description 生效值的来源：环境变量/config.toml/默认值/未配置
+             */
+            origin: string;
+            /**
+             * Note
+             * @description 生效边界说明
+             */
+            note: string;
+        };
+        /**
+         * ThresholdsResponse
+         * @description ``GET`` / ``PUT /api/params/thresholds`` 的响应体（§1.7.3 OI-31）。
+         */
+        ThresholdsResponse: {
+            /**
+             * Config File
+             * @description 写入目标：config.toml 的完整路径（§18.4）
+             */
+            config_file: string;
+            /**
+             * Thresholds
+             * @description 各项的**生效值**与来源；value 为 null 表示「未配置」（该判据不判定）
+             */
+            thresholds: components["schemas"]["ThresholdEntry"][];
+        };
+        /**
+         * UnitsResponse
+         * @description ``GET /api/params/units`` 的响应体（§1.7.3 OI-32）。
+         */
+        UnitsResponse: {
+            /**
+             * Units
+             * @description §6.4 全表；界面**只按此格式化**，不得在前端再抄一份表或反推系数
+             */
+            units: components["schemas"]["DisplayUnitOut"][];
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -1368,6 +1578,101 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    units_api_params_units_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnitsResponse"];
+                };
+            };
+        };
+    };
+    read_thresholds_api_params_thresholds_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThresholdsResponse"];
+                };
+            };
+        };
+    };
+    write_thresholds_api_params_thresholds_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: number | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThresholdsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_template_api_params_template_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateResponse"];
                 };
             };
         };

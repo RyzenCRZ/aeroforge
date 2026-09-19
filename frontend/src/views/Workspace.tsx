@@ -1,7 +1,10 @@
 import { useEffect } from 'react'
 
+import { DiagnosticsPanel } from '../components/DiagnosticsPanel'
 import { MeridianEditor } from '../components/MeridianEditor'
 import { SegmentPanel } from '../components/SegmentPanel'
+import { ThresholdPanel } from '../components/ThresholdPanel'
+import { VehiclePanel } from '../components/VehiclePanel'
 import { Viewport } from '../r3f/Viewport'
 import { useModelStore } from '../store/model'
 import { useParamsStore } from '../store/params'
@@ -50,10 +53,13 @@ function ViewControls() {
 }
 
 /**
- * M1 三栏工作区（规格 §16.3）：左 = 组件树 + 段参数 / 中 = 3D 视口 / 右 = 母线编辑器。
+ * 三栏工作区（规格 §11.5 / M2 左栏接入参数系统）。
+ *
+ * 左 = 组件树 + 段参数 / 参数面板 / 诊断清单 / 阈值设置；中 = 3D 视口；右 = 母线编辑器。
  *
  * 母线草稿的任何变化都会触发一次**防抖后**的后端校验——几何数值一律由后端给出，
- * 前端只消费与格式化（ADR-011）。
+ * 前端只消费与格式化（ADR-011）。左栏新增的三个面板同理：诊断结论与阈值生效值
+ * **全部**来自后端（§6.5 / §18.4），前端只负责渲染与定位。
  */
 export function Workspace() {
   const profile = useParamsStore((state) => state.profile)
@@ -67,6 +73,9 @@ export function Workspace() {
     <div className="workspace">
       <aside className="workspace__pane surface">
         <SegmentPanel />
+        <VehiclePanel />
+        <DiagnosticsPanel />
+        <ThresholdPanel />
       </aside>
       <section className="workspace__pane workspace__pane--center">
         <Viewport />

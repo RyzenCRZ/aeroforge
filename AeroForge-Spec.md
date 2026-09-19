@@ -9,7 +9,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 文档版本 | v0.5.1（M1 验收通过：§16.3 验收记录 + §16.2 交付链复验） |
+| 文档版本 | v0.5.1（M1 验收通过：§16.3 验收记录 + §16.2 交付链复验 + §13.8 工程自检门禁） |
 | 平台名称 | AeroForge / 参数化航天器设计与评估平台 |
 | 目标平台 | Windows 10/11 x64（首发）→ Linux（后续） |
 | 授权策略 | 平台源码私有；第三方依赖**原则上**为宽松开源许可（Apache-2.0 / MIT / BSD 等）。**已裁决的两处例外**：PyInstaller 为 GPL-2.0 **with bootloader exception**（仅构建期工具，不传染产物）、Microsoft Edge WebView2 Runtime 为微软专有但免费可再分发的系统组件（详见 §3.4） |
@@ -30,7 +30,7 @@
 | 2026-09-19 | v0.4.1 | **M0.5 冻结链修正**（实测发现问题并回改规格）。① **预检实现下沉**：唯一实现从 `tools/preflight.py` 迁至 `backend/aeroforge/selfcheck.py`，脚本改为转调；冻结产物以 `AeroForge.exe --preflight` 暴露同一入口——落实 R-30「预检必须保留在打包交付中」；② §16.2 新增「预检保留」契约行，并**实测更正必收资源口径**：OCCT 主体虽静态链接进 89.4 MB 的 `OCP.pyd`，但该 `.pyd` 导入表直接引用 5 个改名 `TK*.dll`，另在 `site-packages/cadquery_ocp_novtk.libs/` 有 **70 个 delvewheel 改名 DLL（61.9 MB）**由 `os.add_dll_directory()` 运行期挂载——§16.2 头号坑位「动态库收集不全」**确实成立**，判据只能是冻结产物真跑 `import build123d`；③ 记入**失败模式**：PyInstaller 只为**导入图内出现过**的包执行 hook，只写 hook 而无导入路径回指该包时 hook 静默不执行（实测产物缺 `OCP`/`cea`，仅 88.4 MB）；④ §15 目录同步 `selfcheck.py` 与 `--preflight`；⑤ 补 `mypy` 覆盖项——`cea` 随包的 `libcea.pyi` 有语法级缺陷（`libcea.pyi:215`）会中断 mypy，改为不跟随其 stub，CEA 边界的静态类型让位于 ADR-014 的运行时门禁；⑥ 新增 **`hook-lib3mf.py`**——`build123d/mesher.py` 拉入的 `lib3mf` 以**自拼路径**加载 `lib3mf.dll`，且该 DLL 不在任何 PE 导入表内，**实测冻结产物 `import build123d` 正崩在此处**（由 `--preflight` 拦下，未流入 UI）；⑦ 冻结产物由 88.4 MB 增至 449.1 MB，`--preflight` 在冻结态三项全通过 |
 | 2026-09-19 | v0.4.2 | **M0.5 验收通过：交付链路的四个坑位逐一结案**。§16.2 新增「M0.5 验收记录」（产物体积 451.55 MB、必收资源 8 项逐条核对、冻结态 `--preflight` 与 `--probe` 实测输出、启动耗时三基线、零残留）与**退出码约定表**。四项坑位结论：① **OCCT 动态库收集不全 → 已解决**（46 个 `TK*.dll` + 70 个 libs DLL 进包，冻结态几何自检跑通）；② **杀软误报 → 未复现**（本机 4 款安全产品共存下 `NotSigned` 产物全程未被拦截，印证 `onedir` 相对 `onefile` 的误报优势；M7 待办签名与申诉）；③ **WebView2 缺失 → 已解决**（以 monkeypatch 注入验证报错路径而非卸载系统组件，返回码 2 + 安装指引）；④ **中文路径 → 坑位成立且为致命，已采纳 fail-fast 规避**：NASA `cea` 的 C 扩展用窄字符 API 打开数据表，**安装路径含非 ASCII 字符时必定失败**，报错却是*"Could not locate thermo database file"*（文件其实存在，误导性极强）——受控对照实验（同一份数据表仅换目录名：`C:\ProgramData\…` 通过 / `D:\测试 目录\…` 失败）定位根因，`GetShortPathName` 因本机禁用 8.3 名称而不可用作规避；启动器新增**资源根非 ASCII 判定**（[resource_path.py](file:///d:/Vibe%20Coding/aeroforge/desktop/resource_path.py) `ascii_root()`）并**前置到 `--preflight` 之前**，返回码 **5** 并给出换目录指引；同时记录**已实测可行但未采纳**的升级路径（`CEA_SKIP_INIT=1` + 显式 `libcea.init(path=<ASCII>)`）留给 M7 决策，并提示 M7 安装器**不应默认装到 `%LOCALAPPDATA%`**（用户名可能含中文）。**空格与中文经分离验证**：`d:\Vibe Coding\aeroforge`（含空格、纯 ASCII）全程正常。⑤ 新增风险 **R-34**（安装路径非 ASCII 致 CEA 不可用），把该交付链约束纳入风险登记册并写明 M7 待办 |
 | 2026-09-19 | v0.5.0 | **M1 几何闭环启动**。新增 **§16.3「M1 实现契约」**——把 §16 里程碑行的 M1 范围裁剪为可验收契约：① **曲线族裁剪**（`line`/`arc`/`ellipse` 三段型覆盖柱/锥/球冠/椭球/共底五构型，其余 §5.3 曲线族随 M5）；② **作业模型 M1 化**（§9.1 进程池降为单 worker 后台线程、四条硬规则保留、M4 扩池）；③ **缓存键 M1 子集**（`sha256(canonical_json + kernel_version + spec_version)`，数据快照/CEA 表字段预留）；④ **API 形状**（contour 存取 / validate 同步校验+采样点 / build 缓存命中即同步返回 / jobs+WS / artifacts）；⑤ **前端范围**（三栏骨架、母线编辑器以表单+SVG 落地、示意通道消费后端采样点以保双通道包围盒一致）；⑥ **验收门禁映射**（四项验收 → 具体测试落点） |
-| 2026-09-19 | v0.5.1 | **M1 验收通过：几何闭环全链落地并留下实测数字**。① **§16.3 新增「M1 验收记录」**——八项门禁实测（后端 `pytest` **45 passed** / `ruff check` / `ruff format --check` 45 files / `mypy` 27 source files；前端 `tsc -b` / vitest **29 passed** / `vite build` 1173 kB + 9.36 kB CSS；契约 `gen:api` 后 `git diff` 为空），四项验收逐条给出落点（解析-内核体积 < 0.1%、母线往返逐字节相等、双通道包络 ≤ 1%、改参数→预览 < 500 ms）。② **「改参数 → 预览」给出端到端原始数字**：真实浏览器内对柱段 `length` 连改 5 次，测得 239.3 / 232.5 / 233.5 / 232.6 / **248.6 ms**（均值 ≈ 237 ms，全部 < 500 ms、余量 > 2×）；逐段拆解显示后端 `validate` 中位数仅 **3.76 ms**，其余几乎全是 **200 ms 防抖**这一固定项——故压延迟的有效手段是调防抖窗口，而非优化几何计算。③ **§16.2 新增「M1 交付链复验」**：重冻产物 451.72 MB，冻结态 `--preflight` 三项全通过 `exit = 0`、`--probe` **通过**（`WebGL2` 可用、后端就绪 0.62 s、首帧 4.74 s、退出零残留），并核对包内前端确为 M1 产物（`index-CSatOwYl.js` 1,173,223 B，与 `npm run build` 同名同尺寸；探针由**真实 `Viewport` 首帧**发布，`ProbeScene.tsx` 已删除）。④ **诚实留白**：明示「双通道朝向对齐」仅有静态推演、**未做目视核对**，列为 M2 首项待补（R-25 的形态分叉风险恰在此处）。⑤ AGENTS.md 同步 M1 约定：新增 `artifacts/` 内容寻址产物目录说明与"禁止入库/手工改写"禁令、`data/contours/` 母线存档位置，并纠正 `npm run test:nfr` 这一**并不存在**的脚本引用（§13.6 非功能测试当前并入 `npm run test`）。⑥ 顺带修正 `.gitignore`：新增 `debug.log`——Chromium/WebView2 子进程写到 cwd 的噪声日志（实测为搜狗输入法相关警告），非本工程产物 |
+| 2026-09-19 | v0.5.1 | **M1 验收通过：几何闭环全链落地并留下实测数字**。① **§16.3 新增「M1 验收记录」**——八项门禁实测（后端 `pytest` **45 passed** / `ruff check` / `ruff format --check` 45 files / `mypy` 27 source files；前端 `tsc -b` / vitest **29 passed** / `vite build` 1173 kB + 9.36 kB CSS；契约 `gen:api` 后 `git diff` 为空），四项验收逐条给出落点（解析-内核体积 < 0.1%、母线往返逐字节相等、双通道包络 ≤ 1%、改参数→预览 < 500 ms）。② **「改参数 → 预览」给出端到端原始数字**：真实浏览器内对柱段 `length` 连改 5 次，测得 239.3 / 232.5 / 233.5 / 232.6 / **248.6 ms**（均值 ≈ 237 ms，全部 < 500 ms、余量 > 2×）；逐段拆解显示后端 `validate` 中位数仅 **3.76 ms**，其余几乎全是 **200 ms 防抖**这一固定项——故压延迟的有效手段是调防抖窗口，而非优化几何计算。③ **§16.2 新增「M1 交付链复验」**：重冻产物 451.72 MB，冻结态 `--preflight` 三项全通过 `exit = 0`、`--probe` **通过**（`WebGL2` 可用、后端就绪 0.62 s、首帧 4.74 s、退出零残留），并核对包内前端确为 M1 产物（`index-CSatOwYl.js` 1,173,223 B，与 `npm run build` 同名同尺寸；探针由**真实 `Viewport` 首帧**发布，`ProbeScene.tsx` 已删除）。④ **诚实留白**：明示「双通道朝向对齐」仅有静态推演、**未做目视核对**，列为 M2 首项待补（R-25 的形态分叉风险恰在此处）。⑤ AGENTS.md 同步 M1 约定：新增 `artifacts/` 内容寻址产物目录说明与"禁止入库/手工改写"禁令、`data/contours/` 母线存档位置，并纠正 `npm run test:nfr` 这一**并不存在**的脚本引用（§13.6 非功能测试当前并入 `npm run test`）。⑥ 顺带修正 `.gitignore`：新增 `debug.log`——Chromium/WebView2 子进程写到 cwd 的噪声日志（实测为搜狗输入法相关警告），非本工程产物。⑦ **新增 §13.8「工程自检门禁」**：把 M0–M1 复盘出的三类**过程性**错误固化为回归测试——**文档命令可执行性**（`test_agents_contract.py`：`AGENTS.md` 里的 `npm run X` / `uv run …` 必须真实存在，`python -m` 目标还必须有 `__main__` 入口，否则**静默无事**；附录 D 与 `AGENTS.md` 逐行比对，`difflib` 直接给出 diff；另加解析正则自检，防"守卫永远跳过"）、**测试隔离**（`test_test_isolation.py`：`data_root` / `artifacts_root` / `contours_root` 必须落在会话临时区内，拦截"产物写到 `%TEMP%` 跨会话留存致 `cache_hit` 意外为真"）、**夹具合法性**（`test_fixture_profiles.py`：所有零参剖面工厂必须显式归类为合法 / 合法但须 `warn` / 非法，且逐个过产品校验器——D 类"测试骗自己"的根治办法是**修夹具而非放宽断言**） |
 
 ---
 
@@ -1776,6 +1776,24 @@ Skill 书写规则：**先澄清再分析**——Skill 内不得直接给出数�
 
 步骤 1–6 作为 CI 冒烟用例；步骤 7 的离线复测在发版前手工执行（§16 M7 验收）。
 
+### 13.8 工程自检门禁（已发生错误的回归固化）
+
+§13.1–§13.7 检查**产品**是否正确；本节检查**研发过程**自身是否在退步。
+每一条都由一次真实事故换来，因此必须长期在 CI 内运行——没有机器门禁的"记住教训"，
+在下一个会话就会失效。
+
+| 门禁 | 拦截的事故 | 实现 |
+|---|---|---|
+| **文档命令可执行性** | `AGENTS.md` 写着 `npm run test:nfr`（脚本不存在）、`uv run python -m aeroforge.geometry.validate`（模块无 `__main__`，执行后**静默无事**）、`uv run python tools/cea_tablegen.py`（文件不存在）——三条死命令，静态阅读完全看不出来 | `backend/tests/unit/test_agents_contract.py` |
+| **附录 D 逐行同步** | 规格附录 D 与 `AGENTS.md` 各改各的（同一行 `见 §3.2` vs `见规格 §3.2`），物化产物与源脱钩 | 同上（`difflib` 输出可读 diff） |
+| **解析规则自检** | 命令解析正则若失效，"无引用"与"解析不到"无法区分，守卫会**永远跳过**而无人察觉 | 同上 |
+| **可写根落在临时区** | `artifacts_root() = data_root().parent / "artifacts"` 曾使产物落到 `%TEMP%\artifacts` 并跨会话留存，症状是"第二次跑测试莫名 `cache_hit` 为 True" | `backend/tests/unit/test_test_isolation.py` |
+| **夹具必须过产品校验器** | 夹具自己在轴处退化（`base_radius=1.0` 配 `arc(1→0)`）导致测试失败，当时的诱惑是**放宽断言**——正确处置是修夹具 | `backend/tests/unit/test_fixture_profiles.py` |
+| **夹具须显式归类** | 新增夹具若不表态"合法 / 合法但有警告 / 非法"，就会绕过上一条 | 同上（未归类的工厂直接失败） |
+
+**口径**：`warn` 与 `skip` 都计入通过，但必须在报告里显式留痕——本工程不允许存在
+"悄悄通过"的检查（与 §5.7「`is_valid() == True` 不等于模型正确」同源）。
+
 ---
 
 ## 14. 优化与权衡研究
@@ -2386,8 +2404,9 @@ uv run python tools/cea_tablegen.py --out data/tables/cea-grid-v1
 - /mcp/        自建领域 MCP Server
 - /skills/     Agent Skills（SKILL.md）
 - /specs/      跨模块接口与构型规格（先改这里，再改实现）
-- /data/       数据快照与 CEA 预计算表（不可变，禁止手改）
-- /tools/      cea_tablegen.py · gcat_etl.py · model_import.py · benchmark.py · preflight.py（预检 CLI，仅转调 aeroforge.selfcheck）
+- /data/       数据快照与 CEA 预计算表（不可变，禁止手改）+ `contours/<id>.json` 母线存档（M1 起由 `POST /api/geometry/contour` 写入）
+- /artifacts/  内容寻址产物：`<key>/{model.step, model_lod1.glb, model_lod2.glb, metrics.json, provenance.json}`，`key = sha256(canonical_json + kernel_version + spec_version)`（§16.3）。派生数据，不入库
+- /tools/      preflight.py（环境预检 CLI，仅转调 `aeroforge.selfcheck`——R-30 要求唯一实现）；cea_tablegen.py / gcat_etl.py / model_import.py / benchmark.py 随 M3–M5 落地，**当前不存在**
 - AeroForge-Spec.md  唯一真理源，架构级变更必须先改本文档
 
 > **交付形态**：Windows 桌面应用，**双击 exe 启动**，不是网页、不是在线服务（ADR-015）。
@@ -2408,10 +2427,10 @@ uv run python tools/cea_tablegen.py --out data/tables/cea-grid-v1
 - 测试：`uv run pytest -q` ；静态检查：`uv run ruff check . && uv run mypy backend`
 - 前端：`cd frontend && npm run dev` ；构建：`npm run build`
 - 前端检查：`npm run test && npm run typecheck`
-- 前端非功能（双通道一致性 / 资源释放 / 零物理公式 / token 合规）：`npm run test:nfr`
-- OpenAPI 契约刷新（后端接口变更后必跑）：`uv run python -c "import json,pathlib;from aeroforge.api.main import app;pathlib.Path('../specs/openapi.json').write_text(json.dumps(app.openapi(),ensure_ascii=False,indent=2)+chr(10),encoding='utf-8')"` 然后 `cd frontend && npm run gen:api`
-- 几何验证：`uv run python -m aeroforge.geometry.validate --model-id <id>`
-- 数据表生成：`uv run python tools/cea_tablegen.py --out data/tables/cea-grid-v1`
+- 前端非功能（双通道一致性 / 资源释放 / 零物理公式 / token 合规，规格 §13.6）：**当前并入 `npm run test`**（M1 已覆盖示意通道包围盒一致性与防抖调度器）；§13.6 余项（500 次重建的资源释放扫描、stylelint token 规则）尚未落地，落地后再拆出独立的 `test:nfr` 脚本（该脚本**当前不存在**）
+- OpenAPI 契约刷新（后端接口变更后必跑，在**仓库根**执行）：`uv run python -c "import json,pathlib;from aeroforge.api.main import app;pathlib.Path('specs/openapi.json').write_text(json.dumps(app.openapi(),ensure_ascii=False,indent=2)+chr(10),encoding='utf-8')"` 然后 `cd frontend && npm run gen:api`
+- 几何闭环验证（解析 vs 内核体积、双通道包络、母线往返）：`uv run pytest backend/tests/unit/test_geometry_closed_loop.py`
+- 工程自检门禁（文档命令可执行性 / 附录 D 同步 / 测试隔离 / 夹具合法性，规格 §13.8）：随 `uv run pytest -q` 一并运行
 - 桌面端本地运行（不经浏览器）：`uv run python desktop/launcher.py`
 - 桌面端打包（onedir，产物在 `dist-desktop/`）：`uv run pyinstaller desktop/packaging/aeroforge.spec`
 - 桌面端冒烟（冻结后仍能起后端 + 渲染 3D）：见规格 §16.2 退出准则
@@ -2422,6 +2441,8 @@ uv run python tools/cea_tablegen.py --out data/tables/cea-grid-v1
 - 不要在前端做任何几何运算（前端只消费 GLB）
 - **不要在前端实现任何物理公式或物理常量**（ADR-011；前端只格式化接口返回的数值）
 - **不要把示意网格用于计算、导出或作为几何依据**（ADR-012）
+- **不要把 `artifacts/` 下的内容寻址产物入库或手工改写**（可由参数 + 内核版本 + 规格版本重建；`provenance.json` 是溯源链本身，改动即断链）
+- **不要绕过 `cache/store.py` 的内容寻址缓存直连几何内核**（M1 已落地，§16 顺序铁律第 2 条要求缓存不得推迟，否则 M4–M6 迭代成本失控）
 - **不要在组件样式里写字面色值**，必须引用语义 token（ADR-013）
 - **不要在未经 AeroForge-Spec.md §1.7 裁决的情况下新增参数或系数**（裁决即规格，口径必须唯一）
 - **不要把 CEA 的 `Isp` / `Isp_vacuum` 字段当秒用**（ADR-014：该字段量纲是有效排气速度 m/s，转秒必须除以 `g₀`）
@@ -2435,6 +2456,7 @@ uv run python tools/cea_tablegen.py --out data/tables/cea-grid-v1
 - **不要在 `tools/preflight.py` 或任何别处复制一份预检实现**（唯一实现是 `backend/aeroforge/selfcheck.py`；R-30 要求预检随交付产物冻结，复制品不会进包）
 - **不要只写 PyInstaller hook 而不建立导入路径**（hook 仅对**导入图内出现过**的包执行；没有 `import` 回指该包时 hook 静默不执行，产物会缺库且构建不报错）
 - **不要把产物安装或解压到含非 ASCII 字符的路径**（NASA `cea` 的 C 扩展用窄字符 API 打开数据表，中文路径下必定加载失败，且报错会误导成"thermo.lib 找不到"；启动器已加前置判定返回码 5，见规格 §16.2 坑位 4。同理 M7 安装器默认路径**不得**选 `%LOCALAPPDATA%`——用户名可能含中文）
+- **不要为了让测试变绿而放宽断言或跳过守卫**（规格 §13.8：夹具非法就修夹具，产品校验器不得因测试而放宽；`warn` / `skip` 必须显式留痕）
 - 不要在计算路径内实时调用 CEA（只读预计算表）
 - 不要用网格（GLB/STL）作为任何计算的输入
 - 不要引入新依赖（须先走 AeroForge-Spec.md §3.4 审计流程）

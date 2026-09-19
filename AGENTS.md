@@ -11,7 +11,7 @@
 - /specs/      跨模块接口与构型规格（先改这里，再改实现）
 - /data/       数据快照与 CEA 预计算表（不可变，禁止手改）+ `contours/<id>.json` 母线存档（M1 起由 `POST /api/geometry/contour` 写入）
 - /artifacts/  内容寻址产物：`<key>/{model.step, model_lod1.glb, model_lod2.glb, metrics.json, provenance.json}`，`key = sha256(canonical_json + kernel_version + spec_version)`（§16.3）。派生数据，不入库
-- /tools/      cea_tablegen.py · gcat_etl.py · model_import.py · benchmark.py · preflight.py（预检 CLI，仅转调 aeroforge.selfcheck）
+- /tools/      preflight.py（环境预检 CLI，仅转调 `aeroforge.selfcheck`——R-30 要求唯一实现）；cea_tablegen.py / gcat_etl.py / model_import.py / benchmark.py 随 M3–M5 落地，**当前不存在**
 - AeroForge-Spec.md  唯一真理源，架构级变更必须先改本文档
 
 > **交付形态**：Windows 桌面应用，**双击 exe 启动**，不是网页、不是在线服务（ADR-015）。
@@ -32,10 +32,10 @@
 - 测试：`uv run pytest -q` ；静态检查：`uv run ruff check . && uv run mypy backend`
 - 前端：`cd frontend && npm run dev` ；构建：`npm run build`
 - 前端检查：`npm run test && npm run typecheck`
-- 前端非功能（双通道一致性 / 资源释放 / 零物理公式 / token 合规，规格 §13.6）：**当前并入 `npm run test`**（M1 已覆盖示意通道包围盒一致性与防抖调度器）；§13.6 余项（500 次重建的资源释放扫描、stylelint token 规则）尚未落地，落地后再拆出独立的 `test:nfr` 脚本——**不要调用不存在的 `npm run test:nfr`**
-- OpenAPI 契约刷新（后端接口变更后必跑）：`uv run python -c "import json,pathlib;from aeroforge.api.main import app;pathlib.Path('../specs/openapi.json').write_text(json.dumps(app.openapi(),ensure_ascii=False,indent=2)+chr(10),encoding='utf-8')"` 然后 `cd frontend && npm run gen:api`
-- 几何验证：`uv run python -m aeroforge.geometry.validate --model-id <id>`
-- 数据表生成：`uv run python tools/cea_tablegen.py --out data/tables/cea-grid-v1`
+- 前端非功能（双通道一致性 / 资源释放 / 零物理公式 / token 合规，规格 §13.6）：**当前并入 `npm run test`**（M1 已覆盖示意通道包围盒一致性与防抖调度器）；§13.6 余项（500 次重建的资源释放扫描、stylelint token 规则）尚未落地，落地后再拆出独立的 `test:nfr` 脚本（该脚本**当前不存在**）
+- OpenAPI 契约刷新（后端接口变更后必跑，在**仓库根**执行）：`uv run python -c "import json,pathlib;from aeroforge.api.main import app;pathlib.Path('specs/openapi.json').write_text(json.dumps(app.openapi(),ensure_ascii=False,indent=2)+chr(10),encoding='utf-8')"` 然后 `cd frontend && npm run gen:api`
+- 几何闭环验证（解析 vs 内核体积、双通道包络、母线往返）：`uv run pytest backend/tests/unit/test_geometry_closed_loop.py`
+- 工程自检门禁（文档命令可执行性 / 附录 D 同步 / 测试隔离 / 夹具合法性，规格 §13.8）：随 `uv run pytest -q` 一并运行
 - 桌面端本地运行（不经浏览器）：`uv run python desktop/launcher.py`
 - 桌面端打包（onedir，产物在 `dist-desktop/`）：`uv run pyinstaller desktop/packaging/aeroforge.spec`
 - 桌面端冒烟（冻结后仍能起后端 + 渲染 3D）：见规格 §16.2 退出准则
@@ -53,7 +53,7 @@
 - **不要把 CEA 的 `Isp` / `Isp_vacuum` 字段当秒用**（ADR-014：该字段量纲是有效排气速度 m/s，转秒必须除以 `g₀`）
 - **不要在 CEA 产物列表中把凝相物种放在中部**（ADR-014：固定"纯气相 + 凝相仅置于末位"；任何求解结果必须先过健全性门禁，禁止只看 `last_error`）
 - **不要用发行名 `cadquery-ocp` 判依赖缺失**（实际发行名为 `cadquery-ocp-novtk`）
-- **不要把 `typescript` 升到 7.x**（不再暴露 Compiler API，`npm run gen:api` 会在模块加载期崩溃，见规格 §3.2 / R-31）
+- **不要把 `typescript` 升到 7.x**（不再暴露 Compiler API，`npm run gen:api` 会在模块加载期崩溃，见 §3.2 / R-31）
 - **不要把 npm 缓存改回系统目录**（本机沙箱拒绝写入，`frontend/.npmrc` 的 `cache=../.tools/npm-cache` 是必需项，不是优化）
 - **不要把交付形态做成"浏览器访问 localhost"**（交付物是**双击即用的 exe**，ADR-015）
 - **不要在前端硬编码主机名或端口**（必须用同源相对路径 `/api/...`、`/ws/...`；打包后服务跑在运行时选定的动态端口上）
@@ -61,6 +61,7 @@
 - **不要在 `tools/preflight.py` 或任何别处复制一份预检实现**（唯一实现是 `backend/aeroforge/selfcheck.py`；R-30 要求预检随交付产物冻结，复制品不会进包）
 - **不要只写 PyInstaller hook 而不建立导入路径**（hook 仅对**导入图内出现过**的包执行；没有 `import` 回指该包时 hook 静默不执行，产物会缺库且构建不报错）
 - **不要把产物安装或解压到含非 ASCII 字符的路径**（NASA `cea` 的 C 扩展用窄字符 API 打开数据表，中文路径下必定加载失败，且报错会误导成"thermo.lib 找不到"；启动器已加前置判定返回码 5，见规格 §16.2 坑位 4。同理 M7 安装器默认路径**不得**选 `%LOCALAPPDATA%`——用户名可能含中文）
+- **不要为了让测试变绿而放宽断言或跳过守卫**（规格 §13.8：夹具非法就修夹具，产品校验器不得因测试而放宽；`warn` / `skip` 必须显式留痕）
 - 不要在计算路径内实时调用 CEA（只读预计算表）
 - 不要用网格（GLB/STL）作为任何计算的输入
 - 不要引入新依赖（须先走 AeroForge-Spec.md §3.4 审计流程）

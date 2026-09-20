@@ -75,8 +75,13 @@ def normalize_name(name: str) -> str:
 _NOTE_INDEX = "级序号：自下而上编号（§6.1 约定）；结构元数据，非型号数据"
 _NOTE_WALL = "工程惯例估算（公开资料无权威壁厚；待材料库与 M4 校核复核）"
 _NOTE_TANK_WALL = "工程惯例估算（与该级壁厚同口径）"
-_NOTE_FILL = "对照任务的标称加注状态：加注量即公开推进剂质量（工程惯例口径）"
-_NOTE_TANK_FILL = "同该级加注比例（对照任务标称加注状态）"
+_NOTE_FILL = (
+    "有效加注比例 = 公开推进剂质量 / 几何满箱容积（按 §13.2 公开分项反算）："
+    "几何满箱把「级长 − 发动机高度」全计为贮箱，含发动机舱 / 箱间段 / 裙段等"
+    "非贮箱长度，故该值 < 1——它是固定火箭质量账命中公开分项的标定参数"
+    "（性能评估链的推进剂账入口，§8.7）"
+)
+_NOTE_TANK_FILL = "同该级有效加注比例（与 Stage.fill_fraction 同源同值）"
 _NOTE_EFFICIENCY = "1.0：公开比冲为手册/用户指南标称值，不再叠加折减（避免双计）"
 _NOTE_SITE_ALT = "海岸发射场海拔数米（公开资料约 3–10 m；工程惯例取 3 m）"
 _NOTE_AZIMUTH = "向东发射的标准方位角 90°（公开任务剖面；工程惯例取值）"
@@ -155,6 +160,12 @@ _F9_S1_PROP_KG = 411_000.0
 _F9_S2_DRY_KG = 4_000.0
 _F9_S2_PROP_KG = 107_500.0
 
+#: 有效加注比例（公开加注量 / 几何满箱，perf.mass 几何解析账 → §13.2 公开分项；
+#: 2026-09-20 按 M4 基准回归标定）：一级 411,000/458,731 ≈ 0.8959、
+#: 二级 107,500/114,411 ≈ 0.9396。
+_F9_S1_FILL = 0.8959
+_F9_S2_FILL = 0.9396
+
 
 def _merlin_1d() -> Engine:
     """Merlin 1D（海平面型）：燃气发生器循环，用户指南口径的公开值。"""
@@ -200,13 +211,15 @@ def _f9_stage1() -> Stage:
         wall_thickness_m=0.006,
         material="al-li-2198",
         structure_coefficient=_F9_S1_DRY_KG / (_F9_S1_DRY_KG + _F9_S1_PROP_KG),
-        fill_fraction=1.0,
+        fill_fraction=_F9_S1_FILL,
         engine_count=9,
         engine=_merlin_1d(),
         engine_height_m=3.0,
         interstage_type="cold_staging",
         isp_source="default",
-        geometry=_geometry(material="al-li-2198", wall_thickness_m=0.006, fill_fraction=1.0),
+        geometry=_geometry(
+            material="al-li-2198", wall_thickness_m=0.006, fill_fraction=_F9_S1_FILL
+        ),
     )
 
 
@@ -220,13 +233,15 @@ def _f9_stage2() -> Stage:
         wall_thickness_m=0.004,
         material="al-li-2198",
         structure_coefficient=_F9_S2_DRY_KG / (_F9_S2_DRY_KG + _F9_S2_PROP_KG),
-        fill_fraction=1.0,
+        fill_fraction=_F9_S2_FILL,
         engine_count=1,
         engine=_merlin_vac(),
         engine_height_m=4.5,
         interstage_type="none",
         isp_source="default",
-        geometry=_geometry(material="al-li-2198", wall_thickness_m=0.004, fill_fraction=1.0),
+        geometry=_geometry(
+            material="al-li-2198", wall_thickness_m=0.004, fill_fraction=_F9_S2_FILL
+        ),
     )
 
 
@@ -342,6 +357,13 @@ _SV_SII_PROP_KG = 443_000.0
 _SV_SIVB_DRY_KG = 13_500.0
 _SV_SIVB_PROP_KG = 106_600.0
 
+#: 有效加注比例（公开加注量 / 几何满箱，perf.mass 几何解析账 → §13.2 公开分项；
+#: 2026-09-20 按 M4 基准回归标定）：S-IC 2,149,500/3,492,249 ≈ 0.6155、
+#: S-II 443,000/886,589 ≈ 0.4997、S-IVB 106,600/251,290 ≈ 0.4241。
+_SV_SIC_FILL = 0.6155
+_SV_SII_FILL = 0.4997
+_SV_SIVB_FILL = 0.4241
+
 
 def _f1() -> Engine:
     """F-1：单台海平面推力最大的燃气发生器循环发动机（公开手册口径）。"""
@@ -391,13 +413,13 @@ def saturnv_vehicle() -> Vehicle:
         wall_thickness_m=0.012,
         material="al-2219",
         structure_coefficient=_SV_SIC_DRY_KG / (_SV_SIC_DRY_KG + _SV_SIC_PROP_KG),
-        fill_fraction=1.0,
+        fill_fraction=_SV_SIC_FILL,
         engine_count=5,
         engine=_f1(),
         engine_height_m=5.6,
         interstage_type="cold_staging",
         isp_source="default",
-        geometry=_geometry(material="al-2219", wall_thickness_m=0.012, fill_fraction=1.0),
+        geometry=_geometry(material="al-2219", wall_thickness_m=0.012, fill_fraction=_SV_SIC_FILL),
     )
     stage2 = Stage(
         index=2,
@@ -407,7 +429,7 @@ def saturnv_vehicle() -> Vehicle:
         wall_thickness_m=0.010,
         material="al-2219",
         structure_coefficient=_SV_SII_DRY_KG / (_SV_SII_DRY_KG + _SV_SII_PROP_KG),
-        fill_fraction=1.0,
+        fill_fraction=_SV_SII_FILL,
         engine_count=5,
         engine=_j2(),
         engine_height_m=3.4,
@@ -416,7 +438,7 @@ def saturnv_vehicle() -> Vehicle:
         geometry=_geometry(
             material="al-2219",
             wall_thickness_m=0.010,
-            fill_fraction=1.0,
+            fill_fraction=_SV_SII_FILL,
             common_bulkhead=True,
             insulation_m=0.05,
         ),
@@ -429,7 +451,7 @@ def saturnv_vehicle() -> Vehicle:
         wall_thickness_m=0.006,
         material="al-2219",
         structure_coefficient=_SV_SIVB_DRY_KG / (_SV_SIVB_DRY_KG + _SV_SIVB_PROP_KG),
-        fill_fraction=1.0,
+        fill_fraction=_SV_SIVB_FILL,
         engine_count=1,
         engine=_j2(),
         engine_height_m=3.4,
@@ -438,7 +460,7 @@ def saturnv_vehicle() -> Vehicle:
         geometry=_geometry(
             material="al-2219",
             wall_thickness_m=0.006,
-            fill_fraction=1.0,
+            fill_fraction=_SV_SIVB_FILL,
             common_bulkhead=True,
             insulation_m=0.05,
             tank_arrangement="fuel_upper",
@@ -588,6 +610,14 @@ _CZ5_CORE2_PROP_KG = 23_000.0
 _CZ5_BOOSTER_DRY_KG = 11_000.0
 _CZ5_BOOSTER_PROP_KG = 145_000.0
 
+#: 有效加注比例（公开加注量 / 几何满箱，perf.mass 几何解析账 → §13.2 公开分项；
+#: 2026-09-20 按 M4 基准回归标定）：芯一级 158,000/217,016 ≈ 0.7281、
+#: 芯二级 23,000/108,523 ≈ 0.2119（真实芯二级大部分级长为发动机舱与级间段）、
+#: 助推器 145,000/229,642 ≈ 0.6314。
+_CZ5_CORE1_FILL = 0.7281
+_CZ5_CORE2_FILL = 0.2119
+_CZ5_BOOSTER_FILL = 0.6314
+
 #: 长征五号数值的统一来源行（§6.5 强制来源声明；估算项逐条另行标注）。
 _SOURCE_CZ5 = "中国航天科技集团公开资料整理（工程典型值）"
 
@@ -658,13 +688,15 @@ def cz5_vehicle() -> Vehicle:
         wall_thickness_m=0.008,
         material="al-li-2198",
         structure_coefficient=_CZ5_CORE1_DRY_KG / (_CZ5_CORE1_DRY_KG + _CZ5_CORE1_PROP_KG),
-        fill_fraction=1.0,
+        fill_fraction=_CZ5_CORE1_FILL,
         engine_count=2,
         engine=_yf77(),
         engine_height_m=3.2,
         interstage_type="hot_staging",
         isp_source="default",
-        geometry=_geometry(material="al-li-2198", wall_thickness_m=0.008, fill_fraction=1.0),
+        geometry=_geometry(
+            material="al-li-2198", wall_thickness_m=0.008, fill_fraction=_CZ5_CORE1_FILL
+        ),
     )
     core2 = Stage(
         index=2,
@@ -674,13 +706,15 @@ def cz5_vehicle() -> Vehicle:
         wall_thickness_m=0.006,
         material="al-li-2198",
         structure_coefficient=_CZ5_CORE2_DRY_KG / (_CZ5_CORE2_DRY_KG + _CZ5_CORE2_PROP_KG),
-        fill_fraction=1.0,
+        fill_fraction=_CZ5_CORE2_FILL,
         engine_count=2,
         engine=_yf75d(),
         engine_height_m=2.2,
         interstage_type="none",
         isp_source="default",
-        geometry=_geometry(material="al-li-2198", wall_thickness_m=0.006, fill_fraction=1.0),
+        geometry=_geometry(
+            material="al-li-2198", wall_thickness_m=0.006, fill_fraction=_CZ5_CORE2_FILL
+        ),
     )
     booster_stage = Stage(
         index=1,
@@ -690,13 +724,15 @@ def cz5_vehicle() -> Vehicle:
         wall_thickness_m=0.006,
         material="al-2219",
         structure_coefficient=_CZ5_BOOSTER_DRY_KG / (_CZ5_BOOSTER_DRY_KG + _CZ5_BOOSTER_PROP_KG),
-        fill_fraction=1.0,
+        fill_fraction=_CZ5_BOOSTER_FILL,
         engine_count=2,
         engine=_yf100(),
         engine_height_m=3.0,
         interstage_type="none",
         isp_source="default",
-        geometry=_geometry(material="al-2219", wall_thickness_m=0.006, fill_fraction=1.0),
+        geometry=_geometry(
+            material="al-2219", wall_thickness_m=0.006, fill_fraction=_CZ5_BOOSTER_FILL
+        ),
     )
     return _gate(
         Vehicle(

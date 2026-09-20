@@ -56,6 +56,25 @@ _TWR_LOW, _TWR_HIGH = 1.2, 1.6
 #: 重力损失：一级燃时参考值 [s]（现役中型运载典型量级；工程惯例，非权威来源）。
 _BURN_TIME_REF_S = 160.0
 
+#: 重力损失：燃时因子上限（±15% 封顶，1.15×160 = 184 s）——典型构型燃时域上界；
+#: 超过该界的燃时由 :func:`long_burn_surcharge_km_s` 以独立附加项继续累积（见其
+#: docstring：锚定表按典型构型标定，超长燃时构型的预算缺口不在本因子内静默外推）。
+_BURN_TIME_FACTOR_CAP = 1.15
+
+#: 长燃时附加项起算燃时 [s]（= 1.15×160：与 :func:`gravity_loss` 的燃时因子封顶
+#: 无缝衔接——封顶截断处即附加项起算处，不重复也不留缝）。
+_BURN_SURCHARGE_ONSET_S = _BURN_TIME_FACTOR_CAP * _BURN_TIME_REF_S
+
+#: 长燃时附加项系数（**按 §13.2 三基准反标定（2026-09-20）**，1 个自由度）：
+#: k_g=0.70 同时吸收两个被锚定表（按典型构型标定）遗漏的效应——
+#: ① 超长一级燃时的重力损失线性累积（重力损失 ∝ ∫g·sinθ dt，sinθ 随爬升衰减，
+#:   故线性斜率打折）；
+#: ② 芯级发动机（氢氧大喷管）在稠密大气段的海平面比冲折减——账本为真空 Isp
+#:   口径，长燃时构型的大气段工作时占比显著更高。
+#: 标定判据：CZ-5（芯一级燃时 480 s）LEO 运力命中公开 25 t ±15%，且 F9 / 土星五号
+#: （燃时 150/164 s，域内零附加）不受影响（§13.2 三基准全过 <15%）。
+_BURN_SURCHARGE_COEFF = 0.70
+
 #: 气动损失：长径比标定域（工程惯例，非权威来源）。
 _AERO_LD_LOW, _AERO_LD_HIGH = 8.0, 15.0
 
@@ -136,6 +155,16 @@ class DvRequirement:
 # ---------------------------------------------------------------------------
 
 
+def _gravity_base_km_s(twr: float) -> float:
+    """重力损失基值 [km/s]：TWR∈[1.2, 1.6] 内由 1.5 线性降至 1.0（越域 clamp）。
+
+    :func:`gravity_loss` 与 :func:`long_burn_surcharge_km_s` 共用同一基值曲线
+    （同一物理量的两条作用路径，不得各写一份漂移）。
+    """
+    clamped = min(max(twr, _TWR_LOW), _TWR_HIGH)
+    return 1.5 - 0.5 * (clamped - _TWR_LOW) / (_TWR_HIGH - _TWR_LOW)
+
+
 def gravity_loss(twr: float, burn_time_s: float) -> LossItem:
     """重力损失（§8.6 L1：典型 1.0–1.5 km/s）。
 
@@ -144,10 +173,13 @@ def gravity_loss(twr: float, burn_time_s: float) -> LossItem:
     - 一级燃时↑（在重力场中烧得更久）⟹ 损失↑：以 160 s 为参考（现役中型运载
       一级典型燃时，工程惯例）做 ±15% 封顶的线性修正；
     - TWR 越出 [1.2, 1.6] 标定域：取边界值并**显式 warning**（不静默外推）。
+
+    ⚠ 燃时因子在 184 s（1.15×160）处封顶——**超长燃时构型的额外预算**不由本函数
+    外推，由 :func:`long_burn_surcharge_km_s` 以独立附加项给出（运力表锚定口径），
+    本瀑布保持 §8.6 表的典型量级域。
     """
-    clamped = min(max(twr, _TWR_LOW), _TWR_HIGH)
-    base = 1.5 - 0.5 * (clamped - _TWR_LOW) / (_TWR_HIGH - _TWR_LOW)
-    time_factor = min(max(burn_time_s / _BURN_TIME_REF_S, 0.85), 1.15)
+    base = _gravity_base_km_s(twr)
+    time_factor = min(max(burn_time_s / _BURN_TIME_REF_S, 0.85), _BURN_TIME_FACTOR_CAP)
     warning = None
     if not (_TWR_LOW <= twr <= _TWR_HIGH):
         warning = (
@@ -160,6 +192,48 @@ def gravity_loss(twr: float, burn_time_s: float) -> LossItem:
         assumption=(
             f"重力损失：L1 参数化（TWR={twr:.3f}、一级燃时 {burn_time_s:.0f} s；"
             "系数工程惯例、非权威来源，§8.6 L1）"
+        ),
+    )
+
+
+def long_burn_surcharge_km_s(twr_liftoff: float, burn_time_s: float) -> LossItem:
+    """长燃时构型的 ΔV 预算附加项 [km/s]（运力表锚定口径的构型修正）。
+
+    §8.6 锚定表（LEO 9.4–9.65 等）的损失预算按**典型构型**标定（一级燃时
+    ≈160 s 的两级串联）。一级燃时超过 184 s（:func:`gravity_loss` 燃时因子的
+    封顶处）的构型——如 CZ-5 氢氧芯一级 480 s——有两个超出典型预算的效应：
+
+    ① **重力损失线性累积**：动力飞行时间近乎 3 倍于典型值，∫g·sinθ dt 的
+       超出部分继续累积（sinθ 随爬升衰减，斜率打折）；
+    ② **大气内比冲折减**：账本为真空 Isp 口径，超长燃时芯级在稠密大气段的
+       工作时间占比显著更高（海平面 Isp 缺口更大）。
+
+    附加项 ``Δ = k_g × 重力基值(TWR) × (t − 184 s) / 160 s``（t > 184 s 时）：
+    - 典型域内（t ≤ 184 s）**恒为 0**——锚定表自足，既有口径与趋势断言不受扰动；
+    - k_g=0.70（**按 §13.2 三基准反标定（2026-09-20）**）：CZ-5 LEO 命中公开
+      25 t ±15%，F9 / 土星五号（燃时 150/164 s）零附加不受影响；
+    - 自由度声明：k_g 是本项唯一标定系数（起算点 184 s 是既有燃时因子封顶的
+      无缝衔接，不是新拟合参数）。
+    """
+    if burn_time_s <= _BURN_SURCHARGE_ONSET_S:
+        return LossItem(
+            value_km_s=0.0,
+            assumption=(
+                f"长燃时附加：一级燃时 {burn_time_s:.0f} s ≤ {_BURN_SURCHARGE_ONSET_S:.0f} s"
+                "（典型域内），锚定表预算自足——附加项为 0（§8.6 L1）"
+            ),
+        )
+    base = _gravity_base_km_s(twr_liftoff)
+    value = (
+        _BURN_SURCHARGE_COEFF * base * (burn_time_s - _BURN_SURCHARGE_ONSET_S) / _BURN_TIME_REF_S
+    )
+    return LossItem(
+        value_km_s=value,
+        assumption=(
+            f"长燃时附加：一级燃时 {burn_time_s:.0f} s 超过 {_BURN_SURCHARGE_ONSET_S:.0f} s"
+            f"（TWR={twr_liftoff:.3f}）——超长燃时构型的重力累积与大气内比冲折减，"
+            f"Δ = {value:.2f} km/s（k_g={_BURN_SURCHARGE_COEFF}，按 §13.2 三基准反标定"
+            "（2026-09-20）；系数工程惯例、非权威来源）"
         ),
     )
 
@@ -401,6 +475,7 @@ __all__ = [
     "compatibility_factor",
     "gravity_loss",
     "ideal_orbit_dv_km_s",
+    "long_burn_surcharge_km_s",
     "orbit_dv_requirement",
     "rotation_assist_km_s",
     "steering_loss",

@@ -623,7 +623,7 @@
           "jobs"
         ],
         "summary": "Get Job",
-        "description": "查询作业快照。作业不存在时返回 404。",
+        "description": "查询作业快照（几何 / MC 两级执行器共用同一份作业簿，§9.1）。",
         "operationId": "get_job_api_jobs__job_id__get",
         "parameters": [
           {
@@ -833,13 +833,55 @@
         }
       }
     },
+    "/api/sizing/sequence": {
+      "post": {
+        "tags": [
+          "sizing"
+        ],
+        "summary": "Solve Sequence",
+        "description": "任务时序与质量事件耦合（§8.9：solve → 事件账 + 回收代价回写，同步）。\n\n时序（Sequence 层）缺失时按构型合成缺省事件线；回收（Recovery 层）启用时\n三项独立代价进 σ_eff 回写（规则 1 / 3），回收点火的运力代价由\n``capacity_penalty_kg`` 量化（「直接减少运力」，§8.9 表）。抛罩时刻动压 /\nq̇ 超限只警告不中止（规则 2——时序是用户权威）。",
+        "operationId": "solve_sequence_api_sizing_sequence_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SizingSequenceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SequenceReport"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/perf/evaluate": {
       "post": {
         "tags": [
           "perf"
         ],
         "summary": "Evaluate Performance",
-        "description": "性能评估（§8.6 L1 损失 + OI-38 运力表 + OI-23 ΔV 瀑布；同步纯数值）。\n\n硬约束违反沿用参数域拒绝口径（``PARAMS_CONSTRAINT_VIOLATION`` → 422，与\n``/api/sizing/solve`` 同判据）；评估域问题（轨道要素缺失 / 构型对目标 ΔV\n不可达）由 :class:`~aeroforge.errors.PerfError` 给出 422。缓存键 =\nsha256(canonical_json(vehicle) + spec_version)（§9.2），命中直接同步返回。",
+        "description": "性能评估（§8.6 L1 损失 + OI-38 运力表 + OI-23 ΔV 瀑布；同步纯数值）。\n\n两阶段契约（OI-25）：点值同步返回后按 ``mc`` 开关自动投递 MC 作业（阶段②，\n计算侧进程池）——**同步段不调用 MC**（规则 3），投递只是微秒级入队。\n硬约束违反沿用参数域拒绝口径（``PARAMS_CONSTRAINT_VIOLATION`` → 422，与\n``/api/sizing/solve`` 同判据）；评估域问题（轨道要素缺失 / 构型对目标 ΔV\n不可达）由 :class:`~aeroforge.errors.PerfError` 给出 422。缓存键 =\nsha256(canonical_json(vehicle) + spec_version)（§9.2），命中直接同步返回。",
         "operationId": "evaluate_performance_api_perf_evaluate_post",
         "requestBody": {
           "content": {
@@ -858,6 +900,48 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PerfEvaluateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/uncertainty/mc": {
+      "post": {
+        "tags": [
+          "uncertainty"
+        ],
+        "summary": "Submit Mc",
+        "description": "投递 Monte Carlo 区间作业（§8.7 / §10.1：异步——10 000 样本是秒级）。\n\n硬约束违反沿用参数域拒绝口径（``PARAMS_CONSTRAINT_VIOLATION`` → 422）；\n样本数越界由 Schema 值域拒绝（422）。同 ``(vehicle, samples, seed)`` 命中\n``mc.json`` 缓存时作业立即成功（§9.2 内容寻址）。",
+        "operationId": "submit_mc_api_uncertainty_mc_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McResponse"
                 }
               }
             }
@@ -2166,10 +2250,13 @@
           "solid",
           "mesh",
           "step",
+          "sampling",
+          "evaluating",
+          "summarizing",
           "done"
         ],
         "title": "JobStage",
-        "description": "§9.3 的进度阶段（M1 子集：几何链 ``meridian → solid → mesh → step → done``）。"
+        "description": "§9.3 的进度阶段。\n\n几何链 ``meridian → solid → mesh → step → done``；MC 计算链\n``sampling → evaluating → summarizing → done``（M4 第四片补入，前端按字符串\n消费、新增枚举值为增量变更）。"
       },
       "JobStatus": {
         "type": "string",
@@ -2468,6 +2555,68 @@
         ],
         "title": "MaterialsResponse",
         "description": "``GET /api/catalog/materials`` 的响应体。"
+      },
+      "McRequest": {
+        "properties": {
+          "vehicle": {
+            "$ref": "#/components/schemas/Vehicle",
+            "description": "飞行器参数（§6.1 全量；Mission 内嵌其中）"
+          },
+          "mission": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Mission"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "任务覆写（给出时替换 vehicle.mission——轨道 / 倾角 / 损失系数 / 发射场）"
+          },
+          "samples": {
+            "type": "integer",
+            "maximum": 100000.0,
+            "minimum": 1000.0,
+            "title": "Samples",
+            "description": "样本数（§8.7：默认 10000，可配 1000–100000，LHS）",
+            "default": 10000
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed",
+            "description": "随机种子（复现性：同 seed 两跑逐字节一致；省略 = 飞行器哈希派生的确定性种子）"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "vehicle"
+        ],
+        "title": "McRequest",
+        "description": "``POST /api/uncertainty/mc`` 的请求体。"
+      },
+      "McResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id",
+            "description": "MC 作业 id：GET /api/jobs/{id} 轮询或 /ws/jobs/{id} 订阅"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id"
+        ],
+        "title": "McResponse",
+        "description": "``POST /api/uncertainty/mc`` 的响应体（异步受理回执）。"
       },
       "MeridianProfile": {
         "properties": {
@@ -2838,6 +2987,12 @@
           "vehicle": {
             "$ref": "#/components/schemas/Vehicle",
             "description": "飞行器参数（§6.1 全量；Mission 层的目标轨道 / 倾角 / 损失系数与 launch_site 内嵌其中——纬度是自转加成与转向损失的唯一输入，§8.6）"
+          },
+          "mc": {
+            "type": "boolean",
+            "title": "Mc",
+            "description": "是否自动投递 MC 区间作业（OI-25 阶段②）：true（默认）→ 响应带 interval_pending=true 与 mc_job_id；false → 不投递、无区间作业",
+            "default": true
           }
         },
         "additionalProperties": false,
@@ -2875,6 +3030,24 @@
             "type": "boolean",
             "title": "Cache Hit",
             "description": "本次结果是否来自缓存命中（§9.2）"
+          },
+          "interval_pending": {
+            "type": "boolean",
+            "title": "Interval Pending",
+            "description": "MC 区间是否在途（OI-25 阶段①标记）：true = 已投递 mc_job_id、区间待阶段②覆盖；mc=false 或区间已到时为 false——前端据此决定区间列占位态还是数字",
+            "default": false
+          },
+          "mc_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mc Job Id",
+            "description": "自动投递的 MC 作业 id（经 GET /api/jobs/{id} / WS 取回阶段②；mc=false 为 null）"
           }
         },
         "type": "object",
@@ -2886,7 +3059,7 @@
           "cache_hit"
         ],
         "title": "PerfEvaluateResponse",
-        "description": "``POST /api/perf/evaluate`` 的响应体（点值，无 interval——归第四片 MC）。"
+        "description": "``POST /api/perf/evaluate`` 的响应体（阶段①：点值 + MC 作业挂点）。"
       },
       "PointEvaluation": {
         "properties": {
@@ -2992,12 +3165,75 @@
             "description": "回收系统质量代价",
             "display_unit": "t",
             "unit": "kg"
+          },
+          "reinforcement_mass_kg": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reinforcement Mass Kg",
+            "description": "增强结构与热防护质量代价（§8.9 规则 3 第三项：再入加固 / 热防护的惯性代价）",
+            "display_unit": "t",
+            "unit": "kg"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "title": "Recovery",
-        "description": "回收与复用（§6.1 Recovery 层）。"
+        "description": "回收与复用（§6.1 Recovery 层；§8.9 规则 3 的三项独立代价挂点）。\n\nQA-4 裁定：本层 M2 起只存结构不接计算；M4 第四片（§8.9 任务时序耦合）\n起被 :mod:`aeroforge.perf.sequence` 消费——三项代价**独立建模、不得合并**：\n回收系统质量（本体外挂设备）· 着陆推进剂余量（反推着陆的预留推进剂，\n直接减运力）· 增强结构与热防护质量（再入加固的惯性代价）。"
+      },
+      "RecoveryCosts": {
+        "properties": {
+          "system_mass_kg": {
+            "type": "number",
+            "title": "System Mass Kg",
+            "description": "回收系统自身质量（Recovery.system_mass_kg）"
+          },
+          "reinforcement_mass_kg": {
+            "type": "number",
+            "title": "Reinforcement Mass Kg",
+            "description": "增强结构与热防护质量（Recovery.reinforcement_mass_kg）"
+          },
+          "landing_propellant_margin_fraction": {
+            "type": "number",
+            "title": "Landing Propellant Margin Fraction",
+            "description": "着陆推进剂余量份额（占该级满装量；Recovery 层）"
+          },
+          "landing_propellant_kg": {
+            "type": "number",
+            "title": "Landing Propellant Kg",
+            "description": "预留着陆推进剂（kg = 份额 × 满装量）——回收点火消耗、直接减运力"
+          },
+          "inert_cost_kg": {
+            "type": "number",
+            "title": "Inert Cost Kg",
+            "description": "惯性代价合计（系统 + 增强结构/热防护；预留是推进剂、另列不计入）"
+          },
+          "recovered_stage_indices": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Recovered Stage Indices",
+            "description": "回收级号清单"
+          }
+        },
+        "type": "object",
+        "required": [
+          "system_mass_kg",
+          "reinforcement_mass_kg",
+          "landing_propellant_margin_fraction",
+          "landing_propellant_kg",
+          "inert_cost_kg",
+          "recovered_stage_indices"
+        ],
+        "title": "RecoveryCosts",
+        "description": "回收三项独立代价（§8.9 规则 3：独立建模、不得合并）。"
       },
       "RocketParseResult": {
         "properties": {
@@ -3256,6 +3492,187 @@
         "title": "SequenceEvent",
         "description": "一个任务时序事件（§6.1 Sequence 层）。"
       },
+      "SequenceEventReport": {
+        "properties": {
+          "event": {
+            "type": "string",
+            "title": "Event",
+            "description": "事件类型：ignition / stage_separation / fairing_jettison / orbit_insertion / landing"
+          },
+          "time_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time S",
+            "description": "相对时刻（s；用户提供或工程估计）"
+          },
+          "stage_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage Index",
+            "description": "关联级号（可空）"
+          },
+          "account": {
+            "type": "string",
+            "enum": [
+              "main_stack",
+              "recovered_stage"
+            ],
+            "title": "Account",
+            "description": "记账主体：主账（上升栈）/ 被回收级（再入—着陆段独立账）"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "description": "质量效应与 ΔV 影响说明（§8.9 表口径）"
+          },
+          "mass_before_kg": {
+            "type": "number",
+            "title": "Mass Before Kg",
+            "description": "事件前质量（kg）"
+          },
+          "mass_after_kg": {
+            "type": "number",
+            "title": "Mass After Kg",
+            "description": "事件后质量（kg）"
+          },
+          "mass_delta_kg": {
+            "type": "number",
+            "title": "Mass Delta Kg",
+            "description": "质量突变（kg；负 = 质量离开该账）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "event",
+          "time_s",
+          "account",
+          "description",
+          "mass_before_kg",
+          "mass_after_kg",
+          "mass_delta_kg"
+        ],
+        "title": "SequenceEventReport",
+        "description": "一个时序事件的账目行（§8.9 表：事件 + 质量效应 + 对 ΔV 的影响）。"
+      },
+      "SequenceReport": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/SequenceEventReport"
+            },
+            "type": "array",
+            "title": "Events",
+            "description": "按时间序的事件账（§8.9 表）"
+          },
+          "glow_kg": {
+            "type": "number",
+            "title": "Glow Kg",
+            "description": "时序耦合（回写 §8.5）后的 GLOW（kg）"
+          },
+          "glow_kg_expendable": {
+            "type": "number",
+            "title": "Glow Kg Expendable",
+            "description": "未计回收代价的 GLOW（kg，对照基准）"
+          },
+          "payload_mass_kg": {
+            "type": "number",
+            "title": "Payload Mass Kg",
+            "description": "设计载荷（kg）"
+          },
+          "fairing_mass_kg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fairing Mass Kg",
+            "description": "整流罩质量（kg；未给整流罩直径为 null）"
+          },
+          "twr_liftoff": {
+            "type": "number",
+            "title": "Twr Liftoff",
+            "description": "起飞推重比（海平面总推力 / 时序后 GLOW，§6.5）"
+          },
+          "recovery": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RecoveryCosts"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "回收三项代价（未启用回收为 null）"
+          },
+          "payload_capacity_expendable_kg": {
+            "type": "number",
+            "title": "Payload Capacity Expendable Kg",
+            "description": "最终火箭全燃烧（不回收）的运力点值（kg）"
+          },
+          "payload_capacity_recoverable_kg": {
+            "type": "number",
+            "title": "Payload Capacity Recoverable Kg",
+            "description": "最终火箭回收模式（预留不参与上升）的运力点值（kg）"
+          },
+          "capacity_penalty_kg": {
+            "type": "number",
+            "title": "Capacity Penalty Kg",
+            "description": "回收代价的运力损失（kg）= expendable − recoverable ≥ 0（§8.9：直接减少运力）"
+          },
+          "writeback_iterations": {
+            "type": "integer",
+            "title": "Writeback Iterations",
+            "description": "回写 §8.5 的重跑次数（无回收代价 = 0；规则 1 的执行痕迹）"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "description": "动压超限 / TWR 越限 / 代价缺省等警告"
+          },
+          "provenance": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Provenance",
+            "description": "溯源账目（公式 / 锚定值 / 口径）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "events",
+          "glow_kg",
+          "glow_kg_expendable",
+          "payload_mass_kg",
+          "twr_liftoff",
+          "payload_capacity_expendable_kg",
+          "payload_capacity_recoverable_kg",
+          "capacity_penalty_kg",
+          "writeback_iterations",
+          "warnings",
+          "provenance"
+        ],
+        "title": "SequenceReport",
+        "description": "``POST /api/sizing/sequence`` 响应体（§8.9 / §10.1：同步）。"
+      },
       "SizingResult": {
         "properties": {
           "glow_kg": {
@@ -3331,6 +3748,44 @@
         ],
         "title": "SizingResult",
         "description": "``POST /api/sizing/solve`` 的响应体（§8.5 / §10.1：同步、纯数值）。"
+      },
+      "SizingSequenceRequest": {
+        "properties": {
+          "vehicle": {
+            "$ref": "#/components/schemas/Vehicle",
+            "description": "飞行器参数（§6.1 全量；Sequence 层事件与 Recovery 层代价配置内嵌其中——QA-4 的占位挂点自本片起启用）"
+          },
+          "target_delta_v_m_s": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Target Delta V M S",
+            "description": "目标总 ΔV（m/s，真空口径；与 /api/sizing/solve 同口径）"
+          },
+          "stage_delta_v_m_s": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number",
+                  "exclusiveMinimum": 0.0
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage Delta V M S",
+            "description": "用户显式的逐级 ΔV（m/s，自下而上；省略 = Lagrange √Isp 分配）"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "vehicle",
+          "target_delta_v_m_s"
+        ],
+        "title": "SizingSequenceRequest",
+        "description": "``POST /api/sizing/sequence`` 的请求体（§8.9 / §10.1：同步）。"
       },
       "SizingSolveRequest": {
         "properties": {

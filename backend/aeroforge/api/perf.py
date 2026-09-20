@@ -1,17 +1,29 @@
-"""性能评估域端点（规格 §8.6 / §8.8 / §10.1）。
+"""性能评估域端点（规格 §8.6 / §8.8 / §8.7 / §10.1，M4 第四片起含两阶段契约）。
 
-- ``POST /api/perf/evaluate`` —— 各轨道点值运力表（OI-38）+ ΔV 瀑布（OI-23）。
+- ``POST /api/perf/evaluate`` —— 各轨道点值运力表（OI-38）+ ΔV 瀑布（OI-23）
+  + **两阶段契约的阶段①**（OI-25：点值同步返回，MC 区间后台作业）。
 
-同步化裁定（相对规格 §10.1「混合」类型的演进，由主线裁决）
-----------------------------------------------------------
-§10.1 原文「缓存命中同步返回，否则异步」是按 MC 10 000 样本（秒级）预估的形态；
-本端点**不含 MC**（两阶段契约的阶段 ①，OI-25：`interval` / `interval_pending`
-归第四片），纯数值链（损失 L1 + 载荷二分）实测毫秒级——故**命中与否都同步返回**，
-缓存只省重算、不改变返回形态。测试钉住单次请求 < 500 ms（与 sizing 同预算）；
-若后续实测超百毫秒量级，再按 §10.1 原文演进为异步（MC 才是真异步需求）。
+两阶段契约（OI-25，第四片兑现）
+------------------------------
+MC 的 10 000 样本是秒级，而「调整发射场纬度 → 运力即时更新」要毫秒级——
+故**显式分两段**，而不是把 MC 塞进交互路径后假装它很快：
 
-响应不输出 ``interval`` / ``interval_pending``：那是 OI-25 两阶段契约的字段，
-属第四片 MC；本片是纯点值（§8.7 阶段 ① 的载荷 ``point`` 与 ``delta_v_budget``）。
+- **阶段①（本端点，同步）**：``point`` 与 ``delta_v_budget`` 毫秒级返回；
+  点值算完**自动投递** MC 作业（计算侧进程池，§9.1），响应标记
+  ``interval_pending=true`` 并携带 ``mc_job_id``——前端据此把区间列显示为
+  占位态（不是上一次的数字）；
+- **阶段②（作业通道）**：MC 完成（默认 10 000 样本）后，结果经既有作业取回
+  通道（``GET /api/jobs/{id}`` / ``/ws/jobs/{id}``）下发，``metrics`` 形态为
+  ``{interval, moments, sensitivity, histogram, convergence, interval_pending:
+  false, mc_job_id, provenance}``——整体覆盖同名键；
+- **规则 3 机检**：阶段①的求解路径**不调用 MC**（MC 在协调线程与进程池）——
+  测试钉住 evaluate 同步耗时 < 100 ms；
+- 请求带 ``"mc": false`` 时不投递：``interval_pending=false``、无 ``mc_job_id``
+  （批量 / 调参场景可关掉后台作业噪音）。
+
+缓存（§9.2）：点值缓存命中与否**都同步返回**（evaluate 是毫秒级纯数值）；
+自动投递的 MC 用飞行器哈希派生的**确定性种子**——同一构型重复评估直接命中
+MC 结果缓存（``mc.json``），不重跑 10 000 样本。
 """
 
 from __future__ import annotations
@@ -19,7 +31,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict, Field
 
-from aeroforge.api.deps import get_store
+from aeroforge.api.deps import get_compute_runner, get_store
 from aeroforge.cache.store import evaluate_cache_key
 from aeroforge.errors import ParamsError, PerfError
 from aeroforge.params.constraints import check_vehicle
@@ -31,6 +43,7 @@ from aeroforge.perf.losses import (
     DEFAULT_LAUNCH_SITE,
     characteristic_energy_km2_s2,
 )
+from aeroforge.perf.mc import DEFAULT_SAMPLES
 
 router = APIRouter(tags=["perf"])
 
@@ -45,6 +58,13 @@ class PerfEvaluateRequest(BaseModel):
             "飞行器参数（§6.1 全量；Mission 层的目标轨道 / 倾角 / 损失系数与 "
             "launch_site 内嵌其中——纬度是自转加成与转向损失的唯一输入，§8.6）"
         )
+    )
+    mc: bool = Field(
+        default=True,
+        description=(
+            "是否自动投递 MC 区间作业（OI-25 阶段②）：true（默认）→ 响应带 "
+            "interval_pending=true 与 mc_job_id；false → 不投递、无区间作业"
+        ),
     )
 
 
@@ -65,13 +85,26 @@ class PointEvaluation(BaseModel):
 
 
 class PerfEvaluateResponse(BaseModel):
-    """``POST /api/perf/evaluate`` 的响应体（点值，无 interval——归第四片 MC）。"""
+    """``POST /api/perf/evaluate`` 的响应体（阶段①：点值 + MC 作业挂点）。"""
 
     point: PointEvaluation
     delta_v_budget: DeltaVBudget = Field(description="ΔV 瀑布（OI-23，逐项列全）")
     warnings: tuple[str, ...]
     provenance: dict[str, str]
     cache_hit: bool = Field(description="本次结果是否来自缓存命中（§9.2）")
+    interval_pending: bool = Field(
+        default=False,
+        description=(
+            "MC 区间是否在途（OI-25 阶段①标记）：true = 已投递 mc_job_id、区间待阶段②"
+            "覆盖；mc=false 或区间已到时为 false——前端据此决定区间列占位态还是数字"
+        ),
+    )
+    mc_job_id: str | None = Field(
+        default=None,
+        description=(
+            "自动投递的 MC 作业 id（经 GET /api/jobs/{id} / WS 取回阶段②；mc=false 为 null）"
+        ),
+    )
 
 
 def _resolve_site(vehicle: Vehicle, warnings: list[str]) -> LaunchSite:
@@ -91,6 +124,8 @@ def _resolve_site(vehicle: Vehicle, warnings: list[str]) -> LaunchSite:
 def evaluate_performance(request: PerfEvaluateRequest) -> PerfEvaluateResponse:
     """性能评估（§8.6 L1 损失 + OI-38 运力表 + OI-23 ΔV 瀑布；同步纯数值）。
 
+    两阶段契约（OI-25）：点值同步返回后按 ``mc`` 开关自动投递 MC 作业（阶段②，
+    计算侧进程池）——**同步段不调用 MC**（规则 3），投递只是微秒级入队。
     硬约束违反沿用参数域拒绝口径（``PARAMS_CONSTRAINT_VIOLATION`` → 422，与
     ``/api/sizing/solve`` 同判据）；评估域问题（轨道要素缺失 / 构型对目标 ΔV
     不可达）由 :class:`~aeroforge.errors.PerfError` 给出 422。缓存键 =
@@ -110,8 +145,26 @@ def evaluate_performance(request: PerfEvaluateRequest) -> PerfEvaluateResponse:
     store = get_store()
     cached = store.load_evaluate(key)
     if cached is not None:
-        return PerfEvaluateResponse.model_validate({**cached, "cache_hit": True})
+        response = PerfEvaluateResponse.model_validate({**cached, "cache_hit": True})
+    else:
+        response = _compute_point_evaluation(vehicle)
+        store.save_evaluate(
+            key,
+            response.model_dump(
+                mode="json", exclude={"cache_hit", "interval_pending", "mc_job_id"}
+            ),
+        )
 
+    if request.mc:
+        record = get_compute_runner().submit_mc(vehicle, samples=DEFAULT_SAMPLES)
+        response = response.model_copy(
+            update={"interval_pending": True, "mc_job_id": record.job_id}
+        )
+    return response
+
+
+def _compute_point_evaluation(vehicle: Vehicle) -> PerfEvaluateResponse:
+    """阶段①点值链（§8.6 L1 损失 + OI-38 运力表 + OI-23 瀑布；毫秒级纯数值）。"""
     warnings: list[str] = []
     site = _resolve_site(vehicle, warnings)
     mission = vehicle.mission
@@ -163,13 +216,17 @@ def evaluate_performance(request: PerfEvaluateRequest) -> PerfEvaluateResponse:
             "相容因子与转向损失同一失配量驱动，§8.6 约束 2）"
         ),
         "point.c3_km2_s2": "终态轨道 C3 = −μ/a（束缚为负；TMI 本片按 escape 口径近似）",
+        "interval.two_stage": (
+            "OI-25 两阶段契约：本响应为阶段①点值（interval_pending=true 时区间在途）；"
+            "阶段②经作业通道下发 {interval, moments, sensitivity, …} 并整体覆盖同名键"
+        ),
         "cache.key": (
             "sha256(canonical_json(vehicle) + spec_version)（§9.2；spec_version="
             "随版本演进，本片未递增——无几何语义变更）"
         ),
     }
 
-    response = PerfEvaluateResponse(
+    return PerfEvaluateResponse(
         point=PointEvaluation(
             payload_by_orbit=table,
             payload_mass_kg=vehicle.payload_mass_kg,
@@ -181,8 +238,6 @@ def evaluate_performance(request: PerfEvaluateRequest) -> PerfEvaluateResponse:
         provenance=provenance,
         cache_hit=False,
     )
-    store.save_evaluate(key, response.model_dump(mode="json", exclude={"cache_hit"}))
-    return response
 
 
 __all__ = [

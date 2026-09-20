@@ -20,8 +20,18 @@ from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from aeroforge import __version__
-from aeroforge.api import artifacts, catalog, geometry, importers, jobs, params, perf, sizing
-from aeroforge.api.deps import get_runner, reset_singletons
+from aeroforge.api import (
+    artifacts,
+    catalog,
+    geometry,
+    importers,
+    jobs,
+    params,
+    perf,
+    sizing,
+    uncertainty,
+)
+from aeroforge.api.deps import get_compute_runner, get_runner, reset_singletons
 from aeroforge.errors import AeroForgeError, ErrorBody, to_error_body
 from aeroforge.geometry.meridian import MeridianError
 from aeroforge.params.schema import errors_to_diagnostics
@@ -54,14 +64,17 @@ _STATUS_CODES: dict[int, str] = {
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """绑定事件循环给作业执行器，退出时收线（规格 §9.1 硬规则 1）。
+    """绑定事件循环给两级作业执行器，退出时收线（规格 §9.1 硬规则 1）。
 
-    工作线程需要 ``loop.call_soon_threadsafe`` 才能把进度投给 WS 订阅者，
-    故必须在启动时把当前运行循环交出去；停机时收线程并丢弃单例，
-    保证进程干净退出（§16.2「退出」契约），且"启动→停机→再启动"能拿到新线程。
+    工作 / 协调线程需要 ``loop.call_soon_threadsafe`` 才能把进度投给 WS 订阅者，
+    故必须在启动时把当前运行循环交出去（几何与计算执行器共享同一份作业簿，
+    绑定一次即可）；停机时收线程并丢弃单例，保证进程干净退出（§16.2「退出」
+    契约），且"启动→停机→再启动"能拿到新线程。计算进程池是进程级资源，
+    不随 lifespan 重建（见 :mod:`aeroforge.worker.jobs`）。
     """
     runner = get_runner()
     runner.bind_loop(asyncio.get_running_loop())
+    get_compute_runner()  # 计算侧执行器随应用启动就绪（惰性单例，不付池创建成本）
     try:
         yield
     finally:
@@ -83,6 +96,7 @@ app.include_router(artifacts.router)
 app.include_router(importers.router)
 app.include_router(sizing.router)
 app.include_router(perf.router)
+app.include_router(uncertainty.router)
 
 
 def _error_response(status_code: int, body: ErrorBody) -> JSONResponse:

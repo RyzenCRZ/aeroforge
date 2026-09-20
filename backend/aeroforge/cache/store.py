@@ -40,6 +40,7 @@ ARTIFACT_LOD2 = "model_lod2.glb"
 ARTIFACT_METRICS = "metrics.json"
 ARTIFACT_PROVENANCE = "provenance.json"
 ARTIFACT_EVALUATE = "evaluate.json"
+ARTIFACT_MC = "mc.json"
 
 #: 允许经 ``GET /api/artifacts/{key}/{file}`` 取出的文件名白名单。
 #: 显式列举而非拼接，避免路径穿越与意外暴露临时文件。
@@ -51,6 +52,7 @@ ALLOWED_ARTIFACTS: frozenset[str] = frozenset(
         ARTIFACT_METRICS,
         ARTIFACT_PROVENANCE,
         ARTIFACT_EVALUATE,
+        ARTIFACT_MC,
     }
 )
 
@@ -62,6 +64,7 @@ ARTIFACT_MEDIA_TYPES: dict[str, str] = {
     ARTIFACT_METRICS: "application/json",
     ARTIFACT_PROVENANCE: "application/json",
     ARTIFACT_EVALUATE: "application/json",
+    ARTIFACT_MC: "application/json",
 }
 
 
@@ -131,6 +134,22 @@ def evaluate_cache_key(vehicle: Vehicle) -> str:
         "\x00".join((vehicle_canonical_json(vehicle), SPEC_VERSION)).encode("utf-8")
     ).hexdigest()
     return f"perf-evaluate-{digest}"
+
+
+def mc_cache_key(vehicle: Vehicle, samples: int, seed: int) -> str:
+    """``/api/uncertainty/mc``（与 evaluate 自动投递）的 MC 结果缓存键。
+
+    与 :func:`evaluate_cache_key` 同构，追加 ``samples`` 与**实际** seed——
+    同输入 + 同种子 + 同样本数 ⟹ 同一份区间（LHS 确定性采样）；evaluate 的
+    自动投递用飞行器哈希派生的**确定性种子**，故重复评估同一构型直接命中，
+    不重跑 10 000 样本。用户未给种子的独立触发每次随机——如实不命中。
+    """
+    digest = hashlib.sha256(
+        "\x00".join(
+            (vehicle_canonical_json(vehicle), str(samples), str(seed), SPEC_VERSION)
+        ).encode("utf-8")
+    ).hexdigest()
+    return f"perf-mc-{digest}"
 
 
 class StagedArtifacts:
@@ -298,9 +317,32 @@ class ArtifactStore:
         :meth:`load_evaluate` 把损坏文件按未命中处理后须能重写修复，不得被
         「已存在即跳过」挡住（否则半写截断的缓存永远修不好）。
         """
+        self._save_json_atomic(key, ARTIFACT_EVALUATE, payload)
+
+    def load_mc(self, key: str) -> dict[str, Any] | None:
+        """读取 MC 结果缓存（``mc.json``）；未缓存 / 损坏返回 ``None``。
+
+        损坏按未命中处理并重算覆盖（同 :meth:`load_evaluate` 哲学：错误区间
+        流入界面的代价远高于重算一次秒级 MC 的代价）。
+        """
+        path = self.dir_for(key) / ARTIFACT_MC
+        if not path.is_file():
+            return None
+        try:
+            payload: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
+        return payload
+
+    def save_mc(self, key: str, payload: dict[str, Any]) -> None:
+        """写入 MC 结果缓存（原子写，同 :meth:`save_evaluate` 哲学）。"""
+        self._save_json_atomic(key, ARTIFACT_MC, payload)
+
+    def _save_json_atomic(self, key: str, logical_name: str, payload: dict[str, Any]) -> None:
+        """JSON 产物的原子写：``.part`` 临时文件 + 改名（并发写者不读到半写）。"""
         directory = ensure_dir(self.dir_for(key))
-        target = directory / ARTIFACT_EVALUATE
-        tmp = directory / (ARTIFACT_EVALUATE + ".part")
+        target = directory / logical_name
+        tmp = directory / (logical_name + ".part")
         tmp.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
             encoding="utf-8",

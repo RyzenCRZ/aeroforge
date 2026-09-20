@@ -15,6 +15,7 @@ import type { components } from './schema'
 
 export type Vehicle = components['schemas']['Vehicle']
 export type Stage = components['schemas']['Stage']
+export type Booster = components['schemas']['Booster']
 export type Mission = components['schemas']['Mission']
 export type Diagnostic = components['schemas']['Diagnostic']
 export type RuleOutcome = components['schemas']['RuleOutcome']

@@ -20,6 +20,40 @@
   letter-spacing: 0.02em;
 }
 
+/* 顶部工具栏（§11.5：高频全局操作不占三栏面积）：计算 + 自动更新开关 */
+.app__actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.app__action {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.app__action input[type='checkbox'] {
+  accent-color: var(--color-accent);
+}
+
+.app__calc-button {
+  padding: 5px 16px;
+  border: 1px solid var(--color-accent);
+  border-radius: 6px;
+  background-color: transparent;
+  color: var(--color-accent);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.app__calc-button:hover {
+  background-color: var(--color-bg-surface);
+}
+
 /* 工作区自行负责栏内留白与滚动；此处只保证 flex 链路把高度传下去 */
 .app__main {
   flex: 1 1 auto;

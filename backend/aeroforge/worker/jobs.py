@@ -1,30 +1,44 @@
-"""几何作业执行器（规格 §9.1 / §9.3 / §16.3）。
+"""作业执行器（规格 §9.1 / §9.3 / §16.3）——M4 起为**两级执行器**。
 
-M1 的进程模型
--------------
-规格 §16.3 明确裁剪：§9.1 的进程池在 M1 降为**单个后台工作线程**，OCCT 调用在该线程内串行，
-天然满足硬规则 3。四条硬规则全部保留：
+两级结构（§9.1「M4 扩池」的兑现）
+----------------------------------
+- **几何侧**（:class:`GeometryJobRunner`）：OCCT 构建作业保持**专用单线程**
+  （硬规则 3：内核内串行，避免 OCCT 内部状态竞争）——与 M1 形态一致。
+- **计算侧**（:class:`ComputeJobRunner`）：MC / 数值作业跑 ``ProcessPoolExecutor``
+  （``min(4, cpu_count)`` 进程）——纯 Python 数值循环不释放 GIL，线程池无加速；
+  进程池把样本块分派到独立进程，事件循环与几何线程都不被独占。工作函数是
+  模块级纯函数（:func:`aeroforge.perf.mc.evaluate_chunk`），参数为 JSON 字符串
+  与数值行——**可 pickle、不跨进程传几何对象**（硬规则 2 的计算侧同构）。
 
-1. **async handler 不得调用 OCCT**——本模块只暴露 ``submit()``（入队，微秒级）与
-   ``get()``（读内存快照）；真正的建模发生在本模块的工作线程内。
-2. **``TopoDS_Shape`` 不跨线程**——实体是工作线程的局部变量，离开线程前已落为 STEP/GLB 文件；
-   跨线程传递的只有 :class:`JobRecord`（纯数据）与产物路径。
-3. **OCCT 调用串行**——单 worker + 单队列，结构保证。
-4. **可取消并清理半成品**——暂存目录在取消时整体删除（:class:`~aeroforge.cache.store.StagedArtifacts`
-   的上下文管理保证，包括异常路径）。
+共享**作业簿**（:class:`JobBoard`）：记录 / 取消事件 / WS 订阅 / 进度广播的
+线程安全簿记，两级执行器各持同一份——于是 ``GET /api/jobs/{id}`` 与
+``/ws/jobs/{id}`` **无需改动**即可同时服务几何与计算作业。
 
-升级触发点 = M4（Monte Carlo 与多目标优化这类真 CPU 密集作业到达时扩池），
-届时只需替换本模块的执行部分，API 形状与缓存键不变。
+四条硬规则（§9.1）逐条保持
+---------------------------
+1. **async handler 内禁止 OCCT / >10 ms CPU**——两级执行器都只暴露 ``submit()``
+   （入队 + 键计算，微秒级）；重活全部在执行线程 / 进程池。
+2. **几何对象不跨进程**——几何线程内实体落盘后才出线程；计算侧只传参数 JSON
+   与数值（MC 的 evaluate 链路本身不碰 OCCT）。
+3. **OCCT 串行**——几何侧单线程 + 单队列，结构保证（未动）。
+4. **可取消 + 清理半成品**——取消事件在块边界生效；MC 结果只在**全部样本完成
+   后**才原子落盘（``mc.json`` 的 ``.part`` + 改名），取消即无半成品。
+
+进程池生命周期：模块级惰性单例（首个计算作业时创建），随进程退出收线——
+不随 TestClient 的 lifespan 逐测试重建（Windows spawn 每次几秒，逐测试重建
+会把测试时间烧在进程导入上）；执行器停机只收协调线程，池内空闲 worker 无状态。
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import queue
 import threading
 import time
 import uuid
+from concurrent.futures import ProcessPoolExecutor
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
@@ -40,6 +54,7 @@ from aeroforge.cache.store import (
     ArtifactStore,
     build_manifest,
     compute_key,
+    mc_cache_key,
 )
 from aeroforge.errors import AeroForgeError, ErrorBody, to_error_body
 from aeroforge.geometry.analytic import analyze
@@ -56,6 +71,9 @@ from aeroforge.geometry.revolve import (
     measure,
 )
 from aeroforge.geometry.validate import validate_solid
+from aeroforge.params.schema import Vehicle
+from aeroforge.perf import mc as mc_module
+from aeroforge.perf.mc import DEFAULT_SAMPLES, MAX_SAMPLES, MIN_SAMPLES, MCCancelled
 
 
 class JobStatus(StrEnum):
@@ -69,13 +87,21 @@ class JobStatus(StrEnum):
 
 
 class JobStage(StrEnum):
-    """§9.3 的进度阶段（M1 子集：几何链 ``meridian → solid → mesh → step → done``）。"""
+    """§9.3 的进度阶段。
+
+    几何链 ``meridian → solid → mesh → step → done``；MC 计算链
+    ``sampling → evaluating → summarizing → done``（M4 第四片补入，前端按字符串
+    消费、新增枚举值为增量变更）。
+    """
 
     QUEUED = "queued"
     MERIDIAN = "meridian"
     SOLID = "solid"
     MESH = "mesh"
     STEP = "step"
+    SAMPLING = "sampling"
+    EVALUATING = "evaluating"
+    SUMMARIZING = "summarizing"
     DONE = "done"
 
 
@@ -86,6 +112,9 @@ _STAGE_PROGRESS: dict[JobStage, float] = {
     JobStage.SOLID: 0.4,
     JobStage.MESH: 0.7,
     JobStage.STEP: 0.9,
+    JobStage.SAMPLING: 0.05,
+    JobStage.EVALUATING: 0.1,
+    JobStage.SUMMARIZING: 0.95,
     JobStage.DONE: 1.0,
 }
 
@@ -118,30 +147,30 @@ def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
-class GeometryJobRunner:
-    """单 worker 几何作业执行器。"""
+# ---------------------------------------------------------------------------
+# 作业簿（两级执行器共用的线程安全簿记）
+# ---------------------------------------------------------------------------
 
-    def __init__(self, store: ArtifactStore | None = None, *, queue_size: int = 32) -> None:
-        self.store = store or ArtifactStore()
+
+class JobBoard:
+    """作业记录 / 取消事件 / WS 订阅 / 进度广播的共享簿记。
+
+    从 M1 单执行器里抽出（**纯重构**，几何执行器行为不变）：两级执行器各持
+    同一份簿，``GET /api/jobs/{id}`` / WS / cancel 因此天然覆盖全部作业类型。
+    """
+
+    def __init__(self) -> None:
         self._records: dict[str, JobRecord] = {}
         self._cancels: dict[str, threading.Event] = {}
         self._subscribers: dict[str, list[asyncio.Queue[dict[str, Any]]]] = {}
         self._lock = threading.Lock()
-        self._queue: queue.Queue[tuple[str, MeridianProfile, BoosterSummary | None] | None] = (
-            queue.Queue(maxsize=queue_size)
-        )
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._stopped = False
-        self._thread = threading.Thread(target=self._worker, name="aeroforge-geometry", daemon=True)
-        self._thread.start()
-
-    # ── 事件循环绑定与进度广播 ──
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """记录事件循环，供工作线程跨线程投递 WS 消息。未绑定时不推送 WS。"""
         self._loop = loop
 
-    def _publish(self, record: JobRecord) -> None:
+    def publish(self, record: JobRecord) -> None:
         payload = record.model_dump(mode="json")
         with self._lock:
             targets = list(self._subscribers.get(record.job_id, []))
@@ -150,23 +179,12 @@ class GeometryJobRunner:
             if loop is not None and not loop.is_closed():
                 loop.call_soon_threadsafe(target.put_nowait, payload)
 
-    # ── 对外接口（非阻塞，可在 async handler 内安全调用） ──
-
-    def submit(
-        self, profile: MeridianProfile, *, boosters: BoosterSummary | None = None
-    ) -> JobRecord:
-        """入队一个几何构建作业并立即返回 ``queued`` 快照。
-
-        ``boosters`` 是 M4 简化捆绑摘要（OI-36）；省略 = 无助推器，构建路径与
-        既有实现逐字节一致（§9.2 缓存纪律）。
-
-        ⚠ 本方法**不做几何计算**：只有键计算（JSON + sha256，微秒级）与入队。
-        """
+    def create(self) -> JobRecord:
+        """登记一个新作业（QUEUED），返回可安全外传的深拷贝快照。"""
         record = JobRecord(job_id=uuid.uuid4().hex, status=JobStatus.QUEUED, created_at=_now())
         with self._lock:
             self._records[record.job_id] = record
             self._cancels[record.job_id] = threading.Event()
-        self._queue.put((record.job_id, profile, boosters))
         return record.model_copy(deep=True)
 
     def get(self, job_id: str) -> JobRecord | None:
@@ -183,6 +201,11 @@ class GeometryJobRunner:
             return False
         event.set()
         return True
+
+    def cancel_event(self, job_id: str) -> threading.Event | None:
+        """该作业的取消事件（执行器轮询用）。"""
+        with self._lock:
+            return self._cancels.get(job_id)
 
     def subscribe(self, job_id: str) -> asyncio.Queue[dict[str, Any]] | None:
         """订阅某作业的进度流；作业不存在返回 ``None``。"""
@@ -201,9 +224,80 @@ class GeometryJobRunner:
                 if not queues:
                     self._subscribers.pop(job_id, None)
 
+    def update(self, job_id: str, **changes: Any) -> JobRecord:
+        """就地修改记录并广播，返回快照。"""
+        with self._lock:
+            record = self._records[job_id]
+            for key, value in changes.items():
+                setattr(record, key, value)
+            snapshot = record.model_copy(deep=True)
+        self.publish(snapshot)
+        return snapshot
+
+    def stage_of(self, job_id: str) -> JobStage:
+        with self._lock:
+            return self._records[job_id].stage
+
+
+# ---------------------------------------------------------------------------
+# 几何侧执行器（M1 形态保持：专用单线程，OCCT 串行）
+# ---------------------------------------------------------------------------
+
+
+class GeometryJobRunner:
+    """单 worker 几何作业执行器（OCCT 专用线程，硬规则 3）。"""
+
+    def __init__(
+        self,
+        store: ArtifactStore | None = None,
+        *,
+        queue_size: int = 32,
+        board: JobBoard | None = None,
+    ) -> None:
+        self.store = store or ArtifactStore()
+        self.board = board if board is not None else JobBoard()
+        self._queue: queue.Queue[tuple[str, MeridianProfile, BoosterSummary | None] | None] = (
+            queue.Queue(maxsize=queue_size)
+        )
+        self._stop_lock = threading.Lock()
+        self._stopped = False
+        self._thread = threading.Thread(target=self._worker, name="aeroforge-geometry", daemon=True)
+        self._thread.start()
+
+    # ── 对外接口（非阻塞，可在 async handler 内安全调用） ──
+
+    def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        self.board.bind_loop(loop)
+
+    def submit(
+        self, profile: MeridianProfile, *, boosters: BoosterSummary | None = None
+    ) -> JobRecord:
+        """入队一个几何构建作业并立即返回 ``queued`` 快照。
+
+        ``boosters`` 是 M4 简化捆绑摘要（OI-36）；省略 = 无助推器，构建路径与
+        既有实现逐字节一致（§9.2 缓存纪律）。
+
+        ⚠ 本方法**不做几何计算**：只有键计算（JSON + sha256，微秒级）与入队。
+        """
+        record = self.board.create()
+        self._queue.put((record.job_id, profile, boosters))
+        return record
+
+    def get(self, job_id: str) -> JobRecord | None:
+        return self.board.get(job_id)
+
+    def cancel(self, job_id: str) -> bool:
+        return self.board.cancel(job_id)
+
+    def subscribe(self, job_id: str) -> asyncio.Queue[dict[str, Any]] | None:
+        return self.board.subscribe(job_id)
+
+    def unsubscribe(self, job_id: str, target: asyncio.Queue[dict[str, Any]]) -> None:
+        self.board.unsubscribe(job_id, target)
+
     def shutdown(self, timeout_s: float = 10.0) -> None:
         """停止工作线程（进程退出时调用，保证无线程残留）。"""
-        with self._lock:
+        with self._stop_lock:
             if self._stopped:
                 return
             self._stopped = True
@@ -224,21 +318,11 @@ class GeometryJobRunner:
             except BaseException as exc:
                 self._settle_failure(job_id, exc)
 
-    def _update(self, job_id: str, **changes: Any) -> JobRecord:
-        """就地修改记录并广播，返回快照。"""
-        with self._lock:
-            record = self._records[job_id]
-            for key, value in changes.items():
-                setattr(record, key, value)
-            snapshot = record.model_copy(deep=True)
-        self._publish(snapshot)
-        return snapshot
-
     def _stage(
         self, job_id: str, stage: JobStage, started: float, timings: dict[str, float]
     ) -> None:
         timings[stage.value] = round((time.perf_counter() - started) * 1000.0, 2)
-        self._update(
+        self.board.update(
             job_id,
             stage=stage,
             progress=_STAGE_PROGRESS[stage],
@@ -247,15 +331,14 @@ class GeometryJobRunner:
         self._raise_if_cancelled(job_id)
 
     def _raise_if_cancelled(self, job_id: str) -> None:
-        with self._lock:
-            event = self._cancels.get(job_id)
+        event = self.board.cancel_event(job_id)
         if event is not None and event.is_set():
             raise _Cancelled
 
     def _run(self, job_id: str, profile: MeridianProfile, boosters: BoosterSummary | None) -> None:
         started = time.perf_counter()
         timings: dict[str, float] = {}
-        self._update(job_id, status=JobStatus.RUNNING, started_at=_now())
+        self.board.update(job_id, status=JobStatus.RUNNING, started_at=_now())
         self._raise_if_cancelled(job_id)
 
         # ── 阶段 1：母线推算 + 解析解（纯 Python，无 OCCT） ──
@@ -344,7 +427,7 @@ class GeometryJobRunner:
             manifest.timings_ms = dict(timings)
             staged.commit(manifest)
 
-        self._update(
+        self.board.update(
             job_id,
             status=JobStatus.SUCCEEDED,
             stage=JobStage.DONE,
@@ -357,8 +440,7 @@ class GeometryJobRunner:
 
     def _settle_failure(self, job_id: str, exc: BaseException) -> None:
         """把异常收敛为作业终态（取消是其中一种）。"""
-        with self._lock:
-            stage = self._records[job_id].stage
+        stage = self.board.stage_of(job_id)
         if isinstance(exc, _Cancelled):
             error = ErrorBody(
                 code="JOB_CANCELLED",
@@ -370,7 +452,7 @@ class GeometryJobRunner:
         else:
             error = _geometry_error_body(exc, stage.value)
             status = JobStatus.FAILED
-        self._update(
+        self.board.update(
             job_id,
             status=status,
             error=error,
@@ -397,3 +479,224 @@ def _geometry_error_body(exc: BaseException, stage: str) -> ErrorBody:
         )
     body = to_error_body(exc)
     return body.model_copy(update={"stage": stage})
+
+
+# ---------------------------------------------------------------------------
+# 计算侧执行器（M4 扩池：MC / 数值作业 → 进程池）
+# ---------------------------------------------------------------------------
+
+#: 计算进程数（§9.1 任务口径：min(4, cpu_count)——纯 numpy/Python 数值，无 OCCT）。
+COMPUTE_POOL_WORKERS = min(4, os.cpu_count() or 1)
+
+_compute_pool: ProcessPoolExecutor | None = None
+_compute_pool_lock = threading.Lock()
+
+
+def compute_pool() -> ProcessPoolExecutor:
+    """模块级惰性进程池单例（首个计算作业时创建；随进程退出收线）。
+
+    不随执行器 / lifespan 重建：Windows spawn 每次创建要付秒级进程导入成本，
+    而 TestClient 每个 fixture 都走一遍 lifespan——池作为进程级资源（同哲学：
+    连接池），空闲 worker 无状态、不持有作业数据。
+    """
+    global _compute_pool
+    with _compute_pool_lock:
+        if _compute_pool is None:
+            _compute_pool = ProcessPoolExecutor(max_workers=COMPUTE_POOL_WORKERS)
+        return _compute_pool
+
+
+def shutdown_compute_pool(wait: bool = True) -> None:
+    """显式收池（测试 / 进程退出用；常规路径由解释器 atexit 兜底）。"""
+    global _compute_pool
+    with _compute_pool_lock:
+        if _compute_pool is not None:
+            _compute_pool.shutdown(wait=wait)
+            _compute_pool = None
+
+
+class ComputeJobRunner:
+    """MC / 计算作业执行器：协调线程分派样本块到进程池（§9.1 计算侧）。
+
+    协调线程只做轻活（LHS 采样、块提交、numpy 统计——毫秒级），重活（逐样本
+    evaluate 链路）全在进程池：事件循环不被独占（硬规则 1 的计算侧兑现）。
+    """
+
+    def __init__(self, board: JobBoard, store: ArtifactStore | None = None) -> None:
+        self.board = board
+        self.store = store or ArtifactStore()
+        self._queue: queue.Queue[tuple[str, str, int, int] | None] = queue.Queue(maxsize=64)
+        self._stop_lock = threading.Lock()
+        self._stopped = False
+        self._thread = threading.Thread(target=self._worker, name="aeroforge-compute", daemon=True)
+        self._thread.start()
+
+    # ── 对外接口（非阻塞） ──
+
+    def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        self.board.bind_loop(loop)
+
+    def submit_mc(
+        self, vehicle: Vehicle, *, samples: int = DEFAULT_SAMPLES, seed: int | None = None
+    ) -> JobRecord:
+        """入队一个 MC 作业并立即返回 ``queued`` 快照（OI-25 阶段②的载体）。
+
+        ⚠ 只做微秒级簿记与入队——采样 / 求值 / 统计全部在协调线程与进程池。
+        ``seed=None`` 时用飞行器 canonical JSON 哈希派生**确定性种子**：同一构型
+        重复评估命中同一份缓存结果（§9.2），不重跑 10 000 样本。
+        """
+        if not (MIN_SAMPLES <= samples <= MAX_SAMPLES):
+            from aeroforge.errors import PerfError
+
+            raise PerfError(
+                f"样本数 {samples} 越出可配区间 [{MIN_SAMPLES}, {MAX_SAMPLES}]（§8.7）",
+                suggestion=f"样本数在 {MIN_SAMPLES}–{MAX_SAMPLES} 之间，默认 {DEFAULT_SAMPLES}",
+            )
+        if seed is None:
+            import hashlib
+
+            from aeroforge.params.schema import canonical_json
+
+            digest = hashlib.sha256(canonical_json(vehicle).encode("utf-8")).digest()
+            seed = int.from_bytes(digest[:4], "big")
+        record = self.board.create()
+        self._queue.put((record.job_id, vehicle.model_dump_json(), samples, seed))
+        return record
+
+    def get(self, job_id: str) -> JobRecord | None:
+        return self.board.get(job_id)
+
+    def cancel(self, job_id: str) -> bool:
+        return self.board.cancel(job_id)
+
+    def subscribe(self, job_id: str) -> asyncio.Queue[dict[str, Any]] | None:
+        return self.board.subscribe(job_id)
+
+    def unsubscribe(self, job_id: str, target: asyncio.Queue[dict[str, Any]]) -> None:
+        self.board.unsubscribe(job_id, target)
+
+    def shutdown(self, timeout_s: float = 10.0) -> None:
+        """停止协调线程（在途作业让其收尾；池不在此收——见 :func:`compute_pool`）。"""
+        with self._stop_lock:
+            if self._stopped:
+                return
+            self._stopped = True
+        with contextlib.suppress(queue.Full):
+            self._queue.put_nowait(None)
+        self._thread.join(timeout=timeout_s)
+
+    # ── 协调线程 ──
+
+    def _worker(self) -> None:
+        while True:
+            item = self._queue.get()
+            if item is None:
+                return
+            job_id, vehicle_json, samples, seed = item
+            try:
+                self._execute_mc(job_id, vehicle_json, samples, seed)
+            except BaseException as exc:
+                self._settle_failure(job_id, exc)
+
+    def _execute_mc(self, job_id: str, vehicle_json: str, samples: int, seed: int) -> None:
+        started = time.perf_counter()
+        timings: dict[str, float] = {}
+        vehicle = Vehicle.model_validate_json(vehicle_json)
+        cache_key = mc_cache_key(vehicle, samples, seed)
+
+        self.board.update(job_id, status=JobStatus.RUNNING, started_at=_now())
+
+        cached = self.store.load_mc(cache_key)
+        if cached is not None:
+            metrics = {**cached, "interval_pending": False, "mc_job_id": job_id}
+            self.board.update(
+                job_id,
+                status=JobStatus.SUCCEEDED,
+                stage=JobStage.DONE,
+                progress=1.0,
+                result_key=cache_key,
+                metrics=metrics,
+                finished_at=_now(),
+                timings_ms={"cache_hit_ms": round((time.perf_counter() - started) * 1000.0, 2)},
+            )
+            return
+
+        cancel_event = self.board.cancel_event(job_id)
+        if cancel_event is not None and cancel_event.is_set():
+            raise _Cancelled
+
+        self.board.update(
+            job_id, stage=JobStage.SAMPLING, progress=_STAGE_PROGRESS[JobStage.SAMPLING]
+        )
+        timings[JobStage.SAMPLING.value] = round((time.perf_counter() - started) * 1000.0, 2)
+
+        self.board.update(
+            job_id, stage=JobStage.EVALUATING, progress=_STAGE_PROGRESS[JobStage.EVALUATING]
+        )
+        evaluate_started = time.perf_counter()
+
+        def _on_progress(done: int, total: int) -> None:
+            fraction = done / total if total else 1.0
+            self.board.update(
+                job_id,
+                stage=JobStage.EVALUATING,
+                progress=_STAGE_PROGRESS[JobStage.EVALUATING] + (0.85 * fraction),
+            )
+
+        def _should_cancel() -> bool:
+            event = self.board.cancel_event(job_id)
+            return event is not None and event.is_set()
+
+        result = mc_module.run_monte_carlo(
+            vehicle,
+            samples=samples,
+            seed=seed,
+            executor=compute_pool(),
+            on_progress=_on_progress,
+            should_cancel=_should_cancel,
+        )
+        timings[JobStage.EVALUATING.value] = round(
+            (time.perf_counter() - evaluate_started) * 1000.0, 2
+        )
+
+        self.board.update(
+            job_id, stage=JobStage.SUMMARIZING, progress=_STAGE_PROGRESS[JobStage.SUMMARIZING]
+        )
+        metrics = mc_module.mc_metrics_payload(result, job_id=job_id)
+        # 结果只在此处（全部样本完成、统计已出）原子落盘——取消路径无半成品（规则 4）
+        self.store.save_mc(cache_key, result.model_dump(mode="json"))
+
+        timings[JobStage.DONE.value] = round((time.perf_counter() - started) * 1000.0, 2)
+        self.board.update(
+            job_id,
+            status=JobStatus.SUCCEEDED,
+            stage=JobStage.DONE,
+            progress=1.0,
+            result_key=cache_key,
+            metrics=metrics,
+            finished_at=_now(),
+            timings_ms=timings,
+        )
+
+    def _settle_failure(self, job_id: str, exc: BaseException) -> None:
+        """把异常收敛为作业终态（取消 / MC 域错误 / 未预期异常）。"""
+        stage = self.board.stage_of(job_id)
+        if isinstance(exc, (_Cancelled, MCCancelled)):
+            error = ErrorBody(
+                code="JOB_CANCELLED",
+                stage=stage.value,
+                message="MC 作业已按请求取消（块边界生效；结果未落盘，无半成品）",
+                suggestion="如需重试，请重新提交 /api/uncertainty/mc 或再触发一次 evaluate",
+            )
+            status = JobStatus.CANCELLED
+        else:
+            body = to_error_body(exc)
+            error = body.model_copy(update={"stage": stage.value, "code": "MC_FAILED"})
+            status = JobStatus.FAILED
+        self.board.update(
+            job_id,
+            status=status,
+            error=error,
+            progress=1.0,
+            finished_at=_now(),
+        )

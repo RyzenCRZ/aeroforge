@@ -43,6 +43,11 @@ interface FieldSpec {
   /** QA-3 材料引用化：选项动态来自 `fetchMaterials`（值域 = 库内材料 id）。 */
   optionsFrom?: 'materials'
   step?: number
+  /** 输入框占位文本（省略语义字段用：注明「空 = 默认值」）。 */
+  placeholder?: string
+  /** 后端可省略的字段（如 flatness_ratio / separation_s）：**清空输入 = 写回 null**
+   *  （null 即从载荷中移除，后端按默认值处理）；非 optional 字段清空不写回。 */
+  optional?: boolean
 }
 
 const VEHICLE_FIELDS: readonly FieldSpec[] = [
@@ -62,6 +67,16 @@ const VEHICLE_FIELDS: readonly FieldSpec[] = [
 const STAGE_FIELDS: readonly FieldSpec[] = [
   { path: 'length_m', label: '级高度', quantity: 'length', siUnit: 'm', kind: 'number', step: 0.1 },
   { path: 'diameter_m', label: '级直径', quantity: 'length', siUnit: 'm', kind: 'number', step: 0.1 },
+  {
+    path: 'flatness_ratio',
+    label: '扁度系数（封头短长轴比）',
+    quantity: null,
+    siUnit: '',
+    kind: 'number',
+    step: 0.05,
+    placeholder: '空 = 0.5（2:1 椭圆封头）',
+    optional: true,
+  },
   { path: 'wall_thickness_m', label: '级壁厚', quantity: 'length', siUnit: 'm', kind: 'number', step: 0.0005 },
   {
     path: 'material',
@@ -152,6 +167,21 @@ const TANK_FIELDS: readonly FieldSpec[] = [
   },
 ]
 
+/** 助推器组字段（OI-36 §6.1 Booster 层的组级参数；侧级 Stage 字段复用 STAGE_FIELDS）。 */
+const BOOSTER_GROUP_FIELDS: readonly FieldSpec[] = [
+  { path: 'count', label: '并联数量', quantity: null, siUnit: '', kind: 'number', step: 1 },
+  {
+    path: 'separation_s',
+    label: '分离时刻',
+    quantity: null,
+    siUnit: 's',
+    kind: 'number',
+    step: 1,
+    placeholder: '空 = 芯一级关机时刻',
+    optional: true,
+  },
+]
+
 const MISSION_FIELDS: readonly FieldSpec[] = [
   {
     path: 'mission.orbit_type',
@@ -236,6 +266,10 @@ interface NumberFieldProps {
   /** 出处标注（§11.5 ⑤ 规则 5）：渲染在控件下方的小字；`undefined` = 无出处（占位值）。 */
   source: string | undefined
   onCommit: (value: number) => void
+  /** 省略语义字段的占位文本（如「空 = 0.5」）。 */
+  placeholder?: string
+  /** 省略语义字段（optional）：清空输入时提交 null（从载荷移除该键，后端按默认处理）。 */
+  onEmpty?: () => void
 }
 
 /**
@@ -244,7 +278,7 @@ interface NumberFieldProps {
  * 为什么不能直接把 `Number(event.target.value)` 写回：输入 `0.0005` 的中间态 `0.`、`0.0`
  * 在 `Number` 下会退化成 `0`，逐字符重置会把小数点吃掉（壁厚、O/F 这类小数首当其冲）。
  */
-function NumberField({ fieldPath, label, unitText, step, value, unsourced, source, onCommit }: NumberFieldProps) {
+function NumberField({ fieldPath, label, unitText, step, value, unsourced, source, onCommit, placeholder, onEmpty }: NumberFieldProps) {
   const [draft, setDraft] = useState(value === null ? '' : String(value))
 
   useEffect(() => {
@@ -264,10 +298,16 @@ function NumberField({ fieldPath, label, unitText, step, value, unsourced, sourc
         step={step}
         data-field-path={fieldPath}
         value={draft}
+        placeholder={placeholder}
         onChange={(event) => {
           setDraft(event.target.value)
+          if (event.target.value.trim() === '') {
+            // 省略语义字段：空 = null（后端默认值）；其余字段清空不写回（保留旧值待补）
+            if (onEmpty !== undefined) onEmpty()
+            return
+          }
           const parsed = Number(event.target.value)
-          if (event.target.value.trim() !== '' && Number.isFinite(parsed)) onCommit(parsed)
+          if (Number.isFinite(parsed)) onCommit(parsed)
         }}
       />
       {source === undefined ? null : <span className="vehicle-panel__source-name">{source}</span>}
@@ -362,6 +402,8 @@ function Field({ spec, fieldPath, value, unitTable, materialOptions, sourced, on
       value={display}
       unsourced={unsourced}
       source={sourced}
+      placeholder={spec.placeholder}
+      onEmpty={spec.optional ? () => onCommit(fieldPath, null) : undefined}
       onCommit={(next) => {
         const si = spec.quantity === null ? next : toSiValue(unitTable, spec.quantity, next)
         onCommit(fieldPath, si)
@@ -383,6 +425,8 @@ export function VehiclePanel() {
   const setField = useVehicleStore((state) => state.setField)
   const setSourcedFields = useVehicleStore((state) => state.setSourcedFields)
   const markUserModified = useVehicleStore((state) => state.markUserModified)
+  const addBooster = useVehicleStore((state) => state.addBooster)
+  const removeBooster = useVehicleStore((state) => state.removeBooster)
   const unitTable = useUnitTable()
   const materials = useMaterials()
 
@@ -402,6 +446,8 @@ export function VehiclePanel() {
   const [confirmNewVehicle, setConfirmNewVehicle] = useState(false)
   const searchTimer = useRef<number | null>(null)
   const searchToken = useRef(0)
+  // —— 助推器组的展开状态（OI-36）：组级参数常驻，侧级 Stage 字段按需展开 ——
+  const [expandedBoosters, setExpandedBoosters] = useState<Record<number, boolean>>({})
 
   /** 名称提交后 300ms 防抖匹配；未命中 / 空名 / 已忽略的同名 → 无任何提示（宁漏勿错）。 */
   const scheduleNameMatch = (name: string) => {
@@ -769,6 +815,67 @@ export function VehiclePanel() {
             </div>
           )
         })}
+
+        {/*
+         * 助推器组（OI-36 / §6.1 Booster 层）：侧级与 Stage 同构复用——组级参数（数量 /
+         * 分离时刻）常驻，侧级字段经既有 field_path 通路编辑（`boosters[i].stage.…`，
+         * 下标解析复用 fieldPath.ts）。新增的侧级骨架 = 芯一级克隆（前端不造数），完整
+         * 字段集可经参数 JSON 导入。
+         */}
+        <div className="vehicle-panel__group">
+          <h3 className="label">并联助推器（boosters）</h3>
+          <p className="vehicle-panel__hint">
+            侧级与芯级同构（级号 0，与芯一级构成 0 级段）；新增组的骨架取自芯一级克隆，完整字段亦经参数 JSON 导入。
+          </p>
+          {(vehicle.boosters ?? []).map((booster, index) => {
+            const expanded = expandedBoosters[index] === true
+            return (
+              <div className="vehicle-panel__booster" key={`booster-${index}`}>
+                <div className="vehicle-panel__booster-head">
+                  <button
+                    type="button"
+                    className="vehicle-panel__button"
+                    aria-expanded={expanded}
+                    onClick={() => {
+                      setExpandedBoosters((prev) => ({ ...prev, [index]: !expanded }))
+                    }}
+                  >
+                    {`助推器组 ${index + 1}（boosters[${index}] · ${booster.count} 枚）${expanded ? ' ▾' : ' ▸'}`}
+                  </button>
+                  <button
+                    type="button"
+                    className="vehicle-panel__button"
+                    onClick={() => {
+                      removeBooster(index)
+                    }}
+                  >
+                    删除本组
+                  </button>
+                </div>
+                {renderFields(BOOSTER_GROUP_FIELDS, `boosters[${index}].`)}
+                {expanded ? (
+                  <>
+                    {renderFields(STAGE_FIELDS, `boosters[${index}].stage.`)}
+                    {renderFields(TANK_FIELDS, `boosters[${index}].stage.`)}
+                  </>
+                ) : null}
+              </div>
+            )
+          })}
+          <p className="vehicle-panel__hint">
+            <button
+              type="button"
+              className="vehicle-panel__button"
+              onClick={() => {
+                const next = (vehicle.boosters ?? []).length
+                setExpandedBoosters({ [next]: true }) // 新组默认展开，改完再收起
+                addBooster()
+              }}
+            >
+              新增助推器组
+            </button>
+          </p>
+        </div>
 
         <div className="vehicle-panel__group">
           <h3 className="label">任务</h3>

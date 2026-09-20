@@ -25,8 +25,12 @@ bisect ：中点求值 → 按 ΣΔV(mid) 与 dv_req 的大小关系收缩区间
 
 ΔV 需求来源（§8.6 约束 3：禁止与发射场无关的常数）
 ----------------------------------------------------
-- 默认：:func:`aeroforge.perf.losses.orbit_dv_requirement`（§8.6 表区间中值，
-  量级锚定、非权威）；
+- 默认：:func:`anchored_dv_km_s` = :func:`aeroforge.perf.losses.orbit_dv_requirement`
+  （§8.6 表区间中值 + 纬度插值，量级锚定、非权威）**+ 长燃时构型修正**——一级
+  燃时超过 184 s 的构型（如 CZ-5 氢氧芯级 480 s）叠加
+  :func:`aeroforge.perf.losses.long_burn_surcharge_km_s`（超长燃时的重力累积与
+  大气内比冲折减，按 §13.2 三基准反标定）；典型燃时构型（≤184 s）附加恒为 0，
+  锚定口径与既有断言不变；
 - 用户覆写：``Mission.loss_factors`` 给出（非 None）时，四项损失按用户份额
   （× 理想 ΔV）计，需求 = ``理想 ΔV + Σ损失 − 自转加成``（与 ΔV 瀑布同口径，
   §8.8），``dv_source`` 标「Mission 用户输入」。
@@ -46,8 +50,8 @@ from aeroforge.params.schema import LaunchSite, Vehicle
 from aeroforge.perf import mass as mass_module
 from aeroforge.perf.losses import (
     CAPACITY_ORBITS,
-    DV_SOURCE_ANCHORED,
     ideal_orbit_dv_km_s,
+    long_burn_surcharge_km_s,
     orbit_dv_requirement,
     rotation_assist_km_s,
 )
@@ -190,19 +194,24 @@ def vehicle_ledger(vehicle: Vehicle) -> FixedVehicleLedger:
     return FixedVehicleLedger(stages=stages, zero_stage=zero)
 
 
-def payload_for_dv(vehicle: Vehicle, dv_requirement_km_s: float) -> float:
-    """载荷二分（OI-38）：求 ``ΣΔV(P) = dv_requirement_km_s`` 的载荷 P [kg]。
+def payload_for_dv_on_ledger(
+    ledger: FixedVehicleLedger,
+    dv_requirement_km_s: float,
+    *,
+    bracket_hint_kg: float = 1.0,
+) -> float:
+    """账本级载荷二分：与 :func:`payload_for_dv` 同算法，但复用已构建的质量账。
 
-    单调性：P ↑ ⟹ 各级质量比 ↓ ⟹ ΣΔV ↓（严格单调减），二分唯一收敛。
-    收敛容差：载荷区间宽 ≤ 1e-9·max(1, hi) kg（200 次上限）。零载荷的 ΣΔV
-    上限低于需求时抛 :class:`PerfError`（构型对该目标不可达，不静默给 0）。
+    存在意义（§8.7 / §8.9）：MC 每样本与任务时序的回收代价核算都要对**同一份
+    账本**做多次（四轨道 / 有无预留）反推——逐次重建 ``vehicle_ledger`` 会把
+    几何解析账白白重算四遍。二分本身只消费 ``total_delta_v_m_s``，与账本来源
+    （几何解析 / 求解器输出）解耦。需求超出零载荷上限时抛 :class:`PerfError`。
     """
     if not (dv_requirement_km_s > 0.0):
         raise PerfError(
             f"目标 ΔV 需求必须为正，收到 {dv_requirement_km_s} km/s",
             suggestion="ΔV 需求是运力反推的驱动量（如 LEO 约 9.4 km/s，§8.6 表）",
         )
-    ledger = vehicle_ledger(vehicle)
     target_m_s = dv_requirement_km_s * 1000.0
 
     ceiling = ledger.max_delta_v_m_s()
@@ -216,7 +225,7 @@ def payload_for_dv(vehicle: Vehicle, dv_requirement_km_s: float) -> float:
     def dv_of(payload_kg: float) -> float:
         return ledger.total_delta_v_m_s(payload_kg)
 
-    lo, hi = 0.0, max(vehicle.payload_mass_kg, 1.0)
+    lo, hi = 0.0, max(bracket_hint_kg, 1.0)
     while dv_of(hi) > target_m_s:
         lo = hi
         hi *= 2.0
@@ -236,6 +245,20 @@ def payload_for_dv(vehicle: Vehicle, dv_requirement_km_s: float) -> float:
         if hi - lo <= PAYLOAD_TOLERANCE_KG * max(1.0, hi):
             break
     return 0.5 * (lo + hi)
+
+
+def payload_for_dv(vehicle: Vehicle, dv_requirement_km_s: float) -> float:
+    """载荷二分（OI-38）：求 ``ΣΔV(P) = dv_requirement_km_s`` 的载荷 P [kg]。
+
+    单调性：P ↑ ⟹ 各级质量比 ↓ ⟹ ΣΔV ↓（严格单调减），二分唯一收敛。
+    收敛容差：载荷区间宽 ≤ 1e-9·max(1, hi) kg（200 次上限）。零载荷的 ΣΔV
+    上限低于需求时抛 :class:`PerfError`（构型对该目标不可达，不静默给 0）。
+    """
+    return payload_for_dv_on_ledger(
+        vehicle_ledger(vehicle),
+        dv_requirement_km_s,
+        bracket_hint_kg=vehicle.payload_mass_kg,
+    )
 
 
 def _user_dv_requirement_km_s(vehicle: Vehicle, site: LaunchSite, orbit: str) -> tuple[float, str]:
@@ -259,28 +282,88 @@ def _user_dv_requirement_km_s(vehicle: Vehicle, site: LaunchSite, orbit: str) ->
     return ideal + losses - assist, "Mission 用户输入（loss_factors 份额 × 理想 ΔV）"
 
 
+def first_stage_burn_time_s(vehicle: Vehicle, m_prop_first_kg: float) -> float:
+    """一级燃时 [s]：显式 ``Stage.burn_time_s`` 优先，缺省按 m_prop/ṁ 派生（海平面口径）。
+
+    原实现位于 :mod:`aeroforge.perf.budget`；因运力表的锚定 + 长燃时附加口径
+    （:func:`anchored_dv_km_s`）与 ΔV 瀑布都要用同一燃时，且 budget 依赖本模块
+    （不得反向 import），函数移驻于此——**单一来源，两处共用不漂移**。
+    """
+    first = sorted(vehicle.stages, key=lambda s: s.index)[0]
+    if first.burn_time_s is not None:
+        return first.burn_time_s
+    engine = first.engine
+    mass_flow = first.engine_count * engine.thrust_sea_level_n / (engine.isp_sea_level_s * G0)
+    return m_prop_first_kg / mass_flow
+
+
+def _liftoff_twr(vehicle: Vehicle, glow_kg: float) -> float:
+    """整箭起飞推重比：芯一级 + 全部助推器的海平面推力 / (GLOW·g₀)。
+
+    助推器推力必须计入（并联构型的起飞推力主体在助推器——DAG 的
+    ``vehicle.twr_liftoff`` 不建助推器节点，对 CZ-5 这类构型会给出 0.5 以下的
+    失真值，不得用于损失层）。
+    """
+    first = sorted(vehicle.stages, key=lambda s: s.index)[0]
+    thrust_n = first.engine_count * first.engine.thrust_sea_level_n
+    for booster in vehicle.boosters:
+        thrust_n += (
+            booster.count * booster.stage.engine_count * booster.stage.engine.thrust_sea_level_n
+        )
+    return thrust_n / (glow_kg * G0)
+
+
+def anchored_dv_km_s(
+    vehicle: Vehicle, ledger: FixedVehicleLedger, orbit: str, site: LaunchSite
+) -> tuple[float, str, str]:
+    """锚定 + 构型修正的 ΔV 需求（运力表默认口径）：``(dv_km_s, source, assumption)``。
+
+    - 基值：:func:`aeroforge.perf.losses.orbit_dv_requirement`（§8.6 表中值 +
+      发射场纬度插值，量级锚定）——典型构型（一级燃时 ≤184 s）到此为止，
+      ``source`` 即锚定文案（既有口径与精确断言不变）；
+    - 附加：一级燃时超过 184 s 的构型叠加
+      :func:`aeroforge.perf.losses.long_burn_surcharge_km_s`（超长燃时的重力累积
+      与大气内比冲折减，按 §13.2 三基准反标定）——``source`` 在锚定文案上追加
+      附加项声明，``assumption`` 供调用方写入溯源账。
+    """
+    requirement = orbit_dv_requirement(orbit, site)
+    burn_time_s = first_stage_burn_time_s(vehicle, ledger.stages[0].m_propellant_kg)
+    twr = _liftoff_twr(vehicle, ledger.glow_kg(vehicle.payload_mass_kg))
+    surcharge = long_burn_surcharge_km_s(twr, burn_time_s)
+    if surcharge.value_km_s <= 0.0:
+        return requirement.value_km_s, requirement.source, surcharge.assumption
+    source = (
+        f"{requirement.source} + L1 长燃时构型修正（+{surcharge.value_km_s:.2f} km/s，"
+        "按 §13.2 三基准反标定）"
+    )
+    return requirement.value_km_s + surcharge.value_km_s, source, surcharge.assumption
+
+
 def payload_by_orbit(vehicle: Vehicle, site: LaunchSite) -> dict[str, OrbitPayload]:
     """各轨道点值运力表（OI-38）：LEO / SSO / GTO / GEO（直送）四目标各反推一次。
 
-    每项带所用 ΔV 需求值与来源（量级锚定 / Mission 用户输入，§8.8）；构型对
-    某目标不可达时该项 ``payload_kg=0``、``attainable=False``（表保持四行齐备，
-    由调用方按 attainable 汇总 warning，不在表内丢行）。
+    每项带所用 ΔV 需求值与来源（量级锚定 / 量级锚定 + 长燃时构型修正 /
+    Mission 用户输入，§8.8）；构型对某目标不可达时该项 ``payload_kg=0``、
+    ``attainable=False``（表保持四行齐备，由调用方按 attainable 汇总 warning，
+    不在表内丢行）。
     """
     table: dict[str, OrbitPayload] = {}
     user_override = vehicle.mission.loss_factors is not None
+    ledger = vehicle_ledger(vehicle)
     for orbit in CAPACITY_ORBITS:
         if user_override:
             dv_used, source = _user_dv_requirement_km_s(vehicle, site, orbit)
         else:
-            requirement = orbit_dv_requirement(orbit, site)
-            dv_used, source = requirement.value_km_s, requirement.source
+            dv_used, source, _ = anchored_dv_km_s(vehicle, ledger, orbit, site)
         try:
-            payload = payload_for_dv(vehicle, dv_used)
+            payload = payload_for_dv_on_ledger(
+                ledger, dv_used, bracket_hint_kg=vehicle.payload_mass_kg
+            )
         except PerfError:
             table[orbit] = OrbitPayload(
                 payload_kg=0.0,
                 dv_used_km_s=dv_used,
-                dv_source=source if user_override else DV_SOURCE_ANCHORED,
+                dv_source=source,
                 attainable=False,
             )
         else:
@@ -296,7 +379,10 @@ __all__ = [
     "OrbitPayload",
     "StageMasses",
     "ZeroStageMasses",
+    "anchored_dv_km_s",
+    "first_stage_burn_time_s",
     "payload_by_orbit",
     "payload_for_dv",
+    "payload_for_dv_on_ledger",
     "vehicle_ledger",
 ]

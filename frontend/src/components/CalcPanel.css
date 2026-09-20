@@ -1,0 +1,229 @@
+/* ============================================================================
+ * 底部计算评估面板（规格 §11.5 ③ / OI-25 两阶段 UI）。
+ *
+ * 布局硬约束：面板在 app 列 flex 的 main 与状态栏**之间**弹出——工作区收缩、
+ * 结构上不可能遮挡中栏 3D 视口（不是悬浮层）。内部独立滚动、限高防挤占。
+ * ==========================================================================*/
+
+.calc-panel {
+  flex: 0 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 42vh;
+  margin: 0 16px 12px;
+  padding: 12px;
+  overflow-y: auto;
+}
+
+.calc-panel__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.calc-panel__title {
+  margin: 0;
+}
+
+/* 阶段①在途的轻量反馈（点值毫秒级，常驻 spinner 会闪成噪声，文字态即可） */
+.calc-panel__head-state {
+  font-size: 12px;
+  color: var(--color-status-warn);
+}
+
+.calc-panel__unit-hint {
+  margin-left: auto;
+}
+
+.calc-panel__button {
+  padding: 4px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.calc-panel__button:hover {
+  border-color: var(--color-accent);
+}
+
+.calc-panel__hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.calc-panel__error {
+  margin: 0;
+  color: var(--color-status-error);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.calc-panel__error .calc-panel__button {
+  margin-left: 8px;
+}
+
+.calc-panel__warnings {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--color-status-warn);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+/* 运力表：点值 / 区间两阶段的主要载体（OI-38 + OI-25） */
+.calc-panel__table {
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.calc-panel__table th,
+.calc-panel__table td {
+  padding: 4px 10px 4px 0;
+  text-align: left;
+  vertical-align: baseline;
+}
+
+.calc-panel__table thead th {
+  border-bottom: 1px solid var(--color-border);
+  font-size: 11px;
+}
+
+.calc-panel__unattainable {
+  margin-left: 4px;
+  color: var(--color-status-error);
+  font-size: 10px;
+}
+
+/* 区间占位态（OI-25 规则 1）：脉动——显式表达"在途"，与旧数字 / 终态数字都不同形 */
+.calc-panel__interval-pending {
+  display: inline-block;
+  padding: 1px 8px;
+  border: 1px solid var(--color-status-warn);
+  border-radius: 4px;
+  color: var(--color-status-warn);
+  font-size: 11px;
+  animation: calc-panel-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes calc-panel-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* 区间终态（阶段②整体覆盖后） */
+.calc-panel__interval {
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.calc-panel__interval-na {
+  color: var(--color-status-error);
+  font-size: 11px;
+}
+
+.calc-panel__source {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+/* 偏度提示条（§8.7 / OI-01）：|G₁|>0.5 时必须可见 */
+.calc-panel__skew-note {
+  margin: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--color-status-warn);
+  border-radius: 6px;
+  color: var(--color-status-warn);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+/* ΔV 瀑布 / 敏感度：行式条形（数值列 + 比例条；条宽只是排版，不是计算） */
+.calc-panel__waterfall,
+.calc-panel__sensitivity {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.calc-panel__waterfall h3,
+.calc-panel__sensitivity h3 {
+  margin: 4px 0 0;
+}
+
+.calc-panel__waterfall-row,
+.calc-panel__sensitivity-row {
+  display: grid;
+  grid-template-columns: 96px 1fr 64px;
+  align-items: center;
+  gap: 10px;
+}
+
+.calc-panel__sensitivity-row {
+  grid-template-columns: 220px 1fr 64px;
+}
+
+.calc-panel__waterfall-label,
+.calc-panel__sensitivity-param {
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.calc-panel__bar-track {
+  display: block;
+  height: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background-color: var(--color-bg-surface);
+  overflow: hidden;
+}
+
+.calc-panel__bar {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+}
+
+.calc-panel__bar--base {
+  background-color: var(--color-accent);
+}
+
+.calc-panel__bar--loss {
+  background-color: var(--color-status-error);
+}
+
+.calc-panel__bar--gain {
+  background-color: var(--color-status-ok);
+}
+
+.calc-panel__bar--total {
+  background-color: var(--color-accent-alt);
+}
+
+.calc-panel__waterfall-value {
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* assumptions（OI-23）：允许简化但必须标明假设 */
+.calc-panel__assumptions {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  line-height: 1.6;
+}

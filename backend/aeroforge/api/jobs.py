@@ -31,12 +31,15 @@ _WS_POLICY_VIOLATION = 1008
 
 @router.get("/api/jobs/{job_id}", response_model=JobRecord)
 def get_job(job_id: str) -> JobRecord:
-    """查询作业快照。作业不存在时返回 404。"""
+    """查询作业快照（几何 / MC 两级执行器共用同一份作业簿，§9.1）。"""
     record = get_runner().get(job_id)
     if record is None:
         raise JobNotFoundError(
             f"作业 {job_id!r} 不存在",
-            suggestion="确认 job_id 来自 POST /api/geometry/build 的响应；服务重启会清空作业表",
+            suggestion=(
+                "确认 job_id 来自 POST /api/geometry/build 或 POST /api/uncertainty/mc"
+                "（/api/perf/evaluate 的 mc_job_id）的响应；服务重启会清空作业表"
+            ),
         )
     return record
 
@@ -53,7 +56,9 @@ async def stream_job(websocket: WebSocket, job_id: str) -> None:
             {
                 "code": "JOB_NOT_FOUND",
                 "message": f"作业 {job_id!r} 不存在",
-                "suggestion": "确认 job_id 来自 POST /api/geometry/build 的响应",
+                "suggestion": (
+                    "确认 job_id 来自 POST /api/geometry/build 或 POST /api/uncertainty/mc 的响应"
+                ),
             }
         )
         await websocket.close(code=_WS_POLICY_VIOLATION)

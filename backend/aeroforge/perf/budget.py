@@ -29,9 +29,9 @@ import math
 from pydantic import BaseModel, Field
 
 from aeroforge.errors import PerfError
-from aeroforge.params.dag import G0, propagate_vehicle
+from aeroforge.params.dag import propagate_vehicle
 from aeroforge.params.schema import LaunchSite, Mission, Vehicle
-from aeroforge.perf.capacity import vehicle_ledger
+from aeroforge.perf.capacity import first_stage_burn_time_s, vehicle_ledger
 from aeroforge.perf.losses import (
     DEFAULT_DRAG_COEFFICIENT,
     aero_loss,
@@ -66,16 +66,6 @@ class DeltaVBudget(BaseModel):
     assumptions: tuple[str, ...] = Field(
         description="每项损失的模型假设与系数来源（必填——允许简化但必须标明假设）"
     )
-
-
-def _first_stage_burn_time_s(vehicle: Vehicle, m_prop_first_kg: float) -> float:
-    """一级燃时：显式 ``Stage.burn_time_s`` 优先，缺省按 m_prop/ṁ 派生（海平面口径）。"""
-    first = sorted(vehicle.stages, key=lambda s: s.index)[0]
-    if first.burn_time_s is not None:
-        return first.burn_time_s
-    engine = first.engine
-    mass_flow = first.engine_count * engine.thrust_sea_level_n / (engine.isp_sea_level_s * G0)
-    return m_prop_first_kg / mass_flow
 
 
 def _user_losses(
@@ -114,7 +104,7 @@ def delta_v_budget(
         )
 
     first = sorted(vehicle.stages, key=lambda s: s.index)[0]
-    burn_time_s = _first_stage_burn_time_s(vehicle, ledger.stages[0].m_propellant_kg)
+    burn_time_s = first_stage_burn_time_s(vehicle, ledger.stages[0].m_propellant_kg)
 
     if vehicle.aero is None:
         cd = DEFAULT_DRAG_COEFFICIENT

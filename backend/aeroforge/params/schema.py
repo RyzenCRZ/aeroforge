@@ -392,7 +392,13 @@ class Sequence(ParamsModel):
 
 
 class Recovery(ParamsModel):
-    """回收与复用（§6.1 Recovery 层）。"""
+    """回收与复用（§6.1 Recovery 层；§8.9 规则 3 的三项独立代价挂点）。
+
+    QA-4 裁定：本层 M2 起只存结构不接计算；M4 第四片（§8.9 任务时序耦合）
+    起被 :mod:`aeroforge.perf.sequence` 消费——三项代价**独立建模、不得合并**：
+    回收系统质量（本体外挂设备）· 着陆推进剂余量（反推着陆的预留推进剂，
+    直接减运力）· 增强结构与热防护质量（再入加固的惯性代价）。
+    """
 
     enabled: bool = Field(default=False, description="是否回收")
     stage_indices: tuple[int, ...] = Field(default=(), description="回收的级号")
@@ -401,6 +407,12 @@ class Recovery(ParamsModel):
         default=None, ge=0.0, le=1.0, description="着陆推进剂余量（占该级满装量）"
     )
     system_mass_kg: float | None = si_field("mass", "回收系统质量代价", default=None, ge=0.0)
+    reinforcement_mass_kg: float | None = si_field(
+        "mass",
+        "增强结构与热防护质量代价（§8.9 规则 3 第三项：再入加固 / 热防护的惯性代价）",
+        default=None,
+        ge=0.0,
+    )
 
 
 class Vehicle(ParamsModel):

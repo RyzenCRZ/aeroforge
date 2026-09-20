@@ -1,4 +1,4 @@
-"""性能评估（规格 §8.6 / §8.8 / §10.1）：弹道损失 L1 + 运力表 + ΔV 瀑布 + 端点。
+"""性能评估（规格 §8.6 / §8.8 / §8.7 / §10.1）：弹道损失 L1 + 运力表 + ΔV 瀑布 + 端点。
 
 覆盖形态（任务口径逐条）
 ------------------------
@@ -11,9 +11,10 @@
   转向损失**同向增加**（§8.6 约束 2 机检——同一失配量的两面）；背压单一字段
   （响应无 pressure_margin / drag_loss 双命名）；
 - **运力二分**：ΣΔV 随载荷严格单调减；二分结果 vs 单级齐氏闭式手算对拍；
-- **端点**：200 形状（point / delta_v_budget / warnings / provenance / cache_hit，
-  无 interval——OI-25 归第四片）、缓存命中第二次 ``cache_hit=true``、422 路径、
-  同步耗时；
+- **端点**：200 形状（point / delta_v_budget / warnings / provenance / cache_hit
+  + 两阶段契约字段 interval_pending / mc_job_id——OI-25 第四片起含 MC 投递挂点；
+  两阶段行为全量测试见 ``test_mc_and_sequence.py``）、缓存命中第二次
+  ``cache_hit=true``、422 路径、同步耗时；
 - **F9 冒烟**：falcon-9 模板 LEO 运力 vs 公开 22.8 t——**只报数字不设硬阈值**
   （L1 粗损失模型，M4 验收 <15% 归第四片统一回归）。
 """
@@ -371,26 +372,40 @@ def test_payload_by_orbit_unattainable_rows_reported_not_dropped(
 
 
 # ---------------------------------------------------------------------------
-# 端点（§10.1：本片纯点值——无 interval / interval_pending，OI-25 归第四片）
+# 端点（§10.1：点值链 + 两阶段契约字段；两阶段行为专项见 test_mc_and_sequence.py）
 # ---------------------------------------------------------------------------
 
 
-def _evaluate_body(vehicle: Vehicle) -> dict[str, object]:
-    return {"vehicle": vehicle.model_dump(mode="json")}
+def _evaluate_body(vehicle: Vehicle, *, mc: bool = False) -> dict[str, object]:
+    """evaluate 请求体；默认 ``mc=false``——本文件只测点值链，MC 作业噪音留给
+    两阶段专项测试（``test_mc_and_sequence.py``，那边才断言投递行为）。"""
+    return {"vehicle": vehicle.model_dump(mode="json"), "mc": mc}
 
 
 def test_evaluate_endpoint_returns_full_shape(
     client: TestClient, two_stage_vehicle: Vehicle
 ) -> None:
-    """200 形状：point / delta_v_budget / warnings / provenance / cache_hit。"""
+    """200 形状：point / delta_v_budget / warnings / provenance / cache_hit
+    + 两阶段契约字段（interval_pending / mc_job_id，OI-25 第四片起）。"""
     vehicle = two_stage_vehicle.model_copy(update={"name": "形状测试箭"})
-    response = client.post("/api/perf/evaluate", json=_evaluate_body(vehicle))
+    response = client.post("/api/perf/evaluate", json=_evaluate_body(vehicle, mc=True))
     assert response.status_code == 200
     body = response.json()
 
-    assert set(body) == {"point", "delta_v_budget", "warnings", "provenance", "cache_hit"}
+    assert set(body) == {
+        "point",
+        "delta_v_budget",
+        "warnings",
+        "provenance",
+        "cache_hit",
+        "interval_pending",
+        "mc_job_id",
+    }
     assert body["cache_hit"] is False  # 本会话首次（conftest 隔离了数据目录）
-    assert "interval" not in body and "interval_pending" not in body
+    # 阶段①标记：默认 mc=true → 已投递（区间在途，数字归阶段②作业）
+    assert body["interval_pending"] is True
+    assert isinstance(body["mc_job_id"], str)
+    assert "interval" not in body  # 区间本体不在阶段①响应（OI-25：占位态）
 
     point = body["point"]
     assert set(point) == {"payload_by_orbit", "payload_mass_kg", "glow_kg", "c3_km2_s2"}
@@ -444,7 +459,7 @@ def test_evaluate_endpoint_cache_hit_on_second_call(
     """缓存：同一输入第二次请求 cache_hit=true 且数值与首次一致（§9.2）。"""
     # 独立命名保证缓存键不与同文件其他测试共享（fixture 内容相同会同键命中）
     vehicle = two_stage_vehicle.model_copy(update={"name": "缓存测试箭"})
-    body = {"vehicle": vehicle.model_dump(mode="json")}
+    body = {"vehicle": vehicle.model_dump(mode="json"), "mc": False}
     first = client.post("/api/perf/evaluate", json=body)
     assert first.status_code == 200
     assert first.json()["cache_hit"] is False
@@ -460,7 +475,9 @@ def test_evaluate_endpoint_cache_hit_on_second_call(
 
     # 输入变一字节（改载荷）→ 键变 → 不命中（canonical JSON 键纪律）
     changed = vehicle.model_copy(update={"payload_mass_kg": 21_000.0})
-    third = client.post("/api/perf/evaluate", json={"vehicle": changed.model_dump(mode="json")})
+    third = client.post(
+        "/api/perf/evaluate", json={"vehicle": changed.model_dump(mode="json"), "mc": False}
+    )
     assert third.status_code == 200
     assert third.json()["cache_hit"] is False
 
@@ -470,7 +487,7 @@ def test_evaluate_endpoint_latency_synchronous(
 ) -> None:
     """同步耗时：首算与缓存命中都应远低于交互预算（实测数字随报告呈交主线）。"""
     vehicle = two_stage_vehicle.model_copy(update={"name": "耗时测试箭"})
-    body = {"vehicle": vehicle.model_dump(mode="json")}
+    body = {"vehicle": vehicle.model_dump(mode="json"), "mc": False}
     started = time.perf_counter()
     first = client.post("/api/perf/evaluate", json=body)
     compute_ms = (time.perf_counter() - started) * 1000.0

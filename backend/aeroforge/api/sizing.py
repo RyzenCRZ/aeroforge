@@ -1,6 +1,8 @@
-"""定尺求解域端点（规格 §8.5 / §10.1）。
+"""定尺求解域端点（规格 §8.5 / §8.9 / §10.1）。
 
 - ``POST /api/sizing/solve`` —— 多级质量迭代（**同步、纯数值、无 OCCT**）。
+- ``POST /api/sizing/sequence`` —— 任务时序与质量事件耦合（§8.9，**同步**：
+  solve + 时序账 + 回收代价回写，毫秒级纯数值）。
 
 为什么独立成模块而不挂 ``api/params.py``：main.py 的路由按域注册
 （geometry / params / catalog / jobs / artifacts / importers），定尺求解是
@@ -31,6 +33,7 @@ from aeroforge.errors import ParamsError
 from aeroforge.params.constraints import check_vehicle
 from aeroforge.params.report import has_hard
 from aeroforge.params.schema import Vehicle
+from aeroforge.perf.sequence import SequenceReport, apply_sequence
 from aeroforge.perf.solver import SizingResult, solve
 
 router = APIRouter(tags=["sizing"])
@@ -75,5 +78,56 @@ def solve_sizing(request: SizingSolveRequest) -> SizingResult:
     return solve(
         request.vehicle,
         request.target_delta_v_m_s,
+        stage_delta_v_m_s=request.stage_delta_v_m_s,
+    )
+
+
+class SizingSequenceRequest(BaseModel):
+    """``POST /api/sizing/sequence`` 的请求体（§8.9 / §10.1：同步）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    vehicle: Vehicle = Field(
+        description=(
+            "飞行器参数（§6.1 全量；Sequence 层事件与 Recovery 层代价配置内嵌其中——"
+            "QA-4 的占位挂点自本片起启用）"
+        )
+    )
+    target_delta_v_m_s: float = Field(
+        gt=0.0,
+        description="目标总 ΔV（m/s，真空口径；与 /api/sizing/solve 同口径）",
+    )
+    stage_delta_v_m_s: tuple[Annotated[float, Field(gt=0.0)], ...] | None = Field(
+        default=None,
+        description="用户显式的逐级 ΔV（m/s，自下而上；省略 = Lagrange √Isp 分配）",
+    )
+
+
+@router.post("/api/sizing/sequence", response_model=SequenceReport)
+def solve_sequence(request: SizingSequenceRequest) -> SequenceReport:
+    """任务时序与质量事件耦合（§8.9：solve → 事件账 + 回收代价回写，同步）。
+
+    时序（Sequence 层）缺失时按构型合成缺省事件线；回收（Recovery 层）启用时
+    三项独立代价进 σ_eff 回写（规则 1 / 3），回收点火的运力代价由
+    ``capacity_penalty_kg`` 量化（「直接减少运力」，§8.9 表）。抛罩时刻动压 /
+    q̇ 超限只警告不中止（规则 2——时序是用户权威）。
+    """
+    violations = check_vehicle(request.vehicle)
+    if has_hard(violations):
+        hard = [item for item in violations if item.level == "hard"]
+        raise ParamsError(
+            f"参数违反 {len(hard)} 条硬约束，拒绝进入任务时序分析",
+            suggestion=hard[0].suggestion,
+            details={"diagnostics": [item.model_dump(mode="json") for item in violations]},
+        )
+    sizing = solve(
+        request.vehicle,
+        request.target_delta_v_m_s,
+        stage_delta_v_m_s=request.stage_delta_v_m_s,
+    )
+    return apply_sequence(
+        request.vehicle,
+        sizing,
+        target_delta_v_m_s=request.target_delta_v_m_s,
         stage_delta_v_m_s=request.stage_delta_v_m_s,
     )

@@ -4,6 +4,7 @@ import { ApiError, isRecord } from '../api/client'
 import {
   diagnose,
   fetchTemplate,
+  type Booster,
   type Diagnostic,
   type DiagnoseResponse,
   type Vehicle,
@@ -102,6 +103,10 @@ interface VehicleState {
   /** 用户改动某字段：该字段出处转为「用户修改」（§11.5 ⑤ 规则 5）。 */
   markUserModified: (path: string) => void
   requestDiagnose: () => void
+  /** 追加一组并联助推器（OI-36：侧级骨架 = 芯一级克隆，级号改 0）。 */
+  addBooster: () => void
+  /** 删除第 index 组助推器（数组下标，field_path 同口径）。 */
+  removeBooster: (index: number) => void
   reset: () => void
 }
 
@@ -185,6 +190,30 @@ export const useVehicleStore = create<VehicleState>((set, get) => {
     },
 
     requestDiagnose: () => {
+      scheduler.schedule(runDiagnose)
+    },
+
+    addBooster: () => {
+      const vehicle = get().vehicle
+      if (vehicle === null || vehicle.stages.length === 0) return
+      // 侧级骨架 = **芯一级整套克隆**（数值全部来自用户自己的输入，前端不造任何"看起来
+      // 像真的"数字，§1.4-4 / P1），级号按 OI-36 记 0（与 GCAT 助推器记法对齐）。
+      const stage = JSON.parse(JSON.stringify(vehicle.stages[0])) as Booster['stage']
+      stage.index = 0
+      const booster: Booster = {
+        stage,
+        count: 2, // §6.1 Booster 层默认（radial_even 周向均布）
+        layout: 'radial_even',
+        separation_s: null, // 省略 = 芯一级关机时刻（§6.1 语义：null 即移除）
+      }
+      set({ vehicle: { ...vehicle, boosters: [...(vehicle.boosters ?? []), booster] } })
+      scheduler.schedule(runDiagnose)
+    },
+
+    removeBooster: (index) => {
+      const vehicle = get().vehicle
+      if (vehicle === null || vehicle.boosters === undefined) return
+      set({ vehicle: { ...vehicle, boosters: vehicle.boosters.filter((_, i) => i !== index) } })
       scheduler.schedule(runDiagnose)
     },
 

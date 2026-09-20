@@ -29,6 +29,8 @@ from aeroforge.geometry.bundle import BoosterSummary
 from aeroforge.geometry.bundle import canonical_json as booster_canonical_json
 from aeroforge.geometry.meridian import MeridianProfile, canonical_json
 from aeroforge.geometry.revolve import kernel_version
+from aeroforge.params.schema import Vehicle
+from aeroforge.params.schema import canonical_json as vehicle_canonical_json
 from aeroforge.paths import artifacts_root, ensure_dir
 
 # 产物逻辑名（对前端与 API 稳定；改文件名不得改变这些键）
@@ -37,11 +39,19 @@ ARTIFACT_LOD1 = "model_lod1.glb"
 ARTIFACT_LOD2 = "model_lod2.glb"
 ARTIFACT_METRICS = "metrics.json"
 ARTIFACT_PROVENANCE = "provenance.json"
+ARTIFACT_EVALUATE = "evaluate.json"
 
 #: 允许经 ``GET /api/artifacts/{key}/{file}`` 取出的文件名白名单。
 #: 显式列举而非拼接，避免路径穿越与意外暴露临时文件。
 ALLOWED_ARTIFACTS: frozenset[str] = frozenset(
-    {ARTIFACT_STEP, ARTIFACT_LOD1, ARTIFACT_LOD2, ARTIFACT_METRICS, ARTIFACT_PROVENANCE}
+    {
+        ARTIFACT_STEP,
+        ARTIFACT_LOD1,
+        ARTIFACT_LOD2,
+        ARTIFACT_METRICS,
+        ARTIFACT_PROVENANCE,
+        ARTIFACT_EVALUATE,
+    }
 )
 
 #: MIME 类型；STEP 用 ``application/step``（RFC 无正式注册，业界通用写法）
@@ -51,6 +61,7 @@ ARTIFACT_MEDIA_TYPES: dict[str, str] = {
     ARTIFACT_LOD2: "model/gltf-binary",
     ARTIFACT_METRICS: "application/json",
     ARTIFACT_PROVENANCE: "application/json",
+    ARTIFACT_EVALUATE: "application/json",
 }
 
 
@@ -103,6 +114,23 @@ def compute_key(profile: MeridianProfile, *, boosters: BoosterSummary | None = N
         kernel_version=kernel,
         spec_version=SPEC_VERSION,
     )
+
+
+def evaluate_cache_key(vehicle: Vehicle) -> str:
+    """``POST /api/perf/evaluate`` 的缓存键（§9.2 同构：canonical + spec_version）。
+
+    - 键输入 = 飞行器参数的 canonical JSON（键序固定、浮点定量、缺省省略——
+      同一输入跨 Schema 扩展字节稳定，OI-36/OI-37 缓存纪律）+ ``SPEC_VERSION``；
+      分隔符 ``\\x00`` 防拼接碰撞（同 :func:`compute_key`）。
+    - ``perf-`` 前缀把性能评估缓存与几何产物键（sha256 裸十六进制）区分开——
+      两类键语义不同（Vehicle 输入 vs 剖面输入），前缀使目录混用一眼可辨。
+    - ⚠ 本键**不含**几何 kernel 版本：evaluate 是纯数值链（无 OCCT），几何语义
+      未变时不得因无关版本递增而全量失效缓存。
+    """
+    digest = hashlib.sha256(
+        "\x00".join((vehicle_canonical_json(vehicle), SPEC_VERSION)).encode("utf-8")
+    ).hexdigest()
+    return f"perf-evaluate-{digest}"
 
 
 class StagedArtifacts:
@@ -247,6 +275,41 @@ class ArtifactStore:
 
     def stage(self, key: str) -> StagedArtifacts:
         return StagedArtifacts(self, key)
+
+    def load_evaluate(self, key: str) -> dict[str, Any] | None:
+        """读取性能评估缓存（``evaluate.json``）；未缓存 / 损坏返回 ``None``。
+
+        损坏（半写截断等）按未命中处理并重算覆盖——evaluate 是毫秒级纯数值，
+        重算代价远低于错误结果流入界面的代价（"没报错 ≠ 正确"）。
+        """
+        path = self.dir_for(key) / ARTIFACT_EVALUATE
+        if not path.is_file():
+            return None
+        try:
+            payload: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
+        return payload
+
+    def save_evaluate(self, key: str, payload: dict[str, Any]) -> None:
+        """写入性能评估缓存：先写 ``.part`` 临时文件再原子改名（与暂存区同哲学）。
+
+        并发的第二个写入者要么看到完整 JSON，要么什么也看不到。始终覆盖写：
+        :meth:`load_evaluate` 把损坏文件按未命中处理后须能重写修复，不得被
+        「已存在即跳过」挡住（否则半写截断的缓存永远修不好）。
+        """
+        directory = ensure_dir(self.dir_for(key))
+        target = directory / ARTIFACT_EVALUATE
+        tmp = directory / (ARTIFACT_EVALUATE + ".part")
+        tmp.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        try:
+            tmp.replace(target)
+        except OSError:
+            # Windows 上并发改名可能撞车：另一写入者已完成等价写入，丢弃本次
+            tmp.unlink(missing_ok=True)
 
 
 def build_manifest(

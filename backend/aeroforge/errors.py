@@ -160,6 +160,18 @@ class CeaTableIntegrityError(AeroForgeError):
     stage = "perf"
 
 
+class PerfError(AeroForgeError):
+    """性能评估域错误（§8.6 / §8.8）：轨道要素缺失、构型对目标 ΔV 不可达等。
+
+    与 :class:`SizingError` 分开：定尺是「给定载荷求质量」的设计问题（§8.5），
+    性能评估是「给定火箭求运力 / ΔV 瀑布」的分析问题（§8.6）——阶段标签
+    ``perf`` 让 §10.3 的 ``stage`` 能定位到评估层。
+    """
+
+    code = "PERF_EVALUATE_FAILED"
+    stage = "perf"
+
+
 def to_error_body(exc: BaseException) -> ErrorBody:
     """把任意异常收敛为 §10.3 响应体。"""
     if isinstance(exc, AeroForgeError):

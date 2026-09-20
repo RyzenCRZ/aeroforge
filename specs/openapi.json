@@ -833,6 +833,48 @@
         }
       }
     },
+    "/api/perf/evaluate": {
+      "post": {
+        "tags": [
+          "perf"
+        ],
+        "summary": "Evaluate Performance",
+        "description": "性能评估（§8.6 L1 损失 + OI-38 运力表 + OI-23 ΔV 瀑布；同步纯数值）。\n\n硬约束违反沿用参数域拒绝口径（``PARAMS_CONSTRAINT_VIOLATION`` → 422，与\n``/api/sizing/solve`` 同判据）；评估域问题（轨道要素缺失 / 构型对目标 ΔV\n不可达）由 :class:`~aeroforge.errors.PerfError` 给出 422。缓存键 =\nsha256(canonical_json(vehicle) + spec_version)（§9.2），命中直接同步返回。",
+        "operationId": "evaluate_performance_api_perf_evaluate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PerfEvaluateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PerfEvaluateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/health": {
       "get": {
         "summary": "Health",
@@ -1218,6 +1260,72 @@
         ],
         "title": "CrossCheckOutcome",
         "description": "§8.4 一致性校验结果（几何解析 vs σ 推算干重）。"
+      },
+      "DeltaVBudget": {
+        "properties": {
+          "target_orbit": {
+            "type": "string",
+            "title": "Target Orbit",
+            "description": "目标轨道类型（Mission.orbit_type）"
+          },
+          "ideal_dv_km_s": {
+            "type": "number",
+            "title": "Ideal Dv Km S",
+            "description": "理想轨道速度增量（km/s，真空脉冲口径）"
+          },
+          "gravity_loss_km_s": {
+            "type": "number",
+            "title": "Gravity Loss Km S",
+            "description": "重力损失（km/s，L1 参数化经验模型）"
+          },
+          "aero_loss_km_s": {
+            "type": "number",
+            "title": "Aero Loss Km S",
+            "description": "气动损失（km/s，L1 参数化经验模型）"
+          },
+          "steering_loss_km_s": {
+            "type": "number",
+            "title": "Steering Loss Km S",
+            "description": "转向损失（km/s，L1 参数化经验模型）"
+          },
+          "back_pressure_loss_km_s": {
+            "type": "number",
+            "title": "Back Pressure Loss Km S",
+            "description": "背压损失（km/s）——即 §8.6「压力/控制余量」，字段名唯一（§8.8）"
+          },
+          "rotation_assist_km_s": {
+            "type": "number",
+            "title": "Rotation Assist Km S",
+            "description": "自转加成（km/s，可为负——向西发射为逆向罚项）"
+          },
+          "total_dv_km_s": {
+            "type": "number",
+            "title": "Total Dv Km S",
+            "description": "总 ΔV 需求（km/s）= 理想 + 损失 − 加成"
+          },
+          "assumptions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Assumptions",
+            "description": "每项损失的模型假设与系数来源（必填——允许简化但必须标明假设）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "target_orbit",
+          "ideal_dv_km_s",
+          "gravity_loss_km_s",
+          "aero_loss_km_s",
+          "steering_loss_km_s",
+          "back_pressure_loss_km_s",
+          "rotation_assist_km_s",
+          "total_dv_km_s",
+          "assumptions"
+        ],
+        "title": "DeltaVBudget",
+        "description": "ΔV 瀑布（OI-23 / §8.8 ``delta_v_budget``）：理想 ΔV → 各损失项 → 加成 → 总额。\n\n``back_pressure_loss_km_s`` 即 §8.6 L1 表的「压力/控制余量」——**字段名唯一**\n（§8.8 警告：同一件事的两个名字，实现只保留一个字段，禁止两处各算一份）。"
       },
       "DiagnoseResponse": {
         "properties": {
@@ -2691,6 +2799,137 @@
         ],
         "title": "MotorParseResult",
         "description": "发动机解析结果（``.eng`` / ``.rse`` 同构）。字段名带 SI 单位后缀。"
+      },
+      "OrbitPayload": {
+        "properties": {
+          "payload_kg": {
+            "type": "number",
+            "title": "Payload Kg",
+            "description": "该目标轨道的反推载荷点值（kg）"
+          },
+          "dv_used_km_s": {
+            "type": "number",
+            "title": "Dv Used Km S",
+            "description": "反推所用 ΔV 需求（km/s，含损失与纬度依赖）"
+          },
+          "dv_source": {
+            "type": "string",
+            "title": "Dv Source",
+            "description": "需求来源：量级锚定（§8.6 表中值）/ Mission 用户输入（loss_factors）"
+          },
+          "attainable": {
+            "type": "boolean",
+            "title": "Attainable",
+            "description": "构型可达该目标与否；False 时需求超出零载荷可达上限、运力记 0",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "payload_kg",
+          "dv_used_km_s",
+          "dv_source"
+        ],
+        "title": "OrbitPayload",
+        "description": "运力表中一个目标轨道的点值（OI-38 / §8.8 ``payload_by_orbit`` 行）。"
+      },
+      "PerfEvaluateRequest": {
+        "properties": {
+          "vehicle": {
+            "$ref": "#/components/schemas/Vehicle",
+            "description": "飞行器参数（§6.1 全量；Mission 层的目标轨道 / 倾角 / 损失系数与 launch_site 内嵌其中——纬度是自转加成与转向损失的唯一输入，§8.6）"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "vehicle"
+        ],
+        "title": "PerfEvaluateRequest",
+        "description": "``POST /api/perf/evaluate`` 的请求体（形态随 ``/api/sizing/solve`` 惯例）。"
+      },
+      "PerfEvaluateResponse": {
+        "properties": {
+          "point": {
+            "$ref": "#/components/schemas/PointEvaluation"
+          },
+          "delta_v_budget": {
+            "$ref": "#/components/schemas/DeltaVBudget",
+            "description": "ΔV 瀑布（OI-23，逐项列全）"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "provenance": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Provenance"
+          },
+          "cache_hit": {
+            "type": "boolean",
+            "title": "Cache Hit",
+            "description": "本次结果是否来自缓存命中（§9.2）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "point",
+          "delta_v_budget",
+          "warnings",
+          "provenance",
+          "cache_hit"
+        ],
+        "title": "PerfEvaluateResponse",
+        "description": "``POST /api/perf/evaluate`` 的响应体（点值，无 interval——归第四片 MC）。"
+      },
+      "PointEvaluation": {
+        "properties": {
+          "payload_by_orbit": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/OrbitPayload"
+            },
+            "type": "object",
+            "title": "Payload By Orbit",
+            "description": "各轨道点值运力表（OI-38：LEO / SSO / GTO / GEO 直送四目标）"
+          },
+          "payload_mass_kg": {
+            "type": "number",
+            "title": "Payload Mass Kg",
+            "description": "用户输入的载荷质量（kg，对照基准）"
+          },
+          "glow_kg": {
+            "type": "number",
+            "title": "Glow Kg",
+            "description": "固定火箭在用户载荷下的起飞质量（kg）"
+          },
+          "c3_km2_s2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "C3 Km2 S2",
+            "description": "终态轨道特征能量 C3 = v∞²（km²/s²，束缚轨道为负）——TLI / TMI / 逃逸轨道必输出（OI-23），本片四目标均为束缚轨道"
+          }
+        },
+        "type": "object",
+        "required": [
+          "payload_by_orbit",
+          "payload_mass_kg",
+          "glow_kg",
+          "c3_km2_s2"
+        ],
+        "title": "PointEvaluation",
+        "description": "点值结果（§8.7 阶段 ① 的 ``point`` 载荷）。"
       },
       "Recovery": {
         "properties": {

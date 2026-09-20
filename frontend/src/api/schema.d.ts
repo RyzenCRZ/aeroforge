@@ -454,6 +454,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/perf/evaluate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Evaluate Performance
+         * @description 性能评估（§8.6 L1 损失 + OI-38 运力表 + OI-23 ΔV 瀑布；同步纯数值）。
+         *
+         *     硬约束违反沿用参数域拒绝口径（``PARAMS_CONSTRAINT_VIOLATION`` → 422，与
+         *     ``/api/sizing/solve`` 同判据）；评估域问题（轨道要素缺失 / 构型对目标 ΔV
+         *     不可达）由 :class:`~aeroforge.errors.PerfError` 给出 422。缓存键 =
+         *     sha256(canonical_json(vehicle) + spec_version)（§9.2），命中直接同步返回。
+         */
+        post: operations["evaluate_performance_api_perf_evaluate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/health": {
         parameters: {
             query?: never;
@@ -717,6 +742,60 @@ export interface components {
              * @description 是否超过 §8.4 的 20% 阈值
              */
             exceeds_threshold: boolean;
+        };
+        /**
+         * DeltaVBudget
+         * @description ΔV 瀑布（OI-23 / §8.8 ``delta_v_budget``）：理想 ΔV → 各损失项 → 加成 → 总额。
+         *
+         *     ``back_pressure_loss_km_s`` 即 §8.6 L1 表的「压力/控制余量」——**字段名唯一**
+         *     （§8.8 警告：同一件事的两个名字，实现只保留一个字段，禁止两处各算一份）。
+         */
+        DeltaVBudget: {
+            /**
+             * Target Orbit
+             * @description 目标轨道类型（Mission.orbit_type）
+             */
+            target_orbit: string;
+            /**
+             * Ideal Dv Km S
+             * @description 理想轨道速度增量（km/s，真空脉冲口径）
+             */
+            ideal_dv_km_s: number;
+            /**
+             * Gravity Loss Km S
+             * @description 重力损失（km/s，L1 参数化经验模型）
+             */
+            gravity_loss_km_s: number;
+            /**
+             * Aero Loss Km S
+             * @description 气动损失（km/s，L1 参数化经验模型）
+             */
+            aero_loss_km_s: number;
+            /**
+             * Steering Loss Km S
+             * @description 转向损失（km/s，L1 参数化经验模型）
+             */
+            steering_loss_km_s: number;
+            /**
+             * Back Pressure Loss Km S
+             * @description 背压损失（km/s）——即 §8.6「压力/控制余量」，字段名唯一（§8.8）
+             */
+            back_pressure_loss_km_s: number;
+            /**
+             * Rotation Assist Km S
+             * @description 自转加成（km/s，可为负——向西发射为逆向罚项）
+             */
+            rotation_assist_km_s: number;
+            /**
+             * Total Dv Km S
+             * @description 总 ΔV 需求（km/s）= 理想 + 损失 − 加成
+             */
+            total_dv_km_s: number;
+            /**
+             * Assumptions
+             * @description 每项损失的模型假设与系数来源（必填——允许简化但必须标明假设）
+             */
+            assumptions: string[];
         };
         /**
          * DiagnoseResponse
@@ -1564,6 +1643,89 @@ export interface components {
              * @default false
              */
             derived: boolean;
+        };
+        /**
+         * OrbitPayload
+         * @description 运力表中一个目标轨道的点值（OI-38 / §8.8 ``payload_by_orbit`` 行）。
+         */
+        OrbitPayload: {
+            /**
+             * Payload Kg
+             * @description 该目标轨道的反推载荷点值（kg）
+             */
+            payload_kg: number;
+            /**
+             * Dv Used Km S
+             * @description 反推所用 ΔV 需求（km/s，含损失与纬度依赖）
+             */
+            dv_used_km_s: number;
+            /**
+             * Dv Source
+             * @description 需求来源：量级锚定（§8.6 表中值）/ Mission 用户输入（loss_factors）
+             */
+            dv_source: string;
+            /**
+             * Attainable
+             * @description 构型可达该目标与否；False 时需求超出零载荷可达上限、运力记 0
+             * @default true
+             */
+            attainable: boolean;
+        };
+        /**
+         * PerfEvaluateRequest
+         * @description ``POST /api/perf/evaluate`` 的请求体（形态随 ``/api/sizing/solve`` 惯例）。
+         */
+        PerfEvaluateRequest: {
+            /** @description 飞行器参数（§6.1 全量；Mission 层的目标轨道 / 倾角 / 损失系数与 launch_site 内嵌其中——纬度是自转加成与转向损失的唯一输入，§8.6） */
+            vehicle: components["schemas"]["Vehicle"];
+        };
+        /**
+         * PerfEvaluateResponse
+         * @description ``POST /api/perf/evaluate`` 的响应体（点值，无 interval——归第四片 MC）。
+         */
+        PerfEvaluateResponse: {
+            point: components["schemas"]["PointEvaluation"];
+            /** @description ΔV 瀑布（OI-23，逐项列全） */
+            delta_v_budget: components["schemas"]["DeltaVBudget"];
+            /** Warnings */
+            warnings: string[];
+            /** Provenance */
+            provenance: {
+                [key: string]: string;
+            };
+            /**
+             * Cache Hit
+             * @description 本次结果是否来自缓存命中（§9.2）
+             */
+            cache_hit: boolean;
+        };
+        /**
+         * PointEvaluation
+         * @description 点值结果（§8.7 阶段 ① 的 ``point`` 载荷）。
+         */
+        PointEvaluation: {
+            /**
+             * Payload By Orbit
+             * @description 各轨道点值运力表（OI-38：LEO / SSO / GTO / GEO 直送四目标）
+             */
+            payload_by_orbit: {
+                [key: string]: components["schemas"]["OrbitPayload"];
+            };
+            /**
+             * Payload Mass Kg
+             * @description 用户输入的载荷质量（kg，对照基准）
+             */
+            payload_mass_kg: number;
+            /**
+             * Glow Kg
+             * @description 固定火箭在用户载荷下的起飞质量（kg）
+             */
+            glow_kg: number;
+            /**
+             * C3 Km2 S2
+             * @description 终态轨道特征能量 C3 = v∞²（km²/s²，束缚轨道为负）——TLI / TMI / 逃逸轨道必输出（OI-23），本片四目标均为束缚轨道
+             */
+            c3_km2_s2: number | null;
         };
         /**
          * Recovery
@@ -3318,6 +3480,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SizingResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    evaluate_performance_api_perf_evaluate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PerfEvaluateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PerfEvaluateResponse"];
                 };
             };
             /** @description Validation Error */

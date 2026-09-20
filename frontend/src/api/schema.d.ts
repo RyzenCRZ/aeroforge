@@ -82,6 +82,10 @@ export interface paths {
         /**
          * Build Geometry
          * @description 构建回转几何：**命中即同步返回**，未命中建异步作业（规格 §9.3）。
+         *
+         *     请求体兼容两种形态：裸剖面（既有契约）或 ``{"profile", "boosters"}``
+         *     捆绑构型（OI-36）。键计算按同一份剖面对 boosters 敏感、对省略 boosters
+         *     逐字节不敏感（§9.2）。
          */
         post: operations["build_geometry_api_geometry_build_post"];
         delete?: never;
@@ -296,6 +300,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/catalog/vehicles/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search Vehicle Records
+         * @description 型号检索（OI-39 ②）：GCAT lv 全库规范化子串匹配，排序透明化。
+         *
+         *     检索词为空时返回空表（``hits=[]``，不是错误）；内置精校模板的置顶由前端完成。
+         */
+        get: operations["search_vehicle_records_api_catalog_vehicles_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/catalog/vehicles/record": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Vehicle Record
+         * @description 型号已知参数集（OI-39 ③）：lv + stage_links + stages + engines 逐字段带出处。
+         *
+         *     按名称 + 变体**精确**定位（检索候选点选后的下一跳，不做模糊）；查无此型号 →
+         *     404（``CATALOG_NOT_FOUND``）。缺失显式列出、禁止编造；``reference_only`` 提示
+         *     数据缺口较多、仅可作参照。
+         */
+        get: operations["vehicle_record_api_catalog_vehicles_record_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}": {
         parameters: {
             query?: never;
@@ -444,6 +494,86 @@ export interface components {
              * @enum {string}
              */
             type: "arc";
+        };
+        /**
+         * AvailabilityOut
+         * @description 检索候选的可用性摘要：四个概览字段各自是否可得（缺列不入摘要，§7.5）。
+         */
+        AvailabilityOut: {
+            /**
+             * Glow
+             * @description 起飞质量（GCAT launch_mass_kg，§6.1 GLOW 口径）是否可得
+             */
+            glow: boolean;
+            /**
+             * Length M
+             * @description 全长是否可得
+             */
+            length_m: boolean;
+            /**
+             * Diameter M
+             * @description 直径是否可得
+             */
+            diameter_m: boolean;
+            /**
+             * Payload Leo Kg
+             * @description LEO 运力是否可得
+             */
+            payload_leo_kg: boolean;
+        };
+        /**
+         * Booster
+         * @description 并联助推器（§1.7.6 OI-36 / §6.1 Booster 层）。
+         *
+         *     侧级 :class:`Stage` **同构复用**（含其 Engine / Tank）；级号记 **0**（与 GCAT
+         *     ``LV_Min/Max_Stage`` 的助推器记法对齐，§7.3）。计算上它与芯一级构成「0 级段」
+         *     （§8.5 合并规则），几何上 M4 = 周向均布侧级圆柱体、M5 = 完整捆绑布局。
+         */
+        Booster: {
+            /** @description 侧级（同构复用 Stage 全部字段及其 Engine / Tank；级号 0） */
+            stage: components["schemas"]["Stage"];
+            /**
+             * Count
+             * @description 并联数量（OI-36；1 = 单侧助推器）
+             * @default 2
+             */
+            count: number;
+            /**
+             * Layout
+             * @description 捆绑布局（M4 仅周向均布；M5 扩完整布局）
+             * @default radial_even
+             * @constant
+             */
+            layout: "radial_even";
+            /**
+             * Separation S
+             * @description 分离时刻（s，相对起飞）；省略 = 芯一级关机时刻（§6.1 Booster 层）
+             */
+            separation_s?: number | null;
+        };
+        /**
+         * BoosterSummary
+         * @description 构建入参里的助推器摘要（M4 简化：单一构型的周向均布组）。
+         *
+         *     这是**几何域的入参**，不是 :class:`aeroforge.params.schema.Booster` 的搬运：
+         *     从参数层助推器取 ``count`` / 侧级 ``diameter_m`` / 侧级 ``length_m`` 折算而成。
+         */
+        BoosterSummary: {
+            /**
+             * Count
+             * @description 助推器数量（周向均布的枚数）
+             */
+            count: number;
+            /**
+             * Diameter M
+             * @description 单枚助推器直径（m）
+             */
+            diameter_m: number;
+            /**
+             * Length M
+             * @description 单枚助推器长度（m；轴向基线 = 0 起算）
+             */
+            length_m: number;
         };
         /**
          * BuildResponse
@@ -727,6 +857,39 @@ export interface components {
             count: number;
         };
         /**
+         * EngineFieldsOut
+         * @description 发动机（GCAT engines 行）的逐字段投影——字段名与仓储 ``EngineRecord`` 一致。
+         *
+         *     ⚠ 两个口径注记（OI-35）：``isp_vacuum_s`` 为真空口径；``typical_thrust_n``
+         *     环境未声明——二者只作参照展示，禁止据此派生推重比或海平面/真空换算。
+         */
+        EngineFieldsOut: {
+            /** @description 发动机型号 */
+            name: components["schemas"]["SourcedField"];
+            /** @description 制造商（GCAT 机构代码原样） */
+            manufacturer: components["schemas"]["SourcedField"];
+            /** @description 族名 */
+            family: components["schemas"]["SourcedField"];
+            /** @description 氧化剂（源值原样） */
+            oxidizer: components["schemas"]["SourcedField"];
+            /** @description 燃料（源值原样） */
+            fuel: components["schemas"]["SourcedField"];
+            /** @description 满装质量（kg，官方口径：仅固体） */
+            loaded_mass_kg: components["schemas"]["SourcedField"];
+            /** @description 总冲（N·s，多为固体） */
+            total_impulse_ns: components["schemas"]["SourcedField"];
+            /** @description 典型推力（N）——⚠ source 注明「环境未声明（OI-35）」，不参与配对 */
+            typical_thrust_n: components["schemas"]["SourcedField"];
+            /** @description 真空比冲（s）——⚠ source 注明「真空口径（OI-35）」 */
+            isp_vacuum_s: components["schemas"]["SourcedField"];
+            /** @description 典型工作时间（s） */
+            burn_duration_s: components["schemas"]["SourcedField"];
+            /** @description 首次飞行（GCAT Date 列 TEXT 原样） */
+            first_flight: components["schemas"]["SourcedField"];
+            /** @description 用途/状态备注（GCAT Usage 列 TEXT 原样） */
+            usage_notes: components["schemas"]["SourcedField"];
+        };
+        /**
          * EngineRecordOut
          * @description 族谱里的一台发动机（GCAT engines 行的读取侧投影）。
          *
@@ -911,6 +1074,19 @@ export interface components {
             oxidizer_tank: components["schemas"]["Tank"];
             /** @description 燃料箱 */
             fuel_tank: components["schemas"]["Tank"];
+        };
+        /**
+         * GeometryBuildRequest
+         * @description ``POST /api/geometry/build`` 的**捆绑构型**请求体（OI-36，M4 简化摘要）。
+         *
+         *     与裸剖面请求体并存：省略 ``boosters`` 即等价于旧的裸剖面请求——
+         *     既有客户端的构建路径与缓存键逐字节不变（§9.2）。
+         */
+        GeometryBuildRequest: {
+            /** @description 母线剖面（段链，单位米） */
+            profile: components["schemas"]["MeridianProfile"];
+            /** @description M4 简化捆绑摘要（OI-36：count / 直径 / 长度，周向均布）；省略 = 无助推器，GLB 场景图只含 seg-<i> 节点 */
+            boosters?: components["schemas"]["BoosterSummary"] | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1527,6 +1703,30 @@ export interface components {
             total_records: number;
         };
         /**
+         * SourcedField
+         * @description 单个已知参数字段：值 + 出处锚点 + 单位存疑标记（§7.8 溯源红线）。
+         *
+         *     ``value`` 为 ``null`` 表示 GCAT 源缺失——**缺失是状态不是 0**（§7.5 规则 2），
+         *     一律入响应顶层的 ``missing`` 清单，禁止编造替代值。
+         */
+        SourcedField: {
+            /**
+             * Value
+             * @description 字段值（ETL 已换算 SI；GCAT 缺失为 null，禁止编造）
+             */
+            value: number | string | null;
+            /**
+             * Source
+             * @description 出处锚点，如 "GCAT gcat-2026Q3 lv#175"（表前缀 lv/st/en + 源行号）
+             */
+            source: string;
+            /**
+             * Unit Uncertain
+             * @description 该字段是否被 ETL 标记单位/量值存疑（解析失败或出合理区间，值仍保留原样）
+             */
+            unit_uncertain: boolean;
+        };
+        /**
          * Stage
          * @description 单级（§6.1 Stage 层）。自下而上编号，``index`` 1 = 第一级。
          */
@@ -1552,6 +1752,11 @@ export interface components {
              * @description 级高度（含级间段）
              */
             length_m: number;
+            /**
+             * Flatness Ratio
+             * @description 扁度系数（OI-37）：贮箱封头椭球的短长轴比；省略 = 按 0.5（2:1 椭圆封头）处理。只影响封头矢高与共底缩减量，不与「高度」重复定长（几何生效于 M5）
+             */
+            flatness_ratio?: number | null;
             /**
              * Wall Thickness M
              * @description 级壁厚
@@ -1629,6 +1834,61 @@ export interface components {
             recoverable: boolean;
             /** @description 该级构型（共底 / 储箱排列 / 两箱） */
             geometry: components["schemas"]["Geometry"];
+        };
+        /**
+         * StageAssemblyOut
+         * @description 一条装配行：stage_links 关系 + 该级的逐字段投影（缺失引用时 ``record`` 为 null）。
+         */
+        StageAssemblyOut: {
+            /**
+             * Stage No
+             * @description 级号（stage_links 的 Stage_No 原样，含空格）
+             */
+            stage_no: string | null;
+            /**
+             * Qualifier
+             * @description 限定符（stage_links 原样）
+             */
+            qualifier: string | null;
+            /** @description 级记录投影；null = 缺失引用（stage_links 指向的级不在 stages 表，不编造） */
+            record: components["schemas"]["StageFieldsOut"] | null;
+            /**
+             * Missing Reference
+             * @description 是否缺失引用（与 record 为 null 同步）
+             */
+            missing_reference: boolean;
+        };
+        /**
+         * StageFieldsOut
+         * @description 级（GCAT stages 行）的逐字段投影——字段名与仓储 ``StageRecord`` 一致。
+         *
+         *     推力真空/海平面分列（§7.5 规则 3 / OI-35）；比冲 GCAT 不提供（结构性缺失）。
+         */
+        StageFieldsOut: {
+            /** @description 级名称 */
+            name: components["schemas"]["SourcedField"];
+            /** @description 级族 */
+            family: components["schemas"]["SourcedField"];
+            /** @description 制造商（GCAT 机构代码原样） */
+            manufacturer: components["schemas"]["SourcedField"];
+            /** @description 级长（m） */
+            length_m: components["schemas"]["SourcedField"];
+            /** @description 级直径（m） */
+            diameter_m: components["schemas"]["SourcedField"];
+            /** @description 级满装质量（kg） */
+            full_mass_kg: components["schemas"]["SourcedField"];
+            /** @description 级干重（kg） */
+            dry_mass_kg: components["schemas"]["SourcedField"];
+            /** @description 级真空推力（N，§7.5 规则 3） */
+            thrust_vacuum_n: components["schemas"]["SourcedField"];
+            /** @description 级海平面推力（N，§7.5 规则 3） */
+            thrust_sea_level_n: components["schemas"]["SourcedField"];
+            /** @description 工作时间（s） */
+            burn_duration_s: components["schemas"]["SourcedField"];
+            /** @description 级引用的发动机名（GCAT 原样） */
+            engine_name: components["schemas"]["SourcedField"];
+            /** @description 发动机台数 */
+            engine_count: components["schemas"]["SourcedField"];
         };
         /**
          * Tank
@@ -2014,6 +2274,11 @@ export interface components {
              */
             stages: components["schemas"]["Stage"][];
             /**
+             * Boosters
+             * @description 并联助推器组（§1.7.6 OI-36：每项 = 侧级 Stage + 数量 + 捆绑布局；级号 0，与芯一级构成 0 级段，合并规则见 §8.5）
+             */
+            boosters?: components["schemas"]["Booster"][];
+            /**
              * Payload Mass Kg
              * @description 有效载荷质量
              */
@@ -2044,6 +2309,156 @@ export interface components {
             sequence?: components["schemas"]["Sequence"] | null;
             /** @description 回收与复用 */
             recovery?: components["schemas"]["Recovery"] | null;
+        };
+        /**
+         * VehicleFieldsOut
+         * @description 完整火箭（GCAT lv 行）的逐字段投影——字段名与仓储 ``VehicleRecord`` 一致。
+         */
+        VehicleFieldsOut: {
+            /** @description 型号名称 */
+            name: components["schemas"]["SourcedField"];
+            /** @description 型号族 */
+            family: components["schemas"]["SourcedField"];
+            /** @description 变体 */
+            variant: components["schemas"]["SourcedField"];
+            /** @description 制造商（GCAT 机构代码原样） */
+            manufacturer: components["schemas"]["SourcedField"];
+            /** @description 级号范围下界（助推器记 0/−1，§7.3） */
+            min_stage_no: components["schemas"]["SourcedField"];
+            /** @description 级号范围上界（核心级数 ≈ 此值，§7.3） */
+            max_stage_no: components["schemas"]["SourcedField"];
+            /** @description 全长（m） */
+            length_m: components["schemas"]["SourcedField"];
+            /** @description 最大直径（m） */
+            diameter_m: components["schemas"]["SourcedField"];
+            /** @description 起飞质量（kg，§6.1 GLOW 口径） */
+            launch_mass_kg: components["schemas"]["SourcedField"];
+            /** @description LEO 运力（kg） */
+            payload_leo_kg: components["schemas"]["SourcedField"];
+            /** @description GTO 运力（kg） */
+            payload_gto_kg: components["schemas"]["SourcedField"];
+            /** @description 起飞推力（N） */
+            liftoff_thrust_n: components["schemas"]["SourcedField"];
+            /** @description GCAT 类别码（O/B/S/R 原样） */
+            vehicle_class: components["schemas"]["SourcedField"];
+        };
+        /**
+         * VehicleRecordResponse
+         * @description ``GET /api/catalog/vehicles/record`` 的响应体：型号已知参数集（OI-39 ③）。
+         *
+         *     - ``missing``：显式缺失清单——每个值为 null 的字段一条（路径与控件 ``field_path``
+         *       同口径）+ 缺失引用条目；GCAT 没有的一律 null + missing，**禁止编造**；
+         *     - ``warnings``：装配过程的非致命问题（缺失引用、同名发动机多行取首见），原样透传；
+         *     - ``reference_only``：可用字段不足一半（GCAT 以 0 填未知，0 值按 §7.5「缺失是
+         *       状态不是 0」计为不可用）→ true，前端应提示「仅可作参照」。
+         */
+        VehicleRecordResponse: {
+            /**
+             * Name
+             * @description 型号名称（回显）
+             */
+            name: string;
+            /**
+             * Variant
+             * @description 变体（回显；无变体为 null）
+             */
+            variant: string | null;
+            /**
+             * Record Id
+             * @description lv 记录主键（溯源锚点）
+             */
+            record_id: number;
+            /**
+             * Quality
+             * @description §7.6 质量标签（GCAT 全库为 literature）
+             */
+            quality: string;
+            /** @description 目录库的快照来源（§7.8 溯源锚点） */
+            snapshot: components["schemas"]["SnapshotOut"];
+            /** @description lv 行逐字段投影（出处逐字段携带） */
+            vehicle: components["schemas"]["VehicleFieldsOut"];
+            /**
+             * Stages
+             * @description 装配行（按 Stage_No 数值序；含缺失引用的 null 槽位）
+             */
+            stages: components["schemas"]["StageAssemblyOut"][];
+            /**
+             * Engines
+             * @description 本型号各级引用的发动机（按装配序去重；口径注记见字段说明）
+             */
+            engines: components["schemas"]["EngineFieldsOut"][];
+            /**
+             * Missing
+             * @description 显式缺失清单（null 字段路径 + 缺失引用说明；禁止编造的缺口都在这里）
+             */
+            missing: string[];
+            /**
+             * Warnings
+             * @description 装配过程的非致命问题（原样透传，不吞不掉）
+             */
+            warnings: string[];
+            /**
+             * Reference Only
+             * @description 可用字段不足一半时为 true——数据缺口较多，仅可作参照，建模需手动补参
+             */
+            reference_only: boolean;
+        };
+        /**
+         * VehicleSearchHitOut
+         * @description 一条检索候选（GCAT lv 记录的检索投影）。
+         *
+         *     内置精校模板的置顶与「精校」标注由**前端**完成（复用 OI-34 匹配通路），
+         *     后端不掺合模板逻辑。
+         */
+        VehicleSearchHitOut: {
+            /**
+             * Record Id
+             * @description 记录主键（溯源锚点）
+             */
+            record_id: number;
+            /**
+             * Name
+             * @description 型号名称（GCAT 原样，检索点选后以此名取参数集）
+             */
+            name: string;
+            /**
+             * Variant
+             * @description 变体（GCAT 原样；无变体为 null）
+             */
+            variant: string | null;
+            /**
+             * Family
+             * @description 型号族（GCAT 原样）
+             */
+            family: string | null;
+            /**
+             * Country
+             * @description 国家/地区（第三层标签解析后的标签值；无标签为 null）
+             */
+            country: string | null;
+            /**
+             * Stage Count
+             * @description 核心级数（max_stage_no 取整；助推器记 0/−1，GCAT 未给为 null）
+             */
+            stage_count: number | null;
+            /** @description 概览字段可用性摘要 */
+            availability: components["schemas"]["AvailabilityOut"];
+        };
+        /**
+         * VehicleSearchResponse
+         * @description ``GET /api/catalog/vehicles/search`` 的响应体。
+         */
+        VehicleSearchResponse: {
+            /**
+             * Query
+             * @description 回显的检索词（原样，未规范化）
+             */
+            query: string;
+            /**
+             * Hits
+             * @description 候选清单（规范化子串匹配，按「完全匹配 > 前缀 > 子串 > 族/变体」排序，上限 12 条）；检索词为空时为空表
+             */
+            hits: components["schemas"]["VehicleSearchHitOut"][];
         };
     };
     responses: never;
@@ -2161,7 +2576,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["MeridianProfile"];
+                "application/json": components["schemas"]["MeridianProfile"] | components["schemas"]["GeometryBuildRequest"];
             };
         };
         responses: {
@@ -2433,6 +2848,69 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EnginesCatalogResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_vehicle_records_api_catalog_vehicles_search_get: {
+        parameters: {
+            query?: {
+                name?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VehicleSearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    vehicle_record_api_catalog_vehicles_record_get: {
+        parameters: {
+            query: {
+                name: string;
+                variant?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VehicleRecordResponse"];
                 };
             };
             /** @description Validation Error */

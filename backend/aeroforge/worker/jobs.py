@@ -43,13 +43,13 @@ from aeroforge.cache.store import (
 )
 from aeroforge.errors import AeroForgeError, ErrorBody, to_error_body
 from aeroforge.geometry.analytic import analyze
+from aeroforge.geometry.bundle import BoosterSummary, booster_assembly, build_bundle
 from aeroforge.geometry.meridian import MeridianProfile, resolve
 from aeroforge.geometry.revolve import (
     LOD1_ANGULAR,
     LOD1_DEFLECTION,
     LOD2_ANGULAR,
     LOD2_DEFLECTION,
-    build_segments,
     build_solid,
     export_glb,
     export_step,
@@ -127,8 +127,8 @@ class GeometryJobRunner:
         self._cancels: dict[str, threading.Event] = {}
         self._subscribers: dict[str, list[asyncio.Queue[dict[str, Any]]]] = {}
         self._lock = threading.Lock()
-        self._queue: queue.Queue[tuple[str, MeridianProfile] | None] = queue.Queue(
-            maxsize=queue_size
+        self._queue: queue.Queue[tuple[str, MeridianProfile, BoosterSummary | None] | None] = (
+            queue.Queue(maxsize=queue_size)
         )
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stopped = False
@@ -152,8 +152,13 @@ class GeometryJobRunner:
 
     # ── 对外接口（非阻塞，可在 async handler 内安全调用） ──
 
-    def submit(self, profile: MeridianProfile) -> JobRecord:
+    def submit(
+        self, profile: MeridianProfile, *, boosters: BoosterSummary | None = None
+    ) -> JobRecord:
         """入队一个几何构建作业并立即返回 ``queued`` 快照。
+
+        ``boosters`` 是 M4 简化捆绑摘要（OI-36）；省略 = 无助推器，构建路径与
+        既有实现逐字节一致（§9.2 缓存纪律）。
 
         ⚠ 本方法**不做几何计算**：只有键计算（JSON + sha256，微秒级）与入队。
         """
@@ -161,7 +166,7 @@ class GeometryJobRunner:
         with self._lock:
             self._records[record.job_id] = record
             self._cancels[record.job_id] = threading.Event()
-        self._queue.put((record.job_id, profile))
+        self._queue.put((record.job_id, profile, boosters))
         return record.model_copy(deep=True)
 
     def get(self, job_id: str) -> JobRecord | None:
@@ -213,9 +218,9 @@ class GeometryJobRunner:
             item = self._queue.get()
             if item is None:
                 return
-            job_id, profile = item
+            job_id, profile, boosters = item
             try:
-                self._run(job_id, profile)
+                self._run(job_id, profile, boosters)
             except BaseException as exc:
                 self._settle_failure(job_id, exc)
 
@@ -247,7 +252,7 @@ class GeometryJobRunner:
         if event is not None and event.is_set():
             raise _Cancelled
 
-    def _run(self, job_id: str, profile: MeridianProfile) -> None:
+    def _run(self, job_id: str, profile: MeridianProfile, boosters: BoosterSummary | None) -> None:
         started = time.perf_counter()
         timings: dict[str, float] = {}
         self._update(job_id, status=JobStatus.RUNNING, started_at=_now())
@@ -259,21 +264,28 @@ class GeometryJobRunner:
         analytic = analyze(resolved)
 
         # ── 阶段 2：回转实体 + 内核量测 + §5.7 五项校验 ──
+        #    权威量测与解析对照**仍取芯级整体体**（OI-36：助推器体积在 metrics 的
+        #    boosters 块单独成账，不得静默并入核心体积，否则解析对照自证失效）。
         self._stage(job_id, JobStage.SOLID, started, timings)
         part = build_solid(profile)
         kernel = measure(part)
         report = validate_solid(profile, kernel, analytic)
 
-        cache_key = compute_key(profile)
+        cache_key = compute_key(profile, boosters=boosters)
         manifest = build_manifest(cache_key)
         written: list[str] = []
 
+        # 捆绑构型（OI-36）：STEP 与 GLB 共用同一批助推器实体，产品名 / 节点名一致；
+        # 无助推器时 step_shape 即芯级整体体，路径与现状完全一致（§9.2）
+        step_shape, booster_solids = booster_assembly(profile, boosters, part)
+
         with self.store.stage(cache_key.key) as staged:
-            # ── 阶段 3：LOD 网格导出（**逐段具名**场景图，OI-33 ②） ──
-            #    量测与 STEP 一律仍取上面的整体体 `part`；分段体只用于 GLB 与显隐，
-            #    两者覆盖同一区域，故"看到的"与"算的"是同一个外形（P1 / ADR-012）。
+            # ── 阶段 3：LOD 网格导出（**逐段/逐枚具名**场景图，OI-33 ② / OI-36） ──
+            #    量测与解析对照一律仍取上面的芯级整体体 `part`；分段体与助推器体只
+            #    用于 GLB / STEP 导出与显隐。boosters=None 时 build_bundle 原样委托
+            #    build_segments——既有输入的产物字节路径不变（§9.2）。
             self._stage(job_id, JobStage.MESH, started, timings)
-            segments = build_segments(profile)
+            segments = build_bundle(profile, boosters)
             export_glb(
                 segments,
                 staged.register(ARTIFACT_LOD1),
@@ -292,7 +304,7 @@ class GeometryJobRunner:
             # ── 阶段 4：STEP 导出（权威格式；§5.8 规则 4：校验未通过则拒绝） ──
             self._stage(job_id, JobStage.STEP, started, timings)
             if report.ok:
-                export_step(part, staged.register(ARTIFACT_STEP))
+                export_step(step_shape, staged.register(ARTIFACT_STEP))
                 written.append(ARTIFACT_STEP)
 
             metrics: dict[str, Any] = {
@@ -318,6 +330,14 @@ class GeometryJobRunner:
                 "kernel_version": cache_key.kernel_version,
                 "spec_version": cache_key.spec_version,
             }
+            if boosters is not None and booster_solids:
+                # OI-36：助推器体积单独成账——BREP 精确值（圆柱 = π r² L），不并入 volume
+                volumes = [solid.volume for solid in booster_solids]
+                metrics["boosters"] = {
+                    "count": boosters.count,
+                    "per_booster_volume_m3": volumes[0],
+                    "total_booster_volume_m3": sum(volumes),
+                }
             staged.write_json(ARTIFACT_METRICS, metrics)
 
             timings[JobStage.DONE.value] = round((time.perf_counter() - started) * 1000.0, 2)

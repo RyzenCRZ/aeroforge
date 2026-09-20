@@ -1,8 +1,9 @@
 """内置模板库与 OI-34 名称匹配（规格 §11.5 ⑤ / §13.2 同源门禁 / OI-34）。
 
 覆盖：清单与元数据形状、模板 Vehicle 过产品校验器（与夹具同一调用方式）、
-``sourced_fields`` 对数值字段路径的全覆盖、§13.2 同源门禁（级数 / GLOW / 对照运力）、
-匹配口径（等值、宁漏勿错）、三个端点契约、与起始箭互不影响。
+``sourced_fields`` 对数值字段路径的全覆盖（含 ``boosters[i].stage.…``，OI-36）、
+§13.2 同源门禁（级数 / 助推器数 / GLOW / 对照运力）、匹配口径（等值、宁漏勿错）、
+三个端点契约、与起始箭互不影响。
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from aeroforge.params.dag import propagate_vehicle
 from aeroforge.params.report import has_hard
 from aeroforge.params.schema import Vehicle
 
-_TEMPLATE_IDS = {"falcon-9", "saturn-v"}
+_TEMPLATE_IDS = {"falcon-9", "saturn-v", "cz-5", "falcon-heavy"}
 
 
 @pytest.fixture()
@@ -36,14 +37,20 @@ def _glow_kg(template_id: str) -> float:
     """§13.2 门禁用：按模板自带的公开分项加注量传播 DAG，取 GLOW。
 
     推进剂质量不是 Schema 字段（§6.2 由 M4 定尺求解给出），故门禁把它作为图的输入
-    提供——GLOW = 各级干质量（由 σ 派生）+ 推进剂 + 载荷。
+    提供——GLOW = 各级干质量（由 σ 派生）+ 推进剂 + 载荷。带助推器的构型
+    （OI-36）再把各助推器组的 ``单枚公开加注量 / (1−σ)``（推进剂 + 干重）按组数量
+    并入——0 级段不是串联级，DAG 不建它的节点（§8.5），但 GLOW 是整箭质量，
+    门禁必须含它。
     """
     record = templates.get_template(template_id)
     vehicle = record.build_vehicle()
     masses = {i + 1: m for i, m in enumerate(record.stage_propellant_mass_kg)}
     result = propagate_vehicle(vehicle, propellant_mass_kg=masses)
     assert "vehicle.glow_kg" in result.values, f"GLOW 未算出：deferred={result.deferred}"
-    return result.values["vehicle.glow_kg"]
+    glow = result.values["vehicle.glow_kg"]
+    for group, propellant in zip(vehicle.boosters, record.booster_propellant_mass_kg, strict=True):
+        glow += group.count * propellant / (1.0 - group.stage.structure_coefficient)
+    return glow
 
 
 def _numeric_leaf_paths(model: BaseModel, prefix: str = "") -> set[str]:
@@ -53,7 +60,7 @@ def _numeric_leaf_paths(model: BaseModel, prefix: str = "") -> set[str]:
         path = f"{prefix}.{name}" if prefix else name
         if isinstance(value, BaseModel):
             paths |= _numeric_leaf_paths(value, path)
-        elif isinstance(value, tuple):
+        elif isinstance(value, (tuple, list)):
             for index, item in enumerate(value):
                 if isinstance(item, BaseModel):
                     paths |= _numeric_leaf_paths(item, f"{path}[{index}]")
@@ -83,9 +90,10 @@ def test_list_contains_both_templates_with_metadata() -> None:
 
 
 def test_get_template_unknown_id_raises_params_error() -> None:
-    # Falcon Heavy 带并联助推器，须待 M4 Booster Schema（OI-36），不入库（§11.5 ⑤ 规则 6）
+    # 未知 id → ParamsError（API 层映射 422）；falcon-heavy / cz-5 已随
+    # M4 Booster Schema（OI-36）入库，不再是"待补齐"的缺席者
     with pytest.raises(ParamsError):
-        templates.get_template("falcon-heavy")
+        templates.get_template("does-not-exist")
 
 
 @pytest.mark.parametrize("template_id", sorted(_TEMPLATE_IDS))
@@ -133,6 +141,38 @@ def test_saturnv_is_the_section_13_2_baseline() -> None:
     assert _glow_kg("saturn-v") == pytest.approx(2_970_000.0, rel=0.05)
 
 
+def test_cz5_is_the_section_13_2_baseline_with_boosters() -> None:
+    """§13.2：长征五号 = 芯级 2 级串联 + 4× 并联助推器（级号 0，OI-36）。"""
+    record = templates.get_template("cz-5")
+    vehicle = record.build_vehicle()
+    assert len(vehicle.stages) == 2  # 芯级串联数（助推器记级号 0，不入 stages）
+    assert sum(group.count for group in vehicle.boosters) == 4
+    assert vehicle.boosters[0].layout == "radial_even"  # M4 仅周向均布（OI-36 ④）
+    assert vehicle.payload_mass_kg == 25_000.0
+    assert record.reference_payload_leo_kg == 25_000.0
+    # 分项合计 ≈ 841 t，与 §13.2 标称 867 t 差 ~3%（资料级差异）；口径同 Falcon 9。
+    assert _glow_kg("cz-5") == pytest.approx(867_000.0, rel=0.05)
+
+
+def test_falcon_heavy_is_the_section_13_2_baseline_with_boosters() -> None:
+    """§13.2：Falcon Heavy = 芯级 + 2× 侧级助推器（与 F9 一级同构，级号 0）。"""
+    record = templates.get_template("falcon-heavy")
+    vehicle = record.build_vehicle()
+    assert len(vehicle.stages) == 2
+    assert sum(group.count for group in vehicle.boosters) == 2
+    # 侧级与 F9 一级同构（公开构型事实）：同直径 / 同发动机 / 同 σ
+    side = vehicle.boosters[0].stage
+    assert (side.diameter_m, side.engine_count) == (
+        vehicle.stages[0].diameter_m,
+        vehicle.stages[0].engine_count,
+    )
+    assert side.structure_coefficient == vehicle.stages[0].structure_coefficient
+    assert vehicle.payload_mass_kg == 63_800.0
+    assert record.reference_payload_leo_kg == 63_800.0
+    # 三芯同构分项合计 ≈ 1,485 t，与 §13.2 标称 1,420 t 差 ~4.6%（资料级差异，口径同上）。
+    assert _glow_kg("falcon-heavy") == pytest.approx(1_420_000.0, rel=0.05)
+
+
 # ---------------------------------------------------------------------------
 # OI-34 名称匹配（等值口径，宁漏勿错）
 # ---------------------------------------------------------------------------
@@ -150,6 +190,12 @@ def test_saturnv_is_the_section_13_2_baseline() -> None:
         ("Saturn-V", "saturn-v"),
         ("土星五号", "saturn-v"),
         ("土星5号", "saturn-v"),
+        ("长征五号", "cz-5"),
+        ("LONG MARCH 5", "cz-5"),  # 大写变体
+        ("胖五", "cz-5"),  # 昵称
+        ("Falcon Heavy", "falcon-heavy"),
+        ("falcon—heavy ", "falcon-heavy"),  # 小写 + 破折号变体 + 尾随空白
+        ("猎鹰重型", "falcon-heavy"),
     ],
 )
 def test_match_hits_only_exact_normalized_names(name: str, expected_id: str) -> None:
@@ -160,11 +206,17 @@ def test_match_hits_only_exact_normalized_names(name: str, expected_id: str) -> 
 
 @pytest.mark.parametrize(
     "name",
-    ["", "   ", "Falcon Heavy", "falcon-9x", "猎鹰", "Saturn", "猎鹰 9 号"],
+    ["", "   ", "falcon-9x", "猎鹰", "Saturn", "猎鹰 9 号", "长征六号", "Falcon X"],
 )
 def test_near_miss_names_and_empty_never_match(name: str) -> None:
     """宁漏勿错：近似名一律不命中；空串 / 纯空白不报错、返回 None。"""
     assert templates.match_template(name) is None
+
+
+def test_falcon_9_query_does_not_leak_to_falcon_heavy() -> None:
+    """ "falcon-9" 规范化后**只**命中 falcon-9——入库 falcon-heavy 不得吞掉它。"""
+    assert templates.match_template("falcon-9") is not None
+    assert templates.match_template("falcon-9").id == "falcon-9"  # type: ignore[union-attr]
 
 
 def test_normalize_name_is_the_single_normalization_point() -> None:
@@ -219,6 +271,20 @@ def test_template_detail_endpoint_returns_full_params(client: TestClient) -> Non
     assert len(vehicle.stages) == 3
 
 
+def test_template_detail_endpoint_carries_boosters(client: TestClient) -> None:
+    """捆绑构型模板（OI-36）的详情：boosters 与其出处表随响应原样下发。"""
+    response = client.get("/api/templates/cz-5")
+    assert response.status_code == 200
+    body = response.json()
+    vehicle = Vehicle.model_validate(body["vehicle"])
+    assert not has_hard(check_vehicle(vehicle))
+    assert len(vehicle.boosters) == 1
+    assert vehicle.boosters[0].count == 4
+    # 出处表路径口径抽验：与 §6.3 的 field_path 逐字一致（含助推器侧级路径）
+    assert "boosters[0].stage.diameter_m" in body["sourced_fields"]
+    assert "boosters[0].stage.engine.thrust_vacuum_n" in body["sourced_fields"]
+
+
 def test_template_detail_unknown_id_is_a_business_error(client: TestClient) -> None:
     response = client.get("/api/templates/does-not-exist")
     assert response.status_code == 422
@@ -238,7 +304,12 @@ def test_match_endpoint_hits_and_misses(client: TestClient) -> None:
     assert body["name"] == "Saturn V"
     assert body["note"]
 
-    miss = client.get("/api/templates/match", params={"name": "Falcon Heavy"}).json()
+    hit_cz5 = client.get("/api/templates/match", params={"name": "长征五号"}).json()
+    assert hit_cz5["matched"] is True
+    assert hit_cz5["template_id"] == "cz-5"
+    assert hit_cz5["name"] == "CZ-5"
+
+    miss = client.get("/api/templates/match", params={"name": "Falcon Super Heavy"}).json()
     assert miss["matched"] is False
     assert miss["template_id"] is None
     assert miss["name"] is None

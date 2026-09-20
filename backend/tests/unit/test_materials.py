@@ -26,10 +26,13 @@ from aeroforge.params.materials import (
     specific_strength,
 )
 
-#: 九条材料的 id 锚点（§7.4 点名收录；顺序即库内呈现顺序）。
+#: 十二条材料的 id 锚点（§7.4 点名收录 + 铝锂系 2195/2090/8090；顺序即库内呈现顺序）。
 _EXPECTED_IDS = (
     "al-2219",
     "al-li-2198",
+    "al-2195",
+    "al-2090",
+    "al-8090",
     "al-7075",
     "al-2014",
     "ss-301-fh",
@@ -40,9 +43,9 @@ _EXPECTED_IDS = (
 )
 
 
-def test_library_contains_exactly_the_nine_anchored_entries() -> None:
+def test_library_contains_exactly_the_anchored_entries() -> None:
     assert material_ids() == _EXPECTED_IDS
-    assert len(MATERIALS) == 9
+    assert len(MATERIALS) == 12
 
 
 def test_ids_are_unique() -> None:

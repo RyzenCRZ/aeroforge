@@ -174,15 +174,11 @@ def segment_face(geom: SegmentGeometry) -> bd.Face | None:
     return face
 
 
-def build_segments(profile: MeridianProfile) -> bd.Compound:
-    """母线剖面 → **逐段具名**的复合体（GLB 场景图的唯一来源，OI-33 ②）。
+def segment_solids(profile: MeridianProfile) -> list[bd.Part]:
+    """逐段回转实体（顺序同段链，退化段不产出）——分段复合体与捆绑复合体的公共来源。
 
-    场景图：``vehicle``（根，**无 mesh**）→ ``seg-0`` / ``seg-1`` / … 各持一个 mesh。
-    每段各自回转成实体，故段间新增的分界面在**未隐藏任何段**时被实体完全包住、
-    从外部不可见——"看到的"与"算的"仍是同一个外形（P1 / ADR-012）。
-
-    ⚠ 三条硬约束中本函数负责两条：**每个非退化段必须有节点名**（缺名 = 前端点了没反应，
-    静默失效）、**根节点不得持 mesh**（否则整体网格与分段网格叠加渲染，同一处画两遍）。
+    每段实体已具名 ``seg-<i>``（OI-33 ②）；捆绑构型（OI-36）把它们与助推器圆柱体
+    装进同一个根复合体时沿用这些节点名。
     """
     resolved = resolve(profile)
     children: list[bd.Part] = []
@@ -196,7 +192,20 @@ def build_segments(profile: MeridianProfile) -> bd.Compound:
             raise RuntimeError(msg)
         solid.label = segment_label(index)
         children.append(solid)
+    return children
 
+
+def build_segments(profile: MeridianProfile) -> bd.Compound:
+    """母线剖面 → **逐段具名**的复合体（GLB 场景图的唯一来源，OI-33 ②）。
+
+    场景图：``vehicle``（根，**无 mesh**）→ ``seg-0`` / ``seg-1`` / … 各持一个 mesh。
+    每段各自回转成实体，故段间新增的分界面在**未隐藏任何段**时被实体完全包住、
+    从外部不可见——"看到的"与"算的"仍是同一个外形（P1 / ADR-012）。
+
+    ⚠ 三条硬约束中本函数负责两条：**每个非退化段必须有节点名**（缺名 = 前端点了没反应，
+    静默失效）、**根节点不得持 mesh**（否则整体网格与分段网格叠加渲染，同一处画两遍）。
+    """
+    children = segment_solids(profile)
     if not children:
         msg = "分段回转失败：全部段均退化（两端半径均为 0），未产出任何实体"
         raise RuntimeError(msg)
@@ -263,10 +272,16 @@ def mesh_vertex_count(part: bd.Part, tolerance: float, angular_tolerance: float)
 # ---------------------------------------------------------------------------
 
 
-def export_step(part: bd.Part, path: Path) -> None:
-    """导出 STEP（⚠ 必须显式 ``unit=Unit.M``）。"""
+def export_step(shape: bd.Compound, path: Path) -> None:
+    """导出 STEP（⚠ 必须显式 ``unit=Unit.M``）。
+
+    ``shape`` 可以是整体体（芯级）或捆绑复合体（芯级 + 具名助推器，OI-36）——
+    传 :func:`aeroforge.geometry.bundle.booster_cylinders` 的实体进来时，
+    助推器节点名随产品名一并写入 STEP。（``Compound`` 同时涵盖其子类 ``Part``，
+    :func:`build_solid` 的返回值可直接传入。）
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    ok = bd.export_step(part, str(path), unit=bd.Unit.M)
+    ok = bd.export_step(shape, str(path), unit=bd.Unit.M)
     if not ok:
         msg = f"STEP 导出失败：{path}"
         raise RuntimeError(msg)

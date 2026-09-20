@@ -4,15 +4,16 @@
 --------------------------------------------------------
 起始箭是**未经来源核对**的示例骨架；本模块才是 §11.5 的「内置示例火箭模板」产品能力：
 公开型号、参数逐条标注出处，并与 §13.2 基准表**同源**——同一份数据，两个用途
-（回归基准 + 产品模板，FR-22 / OI-29）。当前覆盖 **Falcon 9（2 级）+ Saturn V（3 级）**：
-两者纯串联即可表达；长征五号 / Falcon Heavy 带并联助推器，**须待 M4 Booster Schema
-（OI-36）落地后补齐**——禁止「把助推器折算成串级」的假构型凑数（§11.5 ⑤ 规则 6）。
+（回归基准 + 产品模板，FR-22 / OI-29）。当前覆盖 **Falcon 9（2 级）+ Saturn V（3 级）
++ 长征五号 / Falcon Heavy（芯级串联 + 并联助推器，级号 0）**：后两者的助推器
+随 M4 Booster Schema（OI-36）落地入库，**不**把助推器折算成串级凑数（§11.5 ⑤ 规则 6）。
 
 数值纪律（§1.4-4 溯源红线；§11.5 ⑤ 规则 2）
 --------------------------------------------
 - ``SOURCED_FIELDS`` 覆盖模板 Vehicle 的**每一个数值字段**（键 = §6.3 / §6.5 的
-  ``field_path`` 口径）；已核对来源与「工程惯例估算」在文案里显式区分，估算值
-  （壁厚、上面级海平面外推值等）**不得冒充已核对来源**；
+  ``field_path`` 口径，含 ``boosters[i].stage.…`` 全量路径）；已核对来源与
+  「工程惯例估算」在文案里显式区分，估算值（壁厚、上面级海平面外推值等）
+  **不得冒充已核对来源**；
 - σ（``structure_coefficient``，存储权威）由公开干重 / 推进剂质量**反算**并注明算式；
 - 上面级真空喷管的海平面推力 / 比冲是**非工作点**：填的是满足 Schema 必填的工程外推值，
   出处条目显式声明「不得用于性能判定」；
@@ -36,6 +37,7 @@ from dataclasses import dataclass
 from aeroforge.errors import ParamsError
 from aeroforge.params.constraints import check_vehicle
 from aeroforge.params.schema import (
+    Booster,
     Engine,
     Geometry,
     LaunchSite,
@@ -188,9 +190,9 @@ def _merlin_vac() -> Engine:
     )
 
 
-def falcon9_vehicle() -> Vehicle:
-    """构造 Falcon 9 模板（每次调用返回全新实例，且已过产品校验器门禁）。"""
-    stage1 = Stage(
+def _f9_stage1() -> Stage:
+    """Falcon 9 / Falcon Heavy 共用的一级（芯级与助推器**同构**，公开构型事实）。"""
+    return Stage(
         index=1,
         propellant="LOX/RP-1",
         diameter_m=3.7,
@@ -206,7 +208,11 @@ def falcon9_vehicle() -> Vehicle:
         isp_source="default",
         geometry=_geometry(material="al-li-2198", wall_thickness_m=0.006, fill_fraction=1.0),
     )
-    stage2 = Stage(
+
+
+def _f9_stage2() -> Stage:
+    """Falcon 9 / Falcon Heavy 共用的二级。"""
+    return Stage(
         index=2,
         propellant="LOX/RP-1",
         diameter_m=3.7,
@@ -222,10 +228,14 @@ def falcon9_vehicle() -> Vehicle:
         isp_source="default",
         geometry=_geometry(material="al-li-2198", wall_thickness_m=0.004, fill_fraction=1.0),
     )
+
+
+def falcon9_vehicle() -> Vehicle:
+    """构造 Falcon 9 模板（每次调用返回全新实例，且已过产品校验器门禁）。"""
     return _gate(
         Vehicle(
             name="Falcon 9",
-            stages=(stage1, stage2),
+            stages=(_f9_stage1(), _f9_stage2()),
             payload_mass_kg=22_800.0,
             fairing_diameter_m=5.2,
             material="al-li-2198",
@@ -565,6 +575,337 @@ SATURNV_SOURCED_FIELDS: dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
+# 长征五号（CZ-5 基本型：芯级 2 级串联 + 4× 并联助推器，级号 0，OI-36）
+# ---------------------------------------------------------------------------
+
+# 公开分项质量（kg，工程典型值）。§13.2 标称 GLOW ≈ 867 t：分项合计 ≈ 841 t
+# （4×[11,000+145,000] + [9,500+158,000] + [1,300+23,000] + 载荷 25,000），
+# 差约 3%——公开来源本就不闭合，口径与 Falcon 9 一致（门禁取 5%，见测试）。
+_CZ5_CORE1_DRY_KG = 9_500.0
+_CZ5_CORE1_PROP_KG = 158_000.0
+_CZ5_CORE2_DRY_KG = 1_300.0
+_CZ5_CORE2_PROP_KG = 23_000.0
+_CZ5_BOOSTER_DRY_KG = 11_000.0
+_CZ5_BOOSTER_PROP_KG = 145_000.0
+
+#: 长征五号数值的统一来源行（§6.5 强制来源声明；估算项逐条另行标注）。
+_SOURCE_CZ5 = "中国航天科技集团公开资料整理（工程典型值）"
+
+
+def _yf100() -> Engine:
+    """YF-100：液氧/煤油分级燃烧循环，并联助推器主机（公开典型值）。"""
+    return Engine(
+        model="YF-100",
+        cycle="staged_combustion",
+        chamber_pressure_pa=10.0e6,
+        expansion_ratio=35.0,
+        efficiency_factor=1.0,
+        thrust_sea_level_n=1_177_000.0,
+        thrust_vacuum_n=1_340_000.0,
+        isp_sea_level_s=294.0,
+        isp_vacuum_s=335.0,
+        mixture_ratio=2.6,
+    )
+
+
+def _yf77() -> Engine:
+    """YF-77：氢氧燃气发生器循环，芯一级主机（公开典型值）。"""
+    return Engine(
+        model="YF-77",
+        cycle="gas_generator",
+        chamber_pressure_pa=10.0e6,
+        expansion_ratio=49.0,
+        efficiency_factor=1.0,
+        thrust_sea_level_n=500_000.0,
+        thrust_vacuum_n=700_000.0,
+        isp_sea_level_s=310.0,
+        isp_vacuum_s=430.0,
+        mixture_ratio=5.0,
+    )
+
+
+def _yf75d() -> Engine:
+    """YF-75D：氢氧膨胀循环上面级发动机，海平面为非工作点（外推值见出处条目）。"""
+    return Engine(
+        model="YF-75D",
+        cycle="expander",
+        chamber_pressure_pa=4.2e6,
+        expansion_ratio=80.0,
+        efficiency_factor=1.0,
+        # 海平面值按真空流量（ṁ ≈ 20.4 kg/s）与外推比冲 250 s 反推（≈ 50 kN）——
+        # 仅满足 Schema 必填，SOURCED_FIELDS 已声明不得用于性能判定。
+        thrust_sea_level_n=50_000.0,
+        thrust_vacuum_n=88_400.0,
+        isp_sea_level_s=250.0,
+        isp_vacuum_s=442.0,
+        mixture_ratio=5.5,
+    )
+
+
+def cz5_vehicle() -> Vehicle:
+    """构造长征五号模板（芯级 2 级 + 4× 助推器〔级号 0〕；已过产品校验器门禁）。
+
+    芯级为氢氧级（LOX/LH2），助推器为液氧/煤油（LOX/RP-1）——推进剂组合按级
+    覆写全局默认。助推器侧级是 :class:`Stage` 的**同构复用**（OI-36），数量与
+    布局挂在 :class:`Booster` 组上（count=4，周向均布）；不把助推器折算成串级
+    （§11.5 ⑤ 规则 6）。
+    """
+    core1 = Stage(
+        index=1,
+        propellant="LOX/LH2",
+        diameter_m=5.0,
+        length_m=31.0,
+        wall_thickness_m=0.008,
+        material="al-li-2198",
+        structure_coefficient=_CZ5_CORE1_DRY_KG / (_CZ5_CORE1_DRY_KG + _CZ5_CORE1_PROP_KG),
+        fill_fraction=1.0,
+        engine_count=2,
+        engine=_yf77(),
+        engine_height_m=3.2,
+        interstage_type="hot_staging",
+        isp_source="default",
+        geometry=_geometry(material="al-li-2198", wall_thickness_m=0.008, fill_fraction=1.0),
+    )
+    core2 = Stage(
+        index=2,
+        propellant="LOX/LH2",
+        diameter_m=5.0,
+        length_m=12.4,
+        wall_thickness_m=0.006,
+        material="al-li-2198",
+        structure_coefficient=_CZ5_CORE2_DRY_KG / (_CZ5_CORE2_DRY_KG + _CZ5_CORE2_PROP_KG),
+        fill_fraction=1.0,
+        engine_count=2,
+        engine=_yf75d(),
+        engine_height_m=2.2,
+        interstage_type="none",
+        isp_source="default",
+        geometry=_geometry(material="al-li-2198", wall_thickness_m=0.006, fill_fraction=1.0),
+    )
+    booster_stage = Stage(
+        index=1,
+        propellant="LOX/RP-1",
+        diameter_m=3.35,
+        length_m=26.3,
+        wall_thickness_m=0.006,
+        material="al-2219",
+        structure_coefficient=_CZ5_BOOSTER_DRY_KG / (_CZ5_BOOSTER_DRY_KG + _CZ5_BOOSTER_PROP_KG),
+        fill_fraction=1.0,
+        engine_count=2,
+        engine=_yf100(),
+        engine_height_m=3.0,
+        interstage_type="none",
+        isp_source="default",
+        geometry=_geometry(material="al-2219", wall_thickness_m=0.006, fill_fraction=1.0),
+    )
+    return _gate(
+        Vehicle(
+            name="CZ-5",
+            stages=(core1, core2),
+            boosters=[Booster(stage=booster_stage, count=4, layout="radial_even")],
+            payload_mass_kg=25_000.0,
+            fairing_diameter_m=5.2,
+            material="al-li-2198",
+            propellant="LOX/LH2",
+            mission=Mission(
+                orbit_type="LEO",
+                altitude_m=200_000.0,
+                inclination_deg=19.6,
+                launch_site=LaunchSite(
+                    name="文昌航天发射场",
+                    latitude_deg=19.6,
+                    altitude_m=3.0,
+                    azimuth_deg=90.0,
+                ),
+            ),
+        )
+    )
+
+
+CZ5_NOTE = (
+    "芯级两级 + 4× 并联助推器构型（级号 0，§8.5 与芯一级构成 0 级段）："
+    "芯一级 2× YF-77 与芯二级 2× YF-75D（LOX/LH2），助推器各 2× YF-100（LOX/RP-1）。"
+    "来源：公开资料整理；关键参数与 §13.2 基准表同源；M4 基准回归将校验运力误差。"
+    "数值仅在 sourced_fields 有出处标注时方可视为已核对，其余为工程惯例估算（§1.4-4）；"
+    "载入后全部字段保持可编辑。"
+)
+
+CZ5_SOURCED_FIELDS: dict[str, str] = {
+    "payload_mass_kg": f"{_SOURCE_CZ5}：公开 LEO 运力对照值（§13.2）25 t",
+    "fairing_diameter_m": f"{_SOURCE_CZ5}：整流罩直径 5.2 m（基本型）",
+    "mission.altitude_m": f"{_SOURCE_CZ5}：参考剖面 200 km 圆轨道（工程惯例取值）",
+    "mission.inclination_deg": f"{_SOURCE_CZ5}：文昌向东发射的常用倾角 19.6°",
+    "mission.launch_site.latitude_deg": f"{_SOURCE_CZ5}：文昌航天发射场北纬约 19.6°",
+    "mission.launch_site.altitude_m": _NOTE_SITE_ALT,
+    "mission.launch_site.azimuth_deg": _NOTE_AZIMUTH,
+    # ---- 芯一级（2× YF-77，LOX/LH2）----
+    "stages[0].index": _NOTE_INDEX,
+    "stages[0].diameter_m": f"{_SOURCE_CZ5}：芯级直径 5.0 m",
+    "stages[0].length_m": f"{_SOURCE_CZ5}：芯一级长约 31 m（整箭全长约 57 m，量级值）",
+    "stages[0].wall_thickness_m": _NOTE_WALL,
+    "stages[0].structure_coefficient": (
+        f"{_SOURCE_CZ5}分项质量反算：干重 ≈ 9,500 kg / 推进剂 ≈ 158,000 kg，"
+        "σ = 9,500/167,500 ≈ 0.0567"
+    ),
+    "stages[0].fill_fraction": _NOTE_FILL,
+    "stages[0].engine_count": f"{_SOURCE_CZ5}：芯一级 2 台 YF-77",
+    "stages[0].engine_height_m": "工程惯例估算（公开资料未统一）",
+    "stages[0].engine.chamber_pressure_pa": f"{_SOURCE_CZ5}（量级）：YF-77 室压 ≈ 10 MPa",
+    "stages[0].engine.expansion_ratio": f"{_SOURCE_CZ5}（量级）：YF-77 面积比 ≈ 49",
+    "stages[0].engine.efficiency_factor": _NOTE_EFFICIENCY,
+    "stages[0].engine.thrust_sea_level_n": (
+        f"{_SOURCE_CZ5}（量级）：单机海平面推力 ≈ 500 kN（芯一级为海平面工作点）"
+    ),
+    "stages[0].engine.thrust_vacuum_n": f"{_SOURCE_CZ5}：单机真空推力 ≈ 700 kN",
+    "stages[0].engine.isp_sea_level_s": f"{_SOURCE_CZ5}（量级）：海平面比冲 ≈ 310 s",
+    "stages[0].engine.isp_vacuum_s": f"{_SOURCE_CZ5}：真空比冲 ≈ 430 s",
+    "stages[0].engine.mixture_ratio": f"{_SOURCE_CZ5}：LOX/LH2 混合比 5.0",
+    "stages[0].geometry.oxidizer_tank.wall_thickness_m": _NOTE_TANK_WALL,
+    "stages[0].geometry.oxidizer_tank.fill_fraction": _NOTE_TANK_FILL,
+    "stages[0].geometry.fuel_tank.wall_thickness_m": _NOTE_TANK_WALL,
+    "stages[0].geometry.fuel_tank.fill_fraction": _NOTE_TANK_FILL,
+    # ---- 芯二级（2× YF-75D，LOX/LH2）----
+    "stages[1].index": _NOTE_INDEX,
+    "stages[1].diameter_m": f"{_SOURCE_CZ5}：芯二级直径 5.0 m（与芯一级同径）",
+    "stages[1].length_m": f"{_SOURCE_CZ5}（量级）：芯二级约 12.4 m",
+    "stages[1].wall_thickness_m": _NOTE_WALL,
+    "stages[1].structure_coefficient": (
+        f"{_SOURCE_CZ5}分项质量反算：干重 ≈ 1,300 kg / 推进剂 ≈ 23,000 kg，"
+        "σ = 1,300/24,300 ≈ 0.0535"
+    ),
+    "stages[1].fill_fraction": _NOTE_FILL,
+    "stages[1].engine_count": f"{_SOURCE_CZ5}：芯二级 2 台 YF-75D",
+    "stages[1].engine_height_m": "工程惯例估算（含大膨胀比喷管）",
+    "stages[1].engine.chamber_pressure_pa": f"{_SOURCE_CZ5}（量级）：YF-75D 室压 ≈ 4.2 MPa",
+    "stages[1].engine.expansion_ratio": f"{_SOURCE_CZ5}（量级）：YF-75D 面积比 ≈ 80",
+    "stages[1].engine.efficiency_factor": _NOTE_EFFICIENCY,
+    "stages[1].engine.thrust_sea_level_n": (
+        "工程惯例估算（真空喷管海平面为非工作点）：按真空流量 ≈ 20.4 kg/s 与外推比冲"
+        " 250 s 反推 ≈ 50 kN；仅满足 Schema 必填，不得用于性能判定"
+    ),
+    "stages[1].engine.thrust_vacuum_n": f"{_SOURCE_CZ5}：单机真空推力 ≈ 88.4 kN",
+    "stages[1].engine.isp_sea_level_s": (
+        "工程惯例估算（真空喷管海平面为非工作点）：外推比冲 250 s，不得用于性能判定"
+    ),
+    "stages[1].engine.isp_vacuum_s": f"{_SOURCE_CZ5}：真空比冲 ≈ 442 s",
+    "stages[1].engine.mixture_ratio": f"{_SOURCE_CZ5}：LOX/LH2 混合比 5.5",
+    "stages[1].geometry.oxidizer_tank.wall_thickness_m": _NOTE_TANK_WALL,
+    "stages[1].geometry.oxidizer_tank.fill_fraction": _NOTE_TANK_FILL,
+    "stages[1].geometry.fuel_tank.wall_thickness_m": _NOTE_TANK_WALL,
+    "stages[1].geometry.fuel_tank.fill_fraction": _NOTE_TANK_FILL,
+    # ---- 并联助推器（4× [2× YF-100]，LOX/RP-1；级号 0，OI-36）----
+    "boosters[0].count": f"{_SOURCE_CZ5}：4 枚并联助推器（级号 0，§8.5 与芯一级构成 0 级段）",
+    "boosters[0].stage.index": (
+        "级序号：助推器侧级同构复用 Stage（§6.1）；助推器整组级号记 0"
+        "（§1.7.6 OI-36 / §7.3 GCAT 记法）"
+    ),
+    "boosters[0].stage.diameter_m": f"{_SOURCE_CZ5}：助推器直径 3.35 m",
+    "boosters[0].stage.length_m": f"{_SOURCE_CZ5}：助推器长约 26.3 m",
+    "boosters[0].stage.wall_thickness_m": _NOTE_WALL,
+    "boosters[0].stage.structure_coefficient": (
+        f"{_SOURCE_CZ5}分项质量反算：单枚干重 ≈ 11,000 kg / 推进剂 ≈ 145,000 kg，"
+        "σ = 11,000/156,000 ≈ 0.0705"
+    ),
+    "boosters[0].stage.fill_fraction": _NOTE_FILL,
+    "boosters[0].stage.engine_count": f"{_SOURCE_CZ5}：每枚助推器 2 台 YF-100",
+    "boosters[0].stage.engine_height_m": "工程惯例估算（公开资料未统一）",
+    "boosters[0].stage.engine.chamber_pressure_pa": f"{_SOURCE_CZ5}（量级）：YF-100 室压 ≈ 10 MPa",
+    "boosters[0].stage.engine.expansion_ratio": f"{_SOURCE_CZ5}（量级）：YF-100 面积比 ≈ 35",
+    "boosters[0].stage.engine.efficiency_factor": _NOTE_EFFICIENCY,
+    "boosters[0].stage.engine.thrust_sea_level_n": (
+        f"{_SOURCE_CZ5}：单机海平面推力 ≈ 1,177 kN（助推器为海平面工作点）"
+    ),
+    "boosters[0].stage.engine.thrust_vacuum_n": f"{_SOURCE_CZ5}（量级）：单机真空推力 ≈ 1,340 kN",
+    "boosters[0].stage.engine.isp_sea_level_s": f"{_SOURCE_CZ5}：海平面比冲 ≈ 294 s",
+    "boosters[0].stage.engine.isp_vacuum_s": f"{_SOURCE_CZ5}（量级）：真空比冲 ≈ 335 s",
+    "boosters[0].stage.engine.mixture_ratio": f"{_SOURCE_CZ5}：LOX/RP-1 混合比 2.6",
+    "boosters[0].stage.geometry.oxidizer_tank.wall_thickness_m": _NOTE_TANK_WALL,
+    "boosters[0].stage.geometry.oxidizer_tank.fill_fraction": _NOTE_TANK_FILL,
+    "boosters[0].stage.geometry.fuel_tank.wall_thickness_m": _NOTE_TANK_WALL,
+    "boosters[0].stage.geometry.fuel_tank.fill_fraction": _NOTE_TANK_FILL,
+}
+
+
+# ---------------------------------------------------------------------------
+# Falcon Heavy（芯级 + 2× 侧级助推器，三者同构，级号 0，OI-36）
+# ---------------------------------------------------------------------------
+
+
+def falcon_heavy_vehicle() -> Vehicle:
+    """构造 Falcon Heavy 模板（芯级 + 2× 侧级助推器〔级号 0〕；已过产品校验器门禁）。
+
+    芯级与侧级助推器**同构**（公开构型事实）：与 Falcon 9 一级共用同一份
+    ``_f9_stage1`` 工厂与同一份出处文案（P1：同一数据只存一份）。侧级助推器
+    不折算成串级（§11.5 ⑤ 规则 6）。
+    """
+    return _gate(
+        Vehicle(
+            name="Falcon Heavy",
+            stages=(_f9_stage1(), _f9_stage2()),
+            boosters=[Booster(stage=_f9_stage1(), count=2, layout="radial_even")],
+            payload_mass_kg=63_800.0,
+            fairing_diameter_m=5.2,
+            material="al-li-2198",
+            propellant="LOX/RP-1",
+            mission=Mission(
+                orbit_type="LEO",
+                altitude_m=200_000.0,
+                inclination_deg=28.5,
+                launch_site=LaunchSite(
+                    name="Kennedy Space Center LC-39A",
+                    latitude_deg=28.6,
+                    altitude_m=3.0,
+                    azimuth_deg=90.0,
+                ),
+            ),
+        )
+    )
+
+
+FALCON_HEAVY_NOTE = (
+    "芯级 + 2× 侧级助推器构型（级号 0，§8.5 与芯一级构成 0 级段）："
+    "三者同构，各 9× Merlin 1D（LOX/RP-1），二级 1× Merlin Vacuum。"
+    "来源：公开资料整理；关键参数与 §13.2 基准表同源；M4 基准回归将校验运力误差。"
+    "数值仅在 sourced_fields 有出处标注时方可视为已核对，其余为工程惯例估算（§1.4-4）；"
+    "载入后全部字段保持可编辑。"
+)
+
+#: 芯级/侧级与 Falcon 9 一级**同构**（公开构型事实）——出处文案整体复用同一份来源，
+#: 只把路径从 ``stages[0].…`` 重映射到目标位置（P1：同一数据只存一份，防两份漂移）。
+_FH_FIRST_STAGE_SOURCED_FIELDS: dict[str, str] = {
+    path: f"与 Falcon 9 一级同构（公开构型事实，同源数据）：{note}"
+    for path, note in FALCON9_SOURCED_FIELDS.items()
+    if path.startswith("stages[0].")
+}
+_FH_STAGE2_SOURCED_FIELDS: dict[str, str] = {
+    path: note for path, note in FALCON9_SOURCED_FIELDS.items() if path.startswith("stages[1].")
+}
+_FH_BOOSTER_SOURCED_FIELDS: dict[str, str] = {
+    f"boosters[0].stage{path[len('stages[0]') :]}": (
+        f"与 Falcon 9 一级同构（公开构型事实，同源数据）：{note}"
+    )
+    for path, note in FALCON9_SOURCED_FIELDS.items()
+    if path.startswith("stages[0].")
+}
+
+FALCON_HEAVY_SOURCED_FIELDS: dict[str, str] = {
+    "payload_mass_kg": "公开 LEO 运力对照值（§13.2）：63.8 t（SpaceX 公开运力口径）",
+    "fairing_diameter_m": "公开资料：标准整流罩直径 5.2 m",
+    "mission.altitude_m": (
+        "公开资料常用参考剖面：200 km 圆轨道（§13.2 未规定轨道要素；工程惯例取值）"
+    ),
+    "mission.inclination_deg": "肯尼迪航天中心向东发射的自然倾角 28.5°（公开资料常用值）",
+    "mission.launch_site.latitude_deg": "公开资料：肯尼迪航天中心 LC-39A 北纬约 28.6°",
+    "mission.launch_site.altitude_m": _NOTE_SITE_ALT,
+    "mission.launch_site.azimuth_deg": _NOTE_AZIMUTH,
+    "boosters[0].count": ("公开资料：2 枚侧级助推器（级号 0，§8.5 与芯一级构成 0 级段）"),
+    **_FH_FIRST_STAGE_SOURCED_FIELDS,
+    **_FH_STAGE2_SOURCED_FIELDS,
+    **_FH_BOOSTER_SOURCED_FIELDS,
+}
+
+
+# ---------------------------------------------------------------------------
 # 注册表（模板元数据 + 工厂 + 出处表）
 # ---------------------------------------------------------------------------
 
@@ -576,6 +917,9 @@ class RocketTemplate:
     ``stage_propellant_mass_kg`` **不是** Vehicle 字段（Schema 里没有它的位置——
     §6.2 由 M4 定尺求解给出）：这里随模板保存公开加注量，供 §13.2 基准回归
     （GLOW 同源门禁）与 M4 运力回归共用同一份分项数据。
+    ``booster_propellant_mass_kg`` 同理（§8.5 OI-36）：**各助推器组的单枚**公开
+    加注量（kg），与 ``vehicle.boosters`` 逐组对应——GLOW 门禁把它按组数量并入，
+    0 级段回归共用同一份分项数据；空元组 = 无助推器构型。
     """
 
     id: str
@@ -587,6 +931,7 @@ class RocketTemplate:
     sourced_fields: dict[str, str]
     stage_propellant_mass_kg: tuple[float, ...]
     build_vehicle: Callable[[], Vehicle]
+    booster_propellant_mass_kg: tuple[float, ...] = ()
 
     @property
     def match_keys(self) -> frozenset[str]:
@@ -620,6 +965,30 @@ _TEMPLATES: tuple[RocketTemplate, ...] = (
         sourced_fields=SATURNV_SOURCED_FIELDS,
         stage_propellant_mass_kg=(_SV_SIC_PROP_KG, _SV_SII_PROP_KG, _SV_SIVB_PROP_KG),
         build_vehicle=saturnv_vehicle,
+    ),
+    RocketTemplate(
+        id="cz-5",
+        name="CZ-5",
+        aliases=("长征五号", "LM-5", "Long March 5", "胖五"),
+        stage_count=2,
+        note=CZ5_NOTE,
+        reference_payload_leo_kg=25_000.0,
+        sourced_fields=CZ5_SOURCED_FIELDS,
+        stage_propellant_mass_kg=(_CZ5_CORE1_PROP_KG, _CZ5_CORE2_PROP_KG),
+        booster_propellant_mass_kg=(_CZ5_BOOSTER_PROP_KG,),
+        build_vehicle=cz5_vehicle,
+    ),
+    RocketTemplate(
+        id="falcon-heavy",
+        name="Falcon Heavy",
+        aliases=("FH", "猎鹰重型"),
+        stage_count=2,
+        note=FALCON_HEAVY_NOTE,
+        reference_payload_leo_kg=63_800.0,
+        sourced_fields=FALCON_HEAVY_SOURCED_FIELDS,
+        stage_propellant_mass_kg=(_F9_S1_PROP_KG, _F9_S2_PROP_KG),
+        booster_propellant_mass_kg=(_F9_S1_PROP_KG,),
+        build_vehicle=falcon_heavy_vehicle,
     ),
 )
 

@@ -149,6 +149,52 @@ def test_vehicle_round_trips_through_json(single_stage_vehicle: Vehicle) -> None
     assert Vehicle.model_validate_json(raw) == single_stage_vehicle
 
 
+def test_canonical_json_omits_booster_and_flatness_defaults(
+    single_stage_vehicle: Vehicle,
+) -> None:
+    """缓存纪律（§9.2，OI-36/OI-37）：新增字段**不得**改变既有输入的 canonical 字节。
+
+    基线 vehicle（无助推器、无扁度）的 canonical JSON 与"未加这两个字段前"的键集合
+    等价——直接断言序列化结果中不含 ``boosters`` / ``flatness_ratio`` 键；同时断言
+    「显式取默认值」与「省略该字段」得到**同一字节**（二者是同一个模型，本就该命中
+    同一份产物）。
+    """
+    import json
+
+    from aeroforge.params.schema import Booster, canonical_json
+
+    payload = json.loads(canonical_json(single_stage_vehicle))
+    assert "boosters" not in payload, "基线 vehicle 的 canonical JSON 不得出现 boosters 键"
+    for stage in payload["stages"]:
+        assert "flatness_ratio" not in stage, (
+            "无扁度输入的 canonical JSON 不得出现 flatness_ratio 键"
+        )
+
+    # 显式空助推器列表 / 显式 None 扁度 == 省略（同一字节）
+    explicit_empty = single_stage_vehicle.model_copy(update={"boosters": []})
+    assert canonical_json(explicit_empty) == canonical_json(single_stage_vehicle)
+
+    explicit_none_stage = single_stage_vehicle.stages[0].model_copy(update={"flatness_ratio": None})
+    explicit_none = single_stage_vehicle.model_copy(update={"stages": (explicit_none_stage,)})
+    assert canonical_json(explicit_none) == canonical_json(single_stage_vehicle)
+
+    # 带助推器的构型必须**改变**字节（不同构型不得共享同一份产物）
+    boosterized = single_stage_vehicle.model_copy(
+        update={"boosters": [Booster(stage=single_stage_vehicle.stages[0], count=2)]}
+    )
+    assert canonical_json(boosterized) != canonical_json(single_stage_vehicle)
+    # 扁度显式取值同样改变字节
+    flat_stage = single_stage_vehicle.stages[0].model_copy(update={"flatness_ratio": 0.4})
+    assert canonical_json(
+        single_stage_vehicle.model_copy(update={"stages": (flat_stage,)})
+    ) != canonical_json(single_stage_vehicle)
+
+    # canonical 形态本身：键序固定、无空白（sort_keys + 紧凑分隔符）
+    text = canonical_json(single_stage_vehicle)
+    assert text == json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    assert ": " not in text and ", " not in text
+
+
 def test_si_field_publishes_display_unit(single_stage_vehicle: Vehicle) -> None:
     """SI 字段必须把 ``unit`` / ``display_unit`` 下发到 OpenAPI（§6.1 / §6.4）。
 

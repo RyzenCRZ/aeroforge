@@ -394,15 +394,21 @@ def sample_profile(
 # ---------------------------------------------------------------------------
 
 
-def _round_floats(value: object) -> object:
+def round_floats(value: object) -> object:
+    """把模型序列化结果里的浮点统一量化（供 canonical JSON 使用）。
+
+    本工程有两处 canonical JSON（剖面 :func:`canonical_json` 与参数层
+    :func:`aeroforge.params.schema.canonical_json`），共用这一个量化器——
+    两份字节形态若各自漂移，缓存键与往返判据就会分叉（P1 单一真相源）。
+    """
     if isinstance(value, float):
         rounded = round(value, CANONICAL_DECIMALS)
         # 规整 -0.0 → 0.0，否则同一模型会因符号位得到两个缓存键
         return 0.0 if rounded == 0.0 else rounded
     if isinstance(value, dict):
-        return {key: _round_floats(item) for key, item in value.items()}
+        return {key: round_floats(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
-        return [_round_floats(item) for item in value]
+        return [round_floats(item) for item in value]
     return value
 
 
@@ -417,7 +423,7 @@ def canonical_json(profile: MeridianProfile) -> str:
     只保留一种规范化形态，避免"几何键"与"存档形态"两份 canonical 各自漂移。
     代价是重命名剖面会使缓存失效（多一次重建），远小于两份形态不一致的风险。
     """
-    payload = _round_floats(profile.model_dump(mode="json", exclude_none=True))
+    payload = round_floats(profile.model_dump(mode="json", exclude_none=True))
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 

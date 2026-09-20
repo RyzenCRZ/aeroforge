@@ -61,9 +61,7 @@ def _check_stage_index(vehicle: Vehicle) -> list[Diagnostic]:
     ]
 
 
-def _check_fill_fraction(
-    stage: Stage, position: int, field_path: str, fill: float
-) -> list[Diagnostic]:
+def _check_fill_fraction(stage: Stage, field_path: str, fill: float) -> list[Diagnostic]:
     """加注比例上限 1.0（OI-03）：超过必须显式启用「最大允许加注量」，不得静默放行。"""
     if fill <= 1.0:
         return []
@@ -80,20 +78,22 @@ def _check_fill_fraction(
     ]
 
 
-def _check_stage(stage: Stage, position: int) -> list[Diagnostic]:
-    prefix = f"stages[{position}]"
+def _check_stage(stage: Stage, *, prefix: str) -> list[Diagnostic]:
+    """一级的逐项校验；``prefix`` 决定 field_path 前缀。
+
+    串联级传 ``stages[<position>]``，助推器侧级传 ``boosters[<i>].stage``
+    （OI-36：诊断路径映射必须落到该前缀，前端才能用同一张"路径 → 控件"映射渲染）。
+    """
     items: list[Diagnostic] = []
 
-    items += _check_fill_fraction(stage, position, f"{prefix}.fill_fraction", stage.fill_fraction)
+    items += _check_fill_fraction(stage, f"{prefix}.fill_fraction", stage.fill_fraction)
     items += _check_fill_fraction(
         stage,
-        position,
         f"{prefix}.geometry.oxidizer_tank.fill_fraction",
         stage.geometry.oxidizer_tank.fill_fraction,
     )
     items += _check_fill_fraction(
         stage,
-        position,
         f"{prefix}.geometry.fuel_tank.fill_fraction",
         stage.geometry.fuel_tank.fill_fraction,
     )
@@ -266,6 +266,46 @@ def _check_stage(stage: Stage, position: int) -> list[Diagnostic]:
     return items
 
 
+def _check_boosters(vehicle: Vehicle) -> list[Diagnostic]:
+    """并联助推器（OI-36）的结构防御 + 侧级逐项校验（§8.5 的 0 级段前提）。
+
+    ``count`` 下界与「有助推器必有串联级」在 Schema 层已有第一道闸（``ge=1`` /
+    ``min_length=1``）；这里再判一次，是因为约束引擎也可能被**绕过校验构造**的
+    模型调用（pydantic 的 ``model_construct`` 不校验）——硬约束必须在最靠近计算的
+    一层仍然会响，而不是信任所有调用方都过了校验。
+
+    侧级（``booster.stage``）复用 :func:`_check_stage` 逐项校验，field_path 前缀
+    映射为 ``boosters[<i>].stage.…``，与 pydantic 的 ``loc`` 同构。
+    """
+    if not vehicle.boosters:
+        return []
+
+    items: list[Diagnostic] = []
+    if not vehicle.stages:
+        items.append(
+            _hard(
+                "HARD_BOOSTER_INVALID",
+                "boosters",
+                "存在并联助推器，但该飞行器没有任何串联级——0 级段必须挂在芯一级之下（§8.5）",
+                "先补齐 stages（至少 1 级），或删去 boosters",
+            )
+        )
+
+    for position, booster in enumerate(vehicle.boosters):
+        prefix = f"boosters[{position}]"
+        if booster.count < 1:
+            items.append(
+                _hard(
+                    "HARD_BOOSTER_INVALID",
+                    prefix,
+                    f"并联助推器数量 {booster.count} < 1（级号 0，§8.5 与芯一级构成 0 级段）",
+                    "数量至少为 1（count=1 表示单侧助推器）",
+                )
+            )
+        items += _check_stage(booster.stage, prefix=f"{prefix}.stage")
+    return items
+
+
 def _check_mission(vehicle: Vehicle) -> list[Diagnostic]:
     mission = vehicle.mission
     items: list[Diagnostic] = []
@@ -370,28 +410,39 @@ def _check_materials(vehicle: Vehicle) -> list[Diagnostic]:
         )
     for position, stage in enumerate(vehicle.stages):
         prefix = f"stages[{position}]"
-        if stage.material not in known:
+        items += _check_stage_materials(stage, prefix)
+    # OI-36：助推器侧级与串联级同一口径——材料不在库同样拒绝（σ 与壁厚校验都依赖材料）
+    for position, booster in enumerate(vehicle.boosters):
+        items += _check_stage_materials(booster.stage, f"boosters[{position}].stage")
+    return items
+
+
+def _check_stage_materials(stage: Stage, prefix: str) -> list[Diagnostic]:
+    """一级（串联或助推侧级）三层材料引用的库内核验（QA-3 / §7.4）。"""
+    known = frozenset(material_ids())
+    items: list[Diagnostic] = []
+    if stage.material not in known:
+        items.append(
+            _hard(
+                "HARD_MATERIAL_UNKNOWN",
+                f"{prefix}.material",
+                f"第 {stage.index} 级材料 {stage.material!r} 不在材料库",
+                "改用库内材料 id（GET /api/catalog/materials 查看全部可选值）",
+            )
+        )
+    for role, tank, tank_path in (
+        ("氧化剂箱", stage.geometry.oxidizer_tank, f"{prefix}.geometry.oxidizer_tank"),
+        ("燃料箱", stage.geometry.fuel_tank, f"{prefix}.geometry.fuel_tank"),
+    ):
+        if tank.material not in known:
             items.append(
                 _hard(
                     "HARD_MATERIAL_UNKNOWN",
-                    f"{prefix}.material",
-                    f"第 {stage.index} 级材料 {stage.material!r} 不在材料库",
+                    f"{tank_path}.material",
+                    f"第 {stage.index} 级{role}材料 {tank.material!r} 不在材料库",
                     "改用库内材料 id（GET /api/catalog/materials 查看全部可选值）",
                 )
             )
-        for role, tank, tank_path in (
-            ("氧化剂箱", stage.geometry.oxidizer_tank, f"{prefix}.geometry.oxidizer_tank"),
-            ("燃料箱", stage.geometry.fuel_tank, f"{prefix}.geometry.fuel_tank"),
-        ):
-            if tank.material not in known:
-                items.append(
-                    _hard(
-                        "HARD_MATERIAL_UNKNOWN",
-                        f"{tank_path}.material",
-                        f"第 {stage.index} 级{role}材料 {tank.material!r} 不在材料库",
-                        "改用库内材料 id（GET /api/catalog/materials 查看全部可选值）",
-                    )
-                )
     return items
 
 
@@ -437,7 +488,8 @@ def check_vehicle(vehicle: Vehicle) -> list[Diagnostic]:
     items: list[Diagnostic] = []
     items += _check_stage_index(vehicle)
     for position, stage in enumerate(vehicle.stages):
-        items += _check_stage(stage, position)
+        items += _check_stage(stage, prefix=f"stages[{position}]")
+    items += _check_boosters(vehicle)
     items += _check_mission(vehicle)
     items += _check_materials(vehicle)
     items += _check_recovery(vehicle)

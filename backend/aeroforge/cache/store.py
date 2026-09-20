@@ -25,6 +25,8 @@ from typing import Any, Self
 from pydantic import BaseModel, Field
 
 from aeroforge import SPEC_VERSION
+from aeroforge.geometry.bundle import BoosterSummary
+from aeroforge.geometry.bundle import canonical_json as booster_canonical_json
 from aeroforge.geometry.meridian import MeridianProfile, canonical_json
 from aeroforge.geometry.revolve import kernel_version
 from aeroforge.paths import artifacts_root, ensure_dir
@@ -78,15 +80,22 @@ def profile_hash(profile: MeridianProfile) -> str:
     return hashlib.sha256(canonical_json(profile).encode("utf-8")).hexdigest()
 
 
-def compute_key(profile: MeridianProfile) -> CacheKey:
+def compute_key(profile: MeridianProfile, *, boosters: BoosterSummary | None = None) -> CacheKey:
     """计算完整缓存键。
 
     ⚠ 分隔符 ``\\x00`` 不可省略：没有它，``(a="x", b="yz")`` 与 ``(a="xy", b="z")``
     会拼出同一串而产生键碰撞。
+
+    ⚠ 缓存纪律（§9.2，OI-36）：``boosters=None`` 时的键输入与既有实现**逐字节相同**
+    ——无助推器的构建不得因 Schema 扩展而失效；带助推器时摘要的 canonical JSON
+    作为独立分量参与，使不同捆绑构型不会共享同一份陈旧产物。
     """
+    payload_parts = [canonical_json(profile)]
+    if boosters is not None:
+        payload_parts.append(booster_canonical_json(boosters))
     kernel = kernel_version()
     digest = hashlib.sha256(
-        "\x00".join((canonical_json(profile), kernel, SPEC_VERSION)).encode("utf-8")
+        "\x00".join((*payload_parts, kernel, SPEC_VERSION)).encode("utf-8")
     ).hexdigest()
     return CacheKey(
         key=digest,

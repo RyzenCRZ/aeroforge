@@ -87,3 +87,47 @@
 .vehicle-panel__button:hover {
   border-color: var(--color-accent);
 }
+
+/* OI-39 型号检索候选下拉：候选按钮 + 「精校」徽标 + 可用性摘要（token 合规，ADR-013） */
+.vehicle-panel__search-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vehicle-panel__search-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.vehicle-panel__search-item:hover {
+  border-color: var(--color-accent);
+}
+
+.vehicle-panel__badge {
+  padding: 0 4px;
+  border: 1px solid var(--color-accent);
+  border-radius: 4px;
+  color: var(--color-accent);
+  font-size: 10px;
+}
+
+.vehicle-panel__availability {
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}

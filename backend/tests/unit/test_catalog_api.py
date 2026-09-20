@@ -99,7 +99,7 @@ def test_materials_endpoint_returns_the_full_library(client: TestClient) -> None
     body = response.json()
     assert set(body) == {"materials"}
     materials = body["materials"]
-    assert len(materials) == 9
+    assert len(materials) == 12
     for item in materials:
         assert set(item) == _MATERIAL_FIELDS
         assert item["quality"] in ("literature", "typical")

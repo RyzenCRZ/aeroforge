@@ -16,11 +16,12 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Path
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from aeroforge.api.deps import get_runner, get_store
 from aeroforge.cache.store import ArtifactStore, compute_key
 from aeroforge.errors import GeometryError
+from aeroforge.geometry.bundle import BoosterSummary
 from aeroforge.geometry.meridian import (
     MeridianProfile,
     canonical_json,
@@ -43,6 +44,25 @@ class ContourSaveRequest(BaseModel):
 
     id: str | None = Field(default=None, description="母线标识；省略时按 name 派生或随机生成")
     profile: MeridianProfile = Field(description="母线剖面（段链，单位米）")
+
+
+class GeometryBuildRequest(BaseModel):
+    """``POST /api/geometry/build`` 的**捆绑构型**请求体（OI-36，M4 简化摘要）。
+
+    与裸剖面请求体并存：省略 ``boosters`` 即等价于旧的裸剖面请求——
+    既有客户端的构建路径与缓存键逐字节不变（§9.2）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    profile: MeridianProfile = Field(description="母线剖面（段链，单位米）")
+    boosters: BoosterSummary | None = Field(
+        default=None,
+        description=(
+            "M4 简化捆绑摘要（OI-36：count / 直径 / 长度，周向均布）；"
+            "省略 = 无助推器，GLB 场景图只含 seg-<i> 节点"
+        ),
+    )
 
 
 class ContourResponse(BaseModel):
@@ -133,16 +153,26 @@ def validate_profile(profile: MeridianProfile) -> ValidationReport:
 
 @router.post("/api/geometry/build", response_model=BuildResponse)
 def build_geometry(
-    profile: MeridianProfile,
+    request: MeridianProfile | GeometryBuildRequest,
     runner: Annotated[GeometryJobRunner, Depends(get_runner)],
     store: Annotated[ArtifactStore, Depends(get_store)],
 ) -> BuildResponse:
-    """构建回转几何：**命中即同步返回**，未命中建异步作业（规格 §9.3）。"""
-    key = compute_key(profile).key
+    """构建回转几何：**命中即同步返回**，未命中建异步作业（规格 §9.3）。
+
+    请求体兼容两种形态：裸剖面（既有契约）或 ``{"profile", "boosters"}``
+    捆绑构型（OI-36）。键计算按同一份剖面对 boosters 敏感、对省略 boosters
+    逐字节不敏感（§9.2）。
+    """
+    if isinstance(request, MeridianProfile):
+        profile, boosters = request, None
+    else:
+        profile, boosters = request.profile, request.boosters
+
+    key = compute_key(profile, boosters=boosters).key
     if store.is_cached(key):
         metrics = store.load_metrics(key)
         if metrics is not None:
             return BuildResponse(cache_hit=True, key=key, metrics=metrics)
 
-    record = runner.submit(profile)
+    record = runner.submit(profile, boosters=boosters)
     return BuildResponse(cache_hit=False, key=key, job_id=record.job_id)

@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from 'react'
 import { fetchMaterials, type MaterialEntry } from '../api/materials'
 import { fetchUnits, type Quantity, type Vehicle } from '../api/params'
 import { fetchTemplateDetail, matchTemplateName, type TemplateMatchResponse } from '../api/templates'
+import type { SourcedField, VehicleRecordResponse, VehicleSearchHit } from '../api/vehicleSearch'
+import { fetchVehicleRecord, searchVehicleRecords } from '../api/vehicleSearch'
 import { toDisplayValue, toSiValue, toUnitTable, unitSymbol, type UnitTable } from '../api/units'
 import { readFieldPath } from '../store/fieldPath'
 import { useVehicleStore } from '../store/vehicle'
@@ -391,6 +393,16 @@ export function VehiclePanel() {
   const matchTimer = useRef<number | null>(null)
   const ignoredName = useRef<string | null>(null)
 
+  // —— OI-39 型号检索（GCAT 全库）——
+  // 候选下拉只呈现与出处摘要，载不载入同样由用户点选决定；精校模板命中置顶标注
+  // 「精校」，但点击后仍走既有 OI-34 模板载入通路——两条通路 UI 不混、不静默代选。
+  const [searchResult, setSearchResult] = useState<{ queriedName: string; hits: VehicleSearchHit[] } | null>(null)
+  const [gcatRecord, setGcatRecord] = useState<VehicleRecordResponse | null>(null)
+  const [recordError, setRecordError] = useState<string | null>(null)
+  const [confirmNewVehicle, setConfirmNewVehicle] = useState(false)
+  const searchTimer = useRef<number | null>(null)
+  const searchToken = useRef(0)
+
   /** 名称提交后 300ms 防抖匹配；未命中 / 空名 / 已忽略的同名 → 无任何提示（宁漏勿错）。 */
   const scheduleNameMatch = (name: string) => {
     if (matchTimer.current !== null) window.clearTimeout(matchTimer.current)
@@ -410,10 +422,33 @@ export function VehiclePanel() {
     }, NAME_MATCH_DEBOUNCE_MS)
   }
 
+  /**
+   * OI-39 型号检索：与名称匹配同一节奏（300ms 防抖），但 **≥2 字符才发**——
+   * 单字符在 1 836 行的 lv 库里只会制造噪音候选。过期响应按序号作废；
+   * 检索失败静默降级（辅助通路，不抢全局错误位）。
+   */
+  const scheduleVehicleSearch = (name: string) => {
+    if (searchTimer.current !== null) window.clearTimeout(searchTimer.current)
+    setSearchResult(null)
+    if (name.trim().length < 2) return
+    const token = ++searchToken.current
+    searchTimer.current = window.setTimeout(() => {
+      searchVehicleRecords(name)
+        .then((response) => {
+          if (token !== searchToken.current) return
+          setSearchResult({ queriedName: name, hits: response.hits })
+        })
+        .catch(() => {
+          // 检索失败不弹全局错误：候选下拉缺席即可，编辑通路不受影响。
+        })
+    }, NAME_MATCH_DEBOUNCE_MS)
+  }
+
   // 卸载时清掉未触发的防抖回调（jsdom 测试与快速切换页面都靠它兜底）。
   useEffect(() => {
     return () => {
       if (matchTimer.current !== null) window.clearTimeout(matchTimer.current)
+      if (searchTimer.current !== null) window.clearTimeout(searchTimer.current)
     }
   }, [])
 
@@ -431,7 +466,10 @@ export function VehiclePanel() {
       setField(`${prefix}isp_vacuum_s`, null)
       setField(`${prefix}isp_sea_level_s`, null)
     }
-    if (path === 'name' && typeof value === 'string') scheduleNameMatch(value)
+    if (path === 'name' && typeof value === 'string') {
+      scheduleNameMatch(value)
+      scheduleVehicleSearch(value)
+    }
   }
 
   /**
@@ -475,6 +513,66 @@ export function VehiclePanel() {
     if (nameMatch === null) return
     ignoredName.current = nameMatch.queriedName
     setNameMatch(null)
+  }
+
+  /**
+   * 点选 GCAT 候选 → 已知参数集载入（OI-39 ③）。
+   *
+   * - 名称与发射场**保留用户输入**（系统不静默代选，与模板载入同一纪律）；
+   * - 可得字段经既有 `setField` 通路写入，GCAT 出处随写随记（`setSourcedFields`）；
+   * - GCAT 缺失的字段**不写**（留空不造值，占位状态保持原样）；
+   * - 比冲 / 推力不写入：GCAT 比冲是真空口径、推力环境未声明（OI-35），
+   *   写入级参数会误进口径——它们只呈现在检索详情与出处标注里；
+   * - GCAT 级数多于当前骨架时，多余级**不建**（不造结构，由用户决定加级）。
+   */
+  const loadGcatRecord = (hit: VehicleSearchHit) => {
+    const current = useVehicleStore.getState().vehicle
+    if (current === null) return
+    setRecordError(null)
+    fetchVehicleRecord(hit.name, hit.variant ?? undefined)
+      .then((record) => {
+        const latest = useVehicleStore.getState().vehicle
+        if (latest === null) return
+        const sourced: Record<string, string> = {}
+        const setIfKnown = (path: string, field: SourcedField) => {
+          if (typeof field.value !== 'number') return // null = GCAT 缺失，留空不造值
+          setField(path, field.value)
+          sourced[path] = field.source
+        }
+        setIfKnown('payload_mass_kg', record.vehicle.payload_leo_kg)
+        record.stages.forEach((assembly, index) => {
+          // 骨架级数少于 GCAT 装配时，多余级不建——写入不存在的 stages[i] 会抛错。
+          if (assembly.record === null || index >= latest.stages.length) return
+          const prefix = `stages[${index}].`
+          setIfKnown(`${prefix}length_m`, assembly.record.length_m)
+          setIfKnown(`${prefix}diameter_m`, assembly.record.diameter_m)
+          setIfKnown(`${prefix}engine_count`, assembly.record.engine_count)
+        })
+        // 出处合并而非整体替换：先前「用户修改」的标注只在本此写入的字段上让位给 GCAT。
+        setSourcedFields({ ...useVehicleStore.getState().sourcedFields, ...sourced })
+        setGcatRecord(record)
+        setSearchResult(null)
+        useVehicleStore.getState().requestDiagnose()
+      })
+      .catch((error: unknown) => {
+        // §10.3：点过的候选必须给个说法，失败不能静默。
+        setRecordError(error instanceof Error ? error.message : '未知错误')
+      })
+  }
+
+  /** 「新建空白火箭」：两步确认防误触，重置为起始箭骨架（fetchTemplate，§11.5 ① 第 6 条）。 */
+  const handleNewVehicle = () => {
+    if (!confirmNewVehicle) {
+      setConfirmNewVehicle(true)
+      return
+    }
+    setConfirmNewVehicle(false)
+    setSearchResult(null)
+    setGcatRecord(null)
+    setRecordError(null)
+    setNameMatch(null)
+    ignoredName.current = null
+    void loadTemplate()
   }
 
   // 起始箭只在首次挂载时取一次：空面板对用户没有意义，且它**只能**来自后端（§11.5 ① 第 6 条）。
@@ -557,6 +655,59 @@ export function VehiclePanel() {
         <div className="vehicle-panel__group">
           <h3 className="label">整箭</h3>
           {renderFields(VEHICLE_FIELDS, '')}
+          {searchResult !== null && (searchResult.hits.length > 0 || nameMatch?.response.matched) ? (
+            <ul className="vehicle-panel__search-list">
+              {/* 精校模板命中置顶：标「精校」，点击走既有 OI-34 模板载入通路（UI 不混） */}
+              {nameMatch !== null && nameMatch.response.matched ? (
+                <li key="template-pinned">
+                  <button
+                    type="button"
+                    className="vehicle-panel__search-item"
+                    onClick={() => {
+                      setSearchResult(null)
+                      loadMatchedTemplate()
+                    }}
+                  >
+                    <span>
+                      <span className="vehicle-panel__badge">精校</span>
+                      {` ${nameMatch.response.name}（内置模板）`}
+                    </span>
+                    <span className="vehicle-panel__availability">
+                      来源已核对的精校模板——点击按模板载入，不静默代选
+                    </span>
+                  </button>
+                </li>
+              ) : null}
+              {searchResult.hits.map((hit) => {
+                const label = `${hit.name}${hit.variant === null ? '' : `（${hit.variant}）`}`
+                const availability = [
+                  hit.country ?? '国家未知',
+                  hit.stage_count === null ? '级数未知' : `${hit.stage_count} 级`,
+                  `质量${hit.availability.glow ? '✓' : '✗'}`,
+                  `长度${hit.availability.length_m ? '✓' : '✗'}`,
+                  `直径${hit.availability.diameter_m ? '✓' : '✗'}`,
+                  `LEO${hit.availability.payload_leo_kg ? '✓' : '✗'}`,
+                ].join(' · ')
+                return (
+                  <li key={hit.record_id}>
+                    <button
+                      type="button"
+                      className="vehicle-panel__search-item"
+                      aria-label={`载入 GCAT 记录 ${label}`}
+                      onClick={() => loadGcatRecord(hit)}
+                    >
+                      <span>{label}</span>
+                      <span className="vehicle-panel__availability">{availability}</span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          ) : searchResult !== null ? (
+            <p className="vehicle-panel__hint">
+              {`GCAT 目录中未找到与「${searchResult.queriedName}」匹配的型号（GCAT 为英文谱名库，可试型号代号）`}
+            </p>
+          ) : null}
           {nameMatch !== null ? (
             <div>
               <p className="vehicle-panel__hint">
@@ -575,6 +726,29 @@ export function VehiclePanel() {
           {templateLoadError !== null ? (
             <p className="vehicle-panel__error">{`模板载入失败：${templateLoadError}`}</p>
           ) : null}
+          {gcatRecord !== null ? (
+            <p className="vehicle-panel__hint">
+              {`已从 GCAT ${gcatRecord.snapshot.id} 载入 ${gcatRecord.name}${
+                gcatRecord.variant === null ? '' : `（${gcatRecord.variant}）`
+              } 的已知参数——缺失 ${gcatRecord.missing.length} 项留空待补，全字段仍可编辑`}
+            </p>
+          ) : null}
+          {gcatRecord !== null && gcatRecord.reference_only ? (
+            <p className="vehicle-panel__error">GCAT 数据缺口较多，仅可作参照，建模需手动补参</p>
+          ) : null}
+          {gcatRecord?.warnings.map((warning, index) => (
+            <p key={`gcat-warning-${index}`} className="vehicle-panel__hint">
+              {`GCAT 装配提示：${warning}`}
+            </p>
+          ))}
+          {recordError !== null ? (
+            <p className="vehicle-panel__error">{`GCAT 参数载入失败：${recordError}`}</p>
+          ) : null}
+          <p className="vehicle-panel__hint">
+            <button type="button" className="vehicle-panel__button" onClick={handleNewVehicle}>
+              {confirmNewVehicle ? '确认新建？当前参数将被重置为起始箭骨架' : '新建空白火箭'}
+            </button>
+          </p>
         </div>
 
         {vehicle.stages.map((stage, index) => {

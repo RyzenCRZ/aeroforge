@@ -29,12 +29,13 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Mapping
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from aeroforge.geometry.meridian import MeridianProfile
+from aeroforge.geometry.meridian import MeridianProfile, round_floats
 from aeroforge.params.propellants import PropellantCombination
 from aeroforge.params.report import Diagnostic
 from aeroforge.params.units import si_field
@@ -65,6 +66,9 @@ DeliveryPipeRouting = Literal["external", "internal"]
 StageSeparationType = Literal["cold_staging", "hot_staging", "none"]
 """级间段类型。⚠ **级间段（两级之间）** 与 **级间舱 intertank（同级两箱之间）**
 是两个不同部件（§5.9 共性 2），不可混用同一字段。"""
+
+BoosterLayout = Literal["radial_even"]
+"""捆绑布局（§1.7.6 OI-36 ④）。M4 仅周向均布（``radial_even``）；完整布局随 M5 扩展。"""
 
 IspSource = Literal["default", "custom"]
 """比冲来源：取自发动机定义 / 用户自定义。"""
@@ -287,6 +291,19 @@ class Stage(ParamsModel):
     propellant: PropellantCombination = Field(description="该级推进剂组合")
     diameter_m: float = si_field("length", "级直径", gt=0.0)
     length_m: float = si_field("length", "级高度（含级间段）", gt=0.0)
+    # 扁度系数（§1.7.6 OI-37）：贮箱封头椭球的短长轴比。None = 按 0.5（2:1 椭圆封头）
+    # 处理，兜底在派生处；只影响封头矢高与 §5.9 共底缩减量，**不与「高度」重复定长**。
+    # 几何生效在 M5，本层先落为入参与值域校验。
+    flatness_ratio: float | None = Field(
+        default=None,
+        ge=0.25,
+        le=0.9,
+        description=(
+            "扁度系数（OI-37）：贮箱封头椭球的短长轴比；"
+            "省略 = 按 0.5（2:1 椭圆封头）处理。只影响封头矢高与共底缩减量，"
+            "不与「高度」重复定长（几何生效于 M5）"
+        ),
+    )
     wall_thickness_m: float = si_field("length", "级壁厚", gt=0.0)
     material: str = Field(description="材料库引用（/api/catalog/materials；值须为库内材料 id）")
     structure_coefficient: float = Field(
@@ -334,6 +351,26 @@ class Stage(ParamsModel):
     geometry: Geometry = Field(description="该级构型（共底 / 储箱排列 / 两箱）")
 
 
+class Booster(ParamsModel):
+    """并联助推器（§1.7.6 OI-36 / §6.1 Booster 层）。
+
+    侧级 :class:`Stage` **同构复用**（含其 Engine / Tank）；级号记 **0**（与 GCAT
+    ``LV_Min/Max_Stage`` 的助推器记法对齐，§7.3）。计算上它与芯一级构成「0 级段」
+    （§8.5 合并规则），几何上 M4 = 周向均布侧级圆柱体、M5 = 完整捆绑布局。
+    """
+
+    stage: Stage = Field(description="侧级（同构复用 Stage 全部字段及其 Engine / Tank；级号 0）")
+    count: int = Field(default=2, ge=1, le=12, description="并联数量（OI-36；1 = 单侧助推器）")
+    layout: BoosterLayout = Field(
+        default="radial_even", description="捆绑布局（M4 仅周向均布；M5 扩完整布局）"
+    )
+    separation_s: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="分离时刻（s，相对起飞）；省略 = 芯一级关机时刻（§6.1 Booster 层）",
+    )
+
+
 # ---------------------------------------------------------------------------
 # 任务层
 # ---------------------------------------------------------------------------
@@ -376,6 +413,13 @@ class Vehicle(ParamsModel):
     schema_version: str = Field(default=PARAMS_SCHEMA_VERSION, description="参数 Schema 版本号")
     name: str = Field(description="火箭名称")
     stages: tuple[Stage, ...] = Field(min_length=1, description="自下而上（index 1 = 第一级）")
+    boosters: list[Booster] = Field(
+        default_factory=list,
+        description=(
+            "并联助推器组（§1.7.6 OI-36：每项 = 侧级 Stage + 数量 + 捆绑布局；"
+            "级号 0，与芯一级构成 0 级段，合并规则见 §8.5）"
+        ),
+    )
     payload_mass_kg: float = si_field("mass", "有效载荷质量", ge=0.0)
     fairing_diameter_m: float | None = si_field("length", "整流罩直径", default=None, gt=0.0)
     material: str = Field(
@@ -389,6 +433,29 @@ class Vehicle(ParamsModel):
     mission: Mission = Field(description="任务与轨道")
     sequence: Sequence | None = Field(default=None, description="任务时序")
     recovery: Recovery | None = Field(default=None, description="回收与复用")
+
+
+# ---------------------------------------------------------------------------
+# canonical JSON（参数层缓存键与字节稳定判据，§9.2）
+# ---------------------------------------------------------------------------
+
+
+def canonical_json(vehicle: Vehicle) -> str:
+    """飞行器参数的 canonical JSON：键序固定、浮点定量、**省略缺省字段**。
+
+    缓存纪律（§9.2，OI-36/OI-37 的硬约束）：序列化用 ``exclude_none +
+    exclude_defaults``——带默认值的新增字段（``boosters`` 空列表、``flatness_ratio``
+    为 None 等）**不得**出现在既有输入的字节里，否则同一输入会在 Schema 扩展后
+    得到不同缓存键（等价于静默全量失效）。量化器与剖面 canonical 共用
+    :func:`aeroforge.geometry.meridian.round_floats`，两份字节形态不得各自漂移。
+
+    「取默认值的显式字段」与「省略该字段」得到**同一字节**——二者是同一个模型，
+    本就该命中同一份产物。
+    """
+    payload = round_floats(
+        vehicle.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
+    )
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from copy import deepcopy
 from typing import Any
 
 from aeroforge.params.constraints import check_vehicle
@@ -468,3 +469,96 @@ def test_levels_are_only_hard_or_warning(single_stage_vehicle: Vehicle) -> None:
 
     assert {item.level for item in _diagnostics(hard_case)} == {"hard"}
     assert {item.level for item in _diagnostics(warning_case)} == {"warning"}
+
+
+# ---------------------------------------------------------------------------
+# 并联助推器（OI-36）：结构防御 + 侧级校验的路径映射
+# ---------------------------------------------------------------------------
+
+
+def _add_booster(payload: dict[str, Any], **overrides: Any) -> None:
+    """给原始 payload 挂一组助推器（侧级从一级克隆，级号保留 1）。"""
+    side = deepcopy(payload["stages"][0])
+    side.update(overrides)
+    payload["boosters"] = [{"stage": side, "count": 2, "layout": "radial_even"}]
+
+
+def test_legal_boosters_produce_no_diagnostics(single_stage_vehicle: Vehicle) -> None:
+    """合法助推器组：侧级过 _check_stage 全套校验，不产生任何裁定。"""
+    vehicle = _mutate(single_stage_vehicle, lambda payload: _add_booster(payload))
+    assert _diagnostics(vehicle) == []
+
+
+def test_boosters_without_stages_are_rejected(single_stage_vehicle: Vehicle) -> None:
+    """有 boosters 无 stages → HARD_BOOSTER_INVALID，field_path 指 boosters（§8.5）。
+
+    ⚠ Schema 层的 ``stages: min_length=1`` 会在正常校验路径先拦下这一形态
+    （pydantic 报 ``too_short``）；本测试用 ``model_construct`` 绕过校验直构，
+    验证约束引擎这层防御**独立会响**（不信任所有调用方都过了 Schema）。
+    """
+    vehicle = _mutate(single_stage_vehicle, lambda payload: _add_booster(payload))
+    orphaned = vehicle.model_construct(
+        name=vehicle.name,
+        stages=(),
+        boosters=vehicle.boosters,
+        payload_mass_kg=vehicle.payload_mass_kg,
+        material=vehicle.material,
+        propellant=vehicle.propellant,
+        mission=vehicle.mission,
+    )
+    items = _by_code(orphaned, "HARD_BOOSTER_INVALID")
+    assert [item.field_path for item in items] == ["boosters"]
+    assert has_hard(items)
+
+
+def test_booster_count_below_one_is_rejected(single_stage_vehicle: Vehicle) -> None:
+    """count < 1（绕过 Schema 的 model_construct 构造）→ 硬约束仍会响，路径指该组。"""
+    vehicle = _mutate(single_stage_vehicle, lambda payload: _add_booster(payload))
+    broken = vehicle.model_copy(
+        update={
+            "boosters": [
+                vehicle.boosters[0].model_copy(update={"count": 0}),
+            ]
+        }
+    )
+    items = _by_code(broken, "HARD_BOOSTER_INVALID")
+    assert [item.field_path for item in items] == ["boosters[0]"]
+    assert has_hard(items)
+
+
+def test_booster_stage_violations_map_to_the_booster_prefix(
+    single_stage_vehicle: Vehicle,
+) -> None:
+    """侧级违反复用 _check_stage：field_path 前缀必须是 ``boosters[i].stage.…``。
+
+    级层与两箱同时超装（OI-03）在助推器侧级上必须分别落到
+    ``boosters[0].stage.fill_fraction`` 与 ``boosters[0].stage.geometry.<箱>.fill_fraction``
+    ——否则前端"路径 → 控件"映射会指到别处。
+    """
+
+    def overfill_everywhere(payload: dict[str, Any]) -> None:
+        _add_booster(payload, fill_fraction=1.05)
+        side = payload["boosters"][0]["stage"]
+        for tank in ("oxidizer_tank", "fuel_tank"):
+            side["geometry"][tank]["fill_fraction"] = 1.05
+
+    vehicle = _mutate(single_stage_vehicle, overfill_everywhere)
+    items = _by_code(vehicle, "HARD_FILL_OVERFILL")
+    assert [item.field_path for item in items] == [
+        "boosters[0].stage.fill_fraction",
+        "boosters[0].stage.geometry.oxidizer_tank.fill_fraction",
+        "boosters[0].stage.geometry.fuel_tank.fill_fraction",
+    ]
+    assert has_hard(items)
+
+
+def test_booster_stage_material_gate_covers_the_side_stage(
+    single_stage_vehicle: Vehicle,
+) -> None:
+    """侧级材料不在库同样拒绝（QA-3 同一口径），路径指 ``boosters[0].stage.material``。"""
+    vehicle = _mutate(
+        single_stage_vehicle,
+        lambda payload: _add_booster(payload, material="wood-777"),
+    )
+    items = _by_code(vehicle, "HARD_MATERIAL_UNKNOWN")
+    assert "boosters[0].stage.material" in [item.field_path for item in items]

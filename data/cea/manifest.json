@@ -1,0 +1,591 @@
+{
+  "g0_m_s2": 9.80665,
+  "generated_by": "tools/cea_tablegen.py",
+  "spec_refs": "AeroForge-Spec.md §8.2 / §8.3 / §3.2；ADR-004 / ADR-014",
+  "tables": {
+    "lox_ch4": {
+      "cea_version": "3.3.4",
+      "custom_reactants": [],
+      "fields": {
+        "c_star_m_s": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps"
+          ],
+          "unit": "m/s"
+        },
+        "chamber_density_kg_m3": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps"
+          ],
+          "unit": "kg/m³（燃烧室燃气）"
+        },
+        "gamma": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps"
+          ],
+          "unit": "无量纲（燃烧室 γ_s）"
+        },
+        "isp_ambient_m_s": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps",
+            "pamb_bar"
+          ],
+          "note": "CEA 环境点 = 最优膨胀至 Pamb 的 Isp_opt；Pamb≥Pc 角点为 NaN（物理无解）",
+          "unit": "m/s（CEA 有效排气速度，ADR-014 契约①；转秒 ÷ g0）"
+        },
+        "isp_vacuum_m_s": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps"
+          ],
+          "unit": "m/s（CEA 有效排气速度，ADR-014 契约①；转秒 ÷ g0）"
+        },
+        "mw": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps"
+          ],
+          "unit": "g/mol（燃烧室燃气）"
+        },
+        "t_chamber_k": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps"
+          ],
+          "unit": "K"
+        }
+      },
+      "file": "cea_lox_ch4.npz",
+      "gates": {
+        "degenerate_ambient_points": 1000,
+        "last_error_and_tc": "全部 99000 次求解 last_error=0 且 Tc∈[200, 6000] K",
+        "unimodal_of_slices": "全部 (Pc, ε) 切片 Isp 对 O/F 单峰（含各环境压）"
+      },
+      "generated_at": "2026-09-20T03:59:23+00:00",
+      "golden_anchor_check": {
+        "anchors": [
+          {
+            "c_star_dev_pct": 0.0029,
+            "c_star_interp_m_s": 1859.845,
+            "c_star_ref_m_s": 1859.9,
+            "eps": 40.0,
+            "isp_dev_pct": 0.0131,
+            "isp_vacuum_interp_m_s": 3651.323,
+            "isp_vacuum_ref_m_s": 3651.8,
+            "isp_vacuum_ref_s": 372.38,
+            "label": "LOX/CH4 §3.2",
+            "of": 3.4,
+            "pc_bar": 100.0,
+            "tc_dev_pct": 0.0073,
+            "tc_interp_k": 3628.94,
+            "tc_ref_k": 3629.2
+          }
+        ],
+        "passed": true,
+        "spec": "AeroForge-Spec.md §3.2 黄金测试锚点",
+        "tolerance_pct": 1.0
+      },
+      "grid": {
+        "eps": {
+          "count": 20,
+          "max": 300.0,
+          "min": 5.0,
+          "mode": "log10"
+        },
+        "of": {
+          "count": 50,
+          "max": 4.5,
+          "min": 1.5,
+          "mode": "linear+端点加密"
+        },
+        "pamb_bar": {
+          "count": 5,
+          "mode": "linear（含真空 0）",
+          "values": [
+            0.0,
+            0.1,
+            0.5,
+            1.013,
+            5.0
+          ]
+        },
+        "pc_bar": {
+          "count": 20,
+          "max": 200.0,
+          "min": 5.0,
+          "mode": "log10"
+        },
+        "points": 20000
+      },
+      "label": "LOX/CH4",
+      "products_gas_phase": [
+        "C",
+        "CO",
+        "CO2",
+        "H",
+        "H2",
+        "H2O",
+        "O",
+        "O2",
+        "OH",
+        "CH4",
+        "C2H4",
+        "C2H6"
+      ],
+      "propellant": "lox_ch4",
+      "reactant_t0_k": 300.0,
+      "reactants": [
+        "CH4",
+        "O2(L)"
+      ],
+      "sha256": "c9e555f9666b15f63f122862278ddec180adcc46c309c0d90e0d2e102a566f09"
+    },
+    "lox_lh2": {
+      "cea_version": "3.3.4",
+      "custom_reactants": [],
+      "fields": {
+        "c_star_m_s": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps"
+          ],
+          "unit": "m/s"
+        },
+        "chamber_density_kg_m3": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps"
+          ],
+          "unit": "kg/m³（燃烧室燃气）"
+        },
+        "gamma": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps"
+          ],
+          "unit": "无量纲（燃烧室 γ_s）"
+        },
+        "isp_ambient_m_s": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps",
+            "pamb_bar"
+          ],
+          "note": "CEA 环境点 = 最优膨胀至 Pamb 的 Isp_opt；Pamb≥Pc 角点为 NaN（物理无解）",
+          "unit": "m/s（CEA 有效排气速度，ADR-014 契约①；转秒 ÷ g0）"
+        },
+        "isp_vacuum_m_s": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps"
+          ],
+          "unit": "m/s（CEA 有效排气速度，ADR-014 契约①；转秒 ÷ g0）"
+        },
+        "mw": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps"
+          ],
+          "unit": "g/mol（燃烧室燃气）"
+        },
+        "t_chamber_k": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps"
+          ],
+          "unit": "K"
+        }
+      },
+      "file": "cea_lox_lh2.npz",
+      "gates": {
+        "degenerate_ambient_points": 1000,
+        "last_error_and_tc": "全部 99000 次求解 last_error=0 且 Tc∈[200, 6000] K",
+        "unimodal_of_slices": "全部 (Pc, ε) 切片 Isp 对 O/F 单峰（含各环境压）"
+      },
+      "generated_at": "2026-09-20T03:57:35+00:00",
+      "golden_anchor_check": {
+        "anchors": [
+          {
+            "c_star_dev_pct": 0.0016,
+            "c_star_interp_m_s": 2319.163,
+            "c_star_ref_m_s": 2319.2,
+            "eps": 40.0,
+            "isp_dev_pct": 0.0093,
+            "isp_vacuum_interp_m_s": 4399.691,
+            "isp_vacuum_ref_m_s": 4400.1,
+            "isp_vacuum_ref_s": 448.69,
+            "label": "LOX/LH2 §3.2",
+            "of": 5.5,
+            "pc_bar": 68.0
+          }
+        ],
+        "passed": true,
+        "spec": "AeroForge-Spec.md §3.2 黄金测试锚点",
+        "tolerance_pct": 1.0
+      },
+      "grid": {
+        "eps": {
+          "count": 20,
+          "max": 300.0,
+          "min": 5.0,
+          "mode": "log10"
+        },
+        "of": {
+          "count": 50,
+          "max": 8.0,
+          "min": 2.0,
+          "mode": "linear+端点加密"
+        },
+        "pamb_bar": {
+          "count": 5,
+          "mode": "linear（含真空 0）",
+          "values": [
+            0.0,
+            0.1,
+            0.5,
+            1.013,
+            5.0
+          ]
+        },
+        "pc_bar": {
+          "count": 20,
+          "max": 200.0,
+          "min": 5.0,
+          "mode": "log10"
+        },
+        "points": 20000
+      },
+      "label": "LOX/LH2",
+      "products_gas_phase": [
+        "H",
+        "H2",
+        "H2O",
+        "H2O2",
+        "HO2",
+        "O",
+        "O2",
+        "OH"
+      ],
+      "propellant": "lox_lh2",
+      "reactant_t0_k": 20.0,
+      "reactants": [
+        "H2",
+        "O2(L)"
+      ],
+      "sha256": "9a60b2437cd78e14aa7ad552f6ba041a7929187305bf054e5e043961bbaebb67"
+    },
+    "lox_rp1": {
+      "cea_version": "3.3.4",
+      "custom_reactants": [],
+      "fields": {
+        "c_star_m_s": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps"
+          ],
+          "unit": "m/s"
+        },
+        "chamber_density_kg_m3": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps"
+          ],
+          "unit": "kg/m³（燃烧室燃气）"
+        },
+        "gamma": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps"
+          ],
+          "unit": "无量纲（燃烧室 γ_s）"
+        },
+        "isp_ambient_m_s": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps",
+            "pamb_bar"
+          ],
+          "note": "CEA 环境点 = 最优膨胀至 Pamb 的 Isp_opt；Pamb≥Pc 角点为 NaN（物理无解）",
+          "unit": "m/s（CEA 有效排气速度，ADR-014 契约①；转秒 ÷ g0）"
+        },
+        "isp_vacuum_m_s": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps"
+          ],
+          "unit": "m/s（CEA 有效排气速度，ADR-014 契约①；转秒 ÷ g0）"
+        },
+        "mw": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps"
+          ],
+          "unit": "g/mol（燃烧室燃气）"
+        },
+        "t_chamber_k": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps"
+          ],
+          "unit": "K"
+        }
+      },
+      "file": "cea_lox_rp1.npz",
+      "gates": {
+        "degenerate_ambient_points": 1000,
+        "last_error_and_tc": "全部 99000 次求解 last_error=0 且 Tc∈[200, 6000] K",
+        "unimodal_of_slices": "全部 (Pc, ε) 切片 Isp 对 O/F 单峰（含各环境压）"
+      },
+      "generated_at": "2026-09-20T03:56:16+00:00",
+      "golden_anchor_check": {
+        "anchors": [
+          {
+            "c_star_dev_pct": 0.0042,
+            "c_star_interp_m_s": 1796.125,
+            "c_star_ref_m_s": 1796.2,
+            "eps": 40.0,
+            "isp_dev_pct": 0.0186,
+            "isp_vacuum_interp_m_s": 3496.25,
+            "isp_vacuum_ref_m_s": 3496.9,
+            "isp_vacuum_ref_s": 356.58,
+            "label": "LOX/RP-1 §3.2",
+            "of": 2.56,
+            "pc_bar": 68.9,
+            "tc_dev_pct": 0.012,
+            "tc_interp_k": 3662.06,
+            "tc_ref_k": 3662.5
+          }
+        ],
+        "passed": true,
+        "spec": "AeroForge-Spec.md §3.2 黄金测试锚点",
+        "tolerance_pct": 1.0
+      },
+      "grid": {
+        "eps": {
+          "count": 20,
+          "max": 300.0,
+          "min": 5.0,
+          "mode": "log10"
+        },
+        "of": {
+          "count": 50,
+          "max": 4.0,
+          "min": 1.0,
+          "mode": "linear+端点加密"
+        },
+        "pamb_bar": {
+          "count": 5,
+          "mode": "linear（含真空 0）",
+          "values": [
+            0.0,
+            0.1,
+            0.5,
+            1.013,
+            5.0
+          ]
+        },
+        "pc_bar": {
+          "count": 20,
+          "max": 200.0,
+          "min": 5.0,
+          "mode": "log10"
+        },
+        "points": 20000
+      },
+      "label": "LOX/RP-1",
+      "products_gas_phase": [
+        "C",
+        "CO",
+        "CO2",
+        "H",
+        "H2",
+        "H2O",
+        "O",
+        "O2",
+        "OH",
+        "CH4",
+        "C2H4",
+        "C2H6"
+      ],
+      "propellant": "lox_rp1",
+      "reactant_t0_k": 300.0,
+      "reactants": [
+        "RP-1",
+        "O2(L)"
+      ],
+      "sha256": "42c2af8c10ab36609bd08c4248a3dfa9f6e0941f2a7c4950ce32d6541f2b19e6"
+    },
+    "n2o4_mmh": {
+      "cea_version": "3.3.4",
+      "custom_reactants": [
+        {
+          "dhf_kj_mol": 54.2,
+          "formula": {
+            "C": 1,
+            "H": 6,
+            "N": 2
+          },
+          "mw": 46.07,
+          "name": "MMH",
+          "source": "公开热化学数据常用值"
+        }
+      ],
+      "fields": {
+        "c_star_m_s": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps"
+          ],
+          "unit": "m/s"
+        },
+        "chamber_density_kg_m3": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps"
+          ],
+          "unit": "kg/m³（燃烧室燃气）"
+        },
+        "gamma": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps"
+          ],
+          "unit": "无量纲（燃烧室 γ_s）"
+        },
+        "isp_ambient_m_s": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps",
+            "pamb_bar"
+          ],
+          "note": "CEA 环境点 = 最优膨胀至 Pamb 的 Isp_opt；Pamb≥Pc 角点为 NaN（物理无解）",
+          "unit": "m/s（CEA 有效排气速度，ADR-014 契约①；转秒 ÷ g0）"
+        },
+        "isp_vacuum_m_s": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps"
+          ],
+          "unit": "m/s（CEA 有效排气速度，ADR-014 契约①；转秒 ÷ g0）"
+        },
+        "mw": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps"
+          ],
+          "unit": "g/mol（燃烧室燃气）"
+        },
+        "t_chamber_k": {
+          "dims": [
+            "of",
+            "pc_bar",
+            "eps"
+          ],
+          "unit": "K"
+        }
+      },
+      "file": "cea_n2o4_mmh.npz",
+      "gates": {
+        "degenerate_ambient_points": 1000,
+        "last_error_and_tc": "全部 99000 次求解 last_error=0 且 Tc∈[200, 6000] K",
+        "unimodal_of_slices": "全部 (Pc, ε) 切片 Isp 对 O/F 单峰（含各环境压）"
+      },
+      "generated_at": "2026-09-20T04:00:58+00:00",
+      "golden_anchor_check": {
+        "anchors": [],
+        "passed": true,
+        "spec": "AeroForge-Spec.md §3.2 黄金测试锚点",
+        "tolerance_pct": 1.0
+      },
+      "grid": {
+        "eps": {
+          "count": 20,
+          "max": 300.0,
+          "min": 5.0,
+          "mode": "log10"
+        },
+        "of": {
+          "count": 50,
+          "max": 3.5,
+          "min": 0.8,
+          "mode": "linear+端点加密"
+        },
+        "pamb_bar": {
+          "count": 5,
+          "mode": "linear（含真空 0）",
+          "values": [
+            0.0,
+            0.1,
+            0.5,
+            1.013,
+            5.0
+          ]
+        },
+        "pc_bar": {
+          "count": 20,
+          "max": 200.0,
+          "min": 5.0,
+          "mode": "log10"
+        },
+        "points": 20000
+      },
+      "label": "N2O4/MMH",
+      "products_gas_phase": [
+        "CO",
+        "CO2",
+        "H",
+        "H2",
+        "H2O",
+        "N2",
+        "N",
+        "NO",
+        "NO2",
+        "O",
+        "O2",
+        "OH",
+        "NH3",
+        "HCN",
+        "CH4"
+      ],
+      "propellant": "n2o4_mmh",
+      "reactant_t0_k": 300.0,
+      "reactants": [
+        "MMH",
+        "N2O4(L)"
+      ],
+      "sha256": "dca311d65ded4f99a73f9215a967718446839827f30f6df29ea9449e3a6875a1"
+    }
+  },
+  "version": 1
+}

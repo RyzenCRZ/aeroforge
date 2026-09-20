@@ -129,6 +129,24 @@ class CatalogNotFoundError(AeroForgeError):
         )
 
 
+class CeaTableNotFoundError(AeroForgeError):
+    """CEA 预计算表缺失或推进剂组合未收录（规格 §8.2 / ADR-004）。"""
+
+    code = "CEA_TABLE_NOT_FOUND"
+    stage = "perf"
+
+
+class CeaTableIntegrityError(AeroForgeError):
+    """CEA 预计算表完整性校验失败：sha256 不符或 manifest 与表内容错位。
+
+    ``data/`` 下的表是**不可变数据**（§15，禁止手改）；校验失败即拒绝加载，
+    绝不静默降级为常数或旧表（静默回退正是 R-29 同族的"没报错 ≠ 正确"）。
+    """
+
+    code = "CEA_TABLE_INTEGRITY"
+    stage = "perf"
+
+
 def to_error_body(exc: BaseException) -> ErrorBody:
     """把任意异常收敛为 §10.3 响应体。"""
     if isinstance(exc, AeroForgeError):

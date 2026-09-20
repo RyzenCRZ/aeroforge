@@ -18,9 +18,12 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 #: 推进剂组合枚举。取值即 :data:`PROPELLANTS` 的键——两处必须同步（同文件内定义，无漂移空间）。
-PropellantCombination = Literal["LOX/RP-1", "LOX/LH2", "LOX/CH4", "N2O4/UDMH"]
+PropellantCombination = Literal["LOX/RP-1", "LOX/LH2", "LOX/CH4", "N2O4/UDMH", "N2O4/MMH"]
 
 _SOURCE = "公开资料常用值（工程惯例，非权威来源）"
+_SOURCE_SUTTON = (
+    "Sutton, Rocket Propulsion Elements（第 9 版）推进剂典型物性表（质量标签：typical，工程典型值）"
+)
 
 
 class PropellantProperties(BaseModel):
@@ -65,6 +68,16 @@ PROPELLANTS: dict[PropellantCombination, PropellantProperties] = {
         fuel="UDMH",
         density_ox_kg_m3=1443.0,
         density_fuel_kg_m3=791.0,
+    ),
+    # N2O4/MMH：M4 CEA 表（perf 层键 n2o4_mmh）对应的密度物性；MMH（一甲基肼）≠ UDMH，
+    # 二者密度不同（874 vs 791），不得混用。
+    "N2O4/MMH": PropellantProperties(
+        combination="N2O4/MMH",
+        oxidizer="N2O4",
+        fuel="MMH",
+        density_ox_kg_m3=1443.0,
+        density_fuel_kg_m3=874.0,
+        source=_SOURCE_SUTTON,
     ),
 }
 

@@ -1741,7 +1741,7 @@ export interface components {
              * @description 该级推进剂组合
              * @enum {string}
              */
-            propellant: "LOX/RP-1" | "LOX/LH2" | "LOX/CH4" | "N2O4/UDMH";
+            propellant: "LOX/RP-1" | "LOX/LH2" | "LOX/CH4" | "N2O4/UDMH" | "N2O4/MMH";
             /**
              * Diameter M
              * @description 级直径
@@ -2298,7 +2298,7 @@ export interface components {
              * @description 推进剂组合（全局默认，可被 Stage 覆盖）
              * @enum {string}
              */
-            propellant: "LOX/RP-1" | "LOX/LH2" | "LOX/CH4" | "N2O4/UDMH";
+            propellant: "LOX/RP-1" | "LOX/LH2" | "LOX/CH4" | "N2O4/UDMH" | "N2O4/MMH";
             /** @description 气动（缺失时按默认值并附 warning） */
             aero?: components["schemas"]["Aero"] | null;
             /** @description 整箭母线剖面（§5.2 的 2D→3D 入口；M1 已落地） */

@@ -3020,7 +3020,8 @@
               "LOX/RP-1",
               "LOX/LH2",
               "LOX/CH4",
-              "N2O4/UDMH"
+              "N2O4/UDMH",
+              "N2O4/MMH"
             ],
             "title": "Propellant",
             "description": "该级推进剂组合"
@@ -4036,7 +4037,8 @@
               "LOX/RP-1",
               "LOX/LH2",
               "LOX/CH4",
-              "N2O4/UDMH"
+              "N2O4/UDMH",
+              "N2O4/MMH"
             ],
             "title": "Propellant",
             "description": "推进剂组合（全局默认，可被 Stage 覆盖）"

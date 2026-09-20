@@ -55,6 +55,11 @@ def contours_root() -> Path:
     return data_root() / "contours"
 
 
+def cea_tables_root() -> Path:
+    """CEA 预计算表目录（规格 §15：``data/cea``，只读数据，由 ``tools/cea_tablegen.py`` 生成）。"""
+    return data_root() / "cea"
+
+
 def config_file() -> Path:
     """配置文件路径（规格 §18.4：来源优先级 ``环境变量 > config.toml > 默认值``）。
 

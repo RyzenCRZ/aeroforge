@@ -102,9 +102,15 @@ describe('写回 config.toml', () => {
     await user.type(input, '0.00051')
     await user.tab()
 
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(2)
-    })
+    // ⚠ 超时放宽到 4s：CI runner 上与 300ms 防抖类重测试（TemplateMatch / VehicleSearch）
+    // 并行时事件循环被挤占，PUT 链路可能超过 waitFor 默认的 1s 轮询窗（实测 CI 独红一次）。
+    // 断言语义不变：等到第 2 次调用后，下方仍逐项核对路径 / 方法 / 请求体。
+    await waitFor(
+      () => {
+        expect(fetchMock).toHaveBeenCalledTimes(2)
+      },
+      { timeout: 4000 },
+    )
     const [path, init] = fetchMock.mock.calls[1] as unknown as [string, RequestInit]
     expect(path).toBe('/api/params/thresholds')
     expect(init.method).toBe('PUT')
@@ -129,9 +135,13 @@ describe('写回 config.toml', () => {
     await user.clear(input)
     await user.tab()
 
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(2)
-    })
+    // 同上：CI 负载下放宽到 4s（断言语义不变）
+    await waitFor(
+      () => {
+        expect(fetchMock).toHaveBeenCalledTimes(2)
+      },
+      { timeout: 4000 },
+    )
     const [, init] = fetchMock.mock.calls[1] as unknown as [string, RequestInit]
     expect(JSON.parse(String(init.body))).toEqual({ [CONFIGURED.key]: null })
   })

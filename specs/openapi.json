@@ -791,6 +791,48 @@
         }
       }
     },
+    "/api/sizing/solve": {
+      "post": {
+        "tags": [
+          "sizing"
+        ],
+        "summary": "Solve Sizing",
+        "description": "多级质量迭代求解（§8.5：外层 GLOW 割线 + 内层自上而下，同步纯数值）。\n\n硬约束违反（Isp custom 缺值、材料不在库等）沿用参数域的拒绝口径\n（``PARAMS_CONSTRAINT_VIOLATION`` → 422，与 ``/api/params/diagnose`` 同判据）；\n求解域自身的问题（无物理解 / 不收敛）由 :class:`~aeroforge.errors.SizingError`\n给出带残差轨迹的 422——不静默给半收敛结果。",
+        "operationId": "solve_sizing_api_sizing_solve_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SizingSolveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SizingResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/health": {
       "get": {
         "summary": "Health",
@@ -1143,6 +1185,39 @@
         ],
         "title": "ContourSaveRequest",
         "description": "保存母线的请求体。"
+      },
+      "CrossCheckOutcome": {
+        "properties": {
+          "m_dry_geometric_kg": {
+            "type": "number",
+            "title": "M Dry Geometric Kg",
+            "description": "几何解析干重（湿面积 × 面密度，kg）"
+          },
+          "m_dry_sigma_kg": {
+            "type": "number",
+            "title": "M Dry Sigma Kg",
+            "description": "σ 推算干重（kg；σ 是存储权威，对照基准）"
+          },
+          "relative_deviation": {
+            "type": "number",
+            "title": "Relative Deviation",
+            "description": "相对偏差（|几何 − σ| / σ）"
+          },
+          "exceeds_threshold": {
+            "type": "boolean",
+            "title": "Exceeds Threshold",
+            "description": "是否超过 §8.4 的 20% 阈值"
+          }
+        },
+        "type": "object",
+        "required": [
+          "m_dry_geometric_kg",
+          "m_dry_sigma_kg",
+          "relative_deviation",
+          "exceeds_threshold"
+        ],
+        "title": "CrossCheckOutcome",
+        "description": "§8.4 一致性校验结果（几何解析 vs σ 推算干重）。"
       },
       "DiagnoseResponse": {
         "properties": {
@@ -2942,6 +3017,120 @@
         "title": "SequenceEvent",
         "description": "一个任务时序事件（§6.1 Sequence 层）。"
       },
+      "SizingResult": {
+        "properties": {
+          "glow_kg": {
+            "type": "number",
+            "title": "Glow Kg",
+            "description": "起飞质量 GLOW（kg）"
+          },
+          "payload_mass_kg": {
+            "type": "number",
+            "title": "Payload Mass Kg",
+            "description": "有效载荷质量（kg）"
+          },
+          "target_delta_v_m_s": {
+            "type": "number",
+            "title": "Target Delta V M S",
+            "description": "目标总 ΔV（m/s）"
+          },
+          "achieved_delta_v_m_s": {
+            "type": "number",
+            "title": "Achieved Delta V M S",
+            "description": "实算总 ΔV（m/s，含 0 级段）"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/StageSizing"
+            },
+            "type": "array",
+            "title": "Stages",
+            "description": "芯级串联链逐级结果（自下而上）"
+          },
+          "zero_stage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ZeroStageSizing"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "0 级段明细（无助推器为 null）"
+          },
+          "report": {
+            "$ref": "#/components/schemas/SolveReport",
+            "description": "求解报告（§8.5）"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "description": "全部警告（交叉校验 >20%、σ 越域、跨段账封顶等）"
+          },
+          "provenance": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Provenance",
+            "description": "溯源账目：Isp 来源 / σ 来源 / 双来源分歧 / 0 级段口径"
+          }
+        },
+        "type": "object",
+        "required": [
+          "glow_kg",
+          "payload_mass_kg",
+          "target_delta_v_m_s",
+          "achieved_delta_v_m_s",
+          "stages",
+          "report",
+          "warnings",
+          "provenance"
+        ],
+        "title": "SizingResult",
+        "description": "``POST /api/sizing/solve`` 的响应体（§8.5 / §10.1：同步、纯数值）。"
+      },
+      "SizingSolveRequest": {
+        "properties": {
+          "vehicle": {
+            "$ref": "#/components/schemas/Vehicle",
+            "description": "飞行器参数（§6.1 全量）"
+          },
+          "target_delta_v_m_s": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Target Delta V M S",
+            "description": "目标总 ΔV（m/s，真空口径；损失预算属 §8.6 另片，由调用方计入）"
+          },
+          "stage_delta_v_m_s": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number",
+                  "exclusiveMinimum": 0.0
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage Delta V M S",
+            "description": "用户显式的逐级 ΔV（m/s，自下而上、逐芯级；求和须等于目标总 ΔV；省略 = Lagrange √Isp 加权初值分配，§8.5）"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "vehicle",
+          "target_delta_v_m_s"
+        ],
+        "title": "SizingSolveRequest",
+        "description": "``POST /api/sizing/solve`` 的请求体。"
+      },
       "SnapshotOut": {
         "properties": {
           "id": {
@@ -2968,6 +3157,57 @@
         ],
         "title": "SnapshotOut",
         "description": "本目录库的快照来源（§7.8：数值随 provenance 下发的锚点）。"
+      },
+      "SolveReport": {
+        "properties": {
+          "iterations": {
+            "type": "integer",
+            "title": "Iterations",
+            "description": "割线迭代次数（内层求值次数，≥ 1）"
+          },
+          "residual_relative": {
+            "type": "number",
+            "title": "Residual Relative",
+            "description": "最终残差 |ΣΔV − 目标| / 目标"
+          },
+          "converged": {
+            "type": "boolean",
+            "title": "Converged",
+            "description": "是否满足 §8.5 收敛判据（1e-6）"
+          },
+          "hit_iteration_limit": {
+            "type": "boolean",
+            "title": "Hit Iteration Limit",
+            "description": "是否命中 200 次迭代上限"
+          },
+          "residual_trail": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Residual Trail",
+            "description": "逐次残差轨迹（相对值；不收敛时用于诊断，不静默给半收敛结果）"
+          },
+          "sigma_domain_warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sigma Domain Warnings",
+            "description": "σ 越出 §8.4 有效域的逐级警告（越域警告不中止求解）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "iterations",
+          "residual_relative",
+          "converged",
+          "hit_iteration_limit",
+          "residual_trail",
+          "sigma_domain_warnings"
+        ],
+        "title": "SolveReport",
+        "description": "§8.5 求解报告：迭代次数、残差、上限命中、σ 有效域。"
       },
       "SourcedField": {
         "properties": {
@@ -3345,6 +3585,74 @@
         ],
         "title": "StageFieldsOut",
         "description": "级（GCAT stages 行）的逐字段投影——字段名与仓储 ``StageRecord`` 一致。\n\n推力真空/海平面分列（§7.5 规则 3 / OI-35）；比冲 GCAT 不提供（结构性缺失）。"
+      },
+      "StageSizing": {
+        "properties": {
+          "index": {
+            "type": "integer",
+            "title": "Index",
+            "description": "级序号（1 = 第一级，自下而上）"
+          },
+          "isp_vacuum_s": {
+            "type": "number",
+            "title": "Isp Vacuum S",
+            "description": "该级真空比冲（s；DAG 解析值，QA-1）"
+          },
+          "isp_source": {
+            "type": "string",
+            "title": "Isp Source",
+            "description": "比冲来源：engine（default）/ stage（custom 覆写）"
+          },
+          "structure_coefficient": {
+            "type": "number",
+            "title": "Structure Coefficient",
+            "description": "结构系数 σ（用户存储权威）"
+          },
+          "m_propellant_kg": {
+            "type": "number",
+            "title": "M Propellant Kg",
+            "description": "推进剂质量（kg）"
+          },
+          "m_dry_kg": {
+            "type": "number",
+            "title": "M Dry Kg",
+            "description": "干质量（kg）= m_prop × σ/(1−σ)"
+          },
+          "m_total_kg": {
+            "type": "number",
+            "title": "M Total Kg",
+            "description": "级总质量（kg）= 推进剂 + 干重"
+          },
+          "delta_v_m_s": {
+            "type": "number",
+            "title": "Delta V M S",
+            "description": "该级实算 ΔV（m/s；一级为芯级段，不含 0 级段）"
+          },
+          "m_above_kg": {
+            "type": "number",
+            "title": "M Above Kg",
+            "description": "该级之上 stacks（载荷 + 上面级总质量，kg）"
+          },
+          "cross_check": {
+            "$ref": "#/components/schemas/CrossCheckOutcome",
+            "description": "§8.4 双来源交叉校验"
+          }
+        },
+        "type": "object",
+        "required": [
+          "index",
+          "isp_vacuum_s",
+          "isp_source",
+          "structure_coefficient",
+          "m_propellant_kg",
+          "m_dry_kg",
+          "m_total_kg",
+          "delta_v_m_s",
+          "m_above_kg",
+          "cross_check"
+        ],
+        "title": "StageSizing",
+        "description": "单级（芯级串联链）的求解结果。"
       },
       "Tank": {
         "properties": {
@@ -4372,6 +4680,69 @@
         ],
         "title": "VehicleSearchResponse",
         "description": "``GET /api/catalog/vehicles/search`` 的响应体。"
+      },
+      "ZeroStageSizing": {
+        "properties": {
+          "booster_count": {
+            "type": "integer",
+            "title": "Booster Count",
+            "description": "并联助推器总枚数"
+          },
+          "isp_eff_s": {
+            "type": "number",
+            "title": "Isp Eff S",
+            "description": "段平均有效比冲 Isp_eff = ΣF_vac/Σṁ（s，派生量）"
+          },
+          "m_start_kg": {
+            "type": "number",
+            "title": "M Start Kg",
+            "description": "段初质量（kg）= GLOW"
+          },
+          "m_end_kg": {
+            "type": "number",
+            "title": "M End Kg",
+            "description": "段末质量（kg）= GLOW − 助推器推进剂 − 助推器干重（助推器账口径）"
+          },
+          "booster_propellant_kg": {
+            "type": "number",
+            "title": "Booster Propellant Kg",
+            "description": "全部助推器推进剂（kg，独立核算）"
+          },
+          "booster_dry_kg": {
+            "type": "number",
+            "title": "Booster Dry Kg",
+            "description": "全部助推器干重（kg，按各自 σ 派生）"
+          },
+          "core_propellant_burned_kg": {
+            "type": "number",
+            "title": "Core Propellant Burned Kg",
+            "description": "芯一级在 0 级段内烧掉的推进剂（kg，跨段账的段内份额）"
+          },
+          "delta_v_m_s": {
+            "type": "number",
+            "title": "Delta V M S",
+            "description": "0 级段实算 ΔV（m/s）"
+          },
+          "propellant_source": {
+            "type": "string",
+            "title": "Propellant Source",
+            "description": "助推器推进剂来源：explicit_tank_lengths / geometric_estimate"
+          }
+        },
+        "type": "object",
+        "required": [
+          "booster_count",
+          "isp_eff_s",
+          "m_start_kg",
+          "m_end_kg",
+          "booster_propellant_kg",
+          "booster_dry_kg",
+          "core_propellant_burned_kg",
+          "delta_v_m_s",
+          "propellant_source"
+        ],
+        "title": "ZeroStageSizing",
+        "description": "0 级段明细（§8.5 合并规则 / OI-36）。"
       }
     }
   }

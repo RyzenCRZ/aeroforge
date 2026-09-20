@@ -5,11 +5,15 @@
 助推器与芯一级构成「0 级段」——串联链最底端再加一段。本模块给出该段的
 **派生量汇总**（§8.5：``Isp_eff`` 是派生量，不是新输入）：
 
-- 段比冲 = 并联组合**平均有效比冲** ``Isp_eff = ΣF_vac / Σṁ``；
+- 段比冲 = 并联组合**平均有效比冲** ``Isp_eff = ΣF_vac / (Σṁ · g₀)``（秒口径；
+  M4 求解器接入时发现的单位修正——裸比值 ``ΣF/Σṁ`` 的量纲是有效排气速度
+  m/s，与字段名 ``_s`` 及全项目「比冲一律秒」的口径不符）；
 - 真空口径配对（OI-35）：每台发动机 ``ṁ_i = F_vac_i / (Isp_vac_i · g₀)``——
   **禁止**拿海平面比冲配真空推力（显式报错，绝不静默回落）；
 - 芯一级参与合并（0 级段的推力与流量 = 全部助推器 + 芯一级）；
-- 助推器推进剂 / 干重按其 σ 与加注比例**独立核算**，不与芯级合并成"当量级"。
+- 助推器推进剂 / 干重按其 σ 与加注比例**独立核算**，不与芯级合并成"当量级"；
+- ``booster_mass_flow_kg_s``（M4 补充）：仅助推器的段内流量——求解器用它算
+  0 级段时长与芯级跨段烧量，避免在求解器里复写一份配对算术。
 
 边界
 ----
@@ -54,7 +58,14 @@ class ZeroStageSummary:
     """段总真空流量（kg/s）= Σ 各台发动机 F_vac/(Isp_vac·g₀)（OI-35 配对）。"""
 
     isp_eff_s: float
-    """段平均有效比冲（s）= ΣF_vac / Σṁ（派生量，见 :data:`ISP_EFF_NOTE`）。"""
+    """段平均有效比冲（**s**）= ΣF_vac / (Σṁ · g₀)（派生量，见 :data:`ISP_EFF_NOTE`）。"""
+
+    booster_mass_flow_kg_s: float
+    """段内**仅助推器**的真空流量（kg/s）= Σ 各组 count × 台数 × F_vac/(Isp_vac·g₀)。
+
+    M4 求解器（§8.5 跨段连续核算）用它与助推器推进剂量反推 0 级段时长，
+    进而算芯一级在 0 级段内烧掉的推进剂——芯级流量 = total − booster 之差，
+    不在求解器里另写一套 OI-35 配对算术。"""
 
     booster_propellant_kg: float | None
     """全部助推器的推进剂量（kg）；参数层无可得质量时为 None（原因进 deferred）。"""
@@ -135,6 +146,7 @@ def resolve_zero_stage(vehicle: Vehicle) -> ZeroStageSummary | None:
     propellant_total = 0.0
     dry_total = 0.0
     count_total = 0
+    booster_flow_total = 0.0
     propellant_available = True
     deferred: list[str] = []
 
@@ -142,8 +154,10 @@ def resolve_zero_stage(vehicle: Vehicle) -> ZeroStageSummary | None:
         stage = booster.stage
         count_total += booster.count
         thrust, isp = _vacuum_pair(stage.engine, f"boosters[{position}].stage.engine：")
+        group_flow = booster.count * stage.engine_count * thrust / (isp * G0)
         total_thrust += booster.count * stage.engine_count * thrust
-        total_flow += booster.count * stage.engine_count * thrust / (isp * G0)
+        total_flow += group_flow
+        booster_flow_total += group_flow
 
         lengths = _tank_length_pair(stage)
         if lengths is None:
@@ -162,7 +176,8 @@ def resolve_zero_stage(vehicle: Vehicle) -> ZeroStageSummary | None:
         count=count_total,
         total_vacuum_thrust_n=total_thrust,
         total_mass_flow_kg_s=total_flow,
-        isp_eff_s=total_thrust / total_flow,
+        isp_eff_s=total_thrust / (total_flow * G0),
+        booster_mass_flow_kg_s=booster_flow_total,
         booster_propellant_kg=propellant_total if propellant_available else None,
         booster_dry_kg=dry_total if propellant_available else None,
         deferred=tuple(deferred),

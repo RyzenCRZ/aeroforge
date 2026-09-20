@@ -62,10 +62,12 @@ def test_no_boosters_returns_none(single_stage_vehicle: Vehicle) -> None:
 
 
 def test_isp_eff_matches_hand_computed_vacuum_pairing(single_stage_vehicle: Vehicle) -> None:
-    """合成双发动机构型：Isp_eff = ΣF_vac / Σṁ **手工对拍**（精确公式）。
+    """合成双发动机构型：Isp_eff = ΣF_vac / (Σṁ·g₀) **手工对拍**（精确公式，秒口径）。
 
     芯一级 2 台 × (2 MN, 450 s) + 侧级 2 枚 × 3 台 × (1.5 MN, 300 s)：
     ΣF_vac = 4e6 + 9e6 = 13e6 N；Σṁ = 4e6/(450·g₀) + 9e6/(300·g₀)。
+    ⚠ 单位修正（M4 求解器接入时发现）：``isp_eff_s`` 的裸比值 ΣF/Σṁ 量纲是
+    m/s（有效排气速度），秒口径须再除以 g₀——全项目「比冲一律秒」。
     """
     vehicle = _boosted_vehicle(single_stage_vehicle)
     summary = staging.resolve_zero_stage(vehicle)
@@ -77,7 +79,9 @@ def test_isp_eff_matches_hand_computed_vacuum_pairing(single_stage_vehicle: Vehi
     assert summary.count == 2
     assert summary.total_vacuum_thrust_n == pytest.approx(expected_thrust, rel=1e-12)
     assert summary.total_mass_flow_kg_s == pytest.approx(expected_flow, rel=1e-12)
-    assert summary.isp_eff_s == pytest.approx(expected_thrust / expected_flow, rel=1e-12)
+    assert summary.isp_eff_s == pytest.approx(expected_thrust / (expected_flow * G0), rel=1e-12)
+    # 量级锚定：段内全部发动机的比冲 ∈ [300, 450] s，流量加权平均必在同一区间
+    assert 300.0 < summary.isp_eff_s < 450.0
     # 配对正确性：真空口径结果必须**区别于**错误的海平面配对结果
     wrong_flow = 2 * 2_000_000.0 / (450.0 * G0) + 2 * 3 * 1_200_000.0 / (300.0 * G0)
     assert summary.total_mass_flow_kg_s != pytest.approx(wrong_flow, rel=1e-3)

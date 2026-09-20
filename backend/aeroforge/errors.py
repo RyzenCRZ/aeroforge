@@ -136,6 +136,19 @@ class CeaTableNotFoundError(AeroForgeError):
     stage = "perf"
 
 
+class SizingError(AeroForgeError):
+    """定尺求解域错误（§8.5）：输入不可解（Isp/σ/ΔV 组合无物理意义）或迭代不收敛。
+
+    与 :class:`ParamsError` 分开：参数**结构**合法性归参数域；这里是「结构合法、
+    但作为求解问题无解或解不出」——阶段标签 ``sizing`` 让 §10.3 的 ``stage``
+    能定位到求解层。默认码 ``SIZING_SOLVE_FAILED``；不收敛路径用
+    ``code="SIZING_NO_CONVERGENCE"``（details 携带残差轨迹，不静默给半收敛结果）。
+    """
+
+    code = "SIZING_SOLVE_FAILED"
+    stage = "sizing"
+
+
 class CeaTableIntegrityError(AeroForgeError):
     """CEA 预计算表完整性校验失败：sha256 不符或 manifest 与表内容错位。
 

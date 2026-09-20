@@ -429,6 +429,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sizing/solve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Solve Sizing
+         * @description 多级质量迭代求解（§8.5：外层 GLOW 割线 + 内层自上而下，同步纯数值）。
+         *
+         *     硬约束违反（Isp custom 缺值、材料不在库等）沿用参数域的拒绝口径
+         *     （``PARAMS_CONSTRAINT_VIOLATION`` → 422，与 ``/api/params/diagnose`` 同判据）；
+         *     求解域自身的问题（无物理解 / 不收敛）由 :class:`~aeroforge.errors.SizingError`
+         *     给出带残差轨迹的 422——不静默给半收敛结果。
+         */
+        post: operations["solve_sizing_api_sizing_solve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/health": {
         parameters: {
             query?: never;
@@ -666,6 +691,32 @@ export interface components {
             id?: string | null;
             /** @description 母线剖面（段链，单位米） */
             profile: components["schemas"]["MeridianProfile"];
+        };
+        /**
+         * CrossCheckOutcome
+         * @description §8.4 一致性校验结果（几何解析 vs σ 推算干重）。
+         */
+        CrossCheckOutcome: {
+            /**
+             * M Dry Geometric Kg
+             * @description 几何解析干重（湿面积 × 面密度，kg）
+             */
+            m_dry_geometric_kg: number;
+            /**
+             * M Dry Sigma Kg
+             * @description σ 推算干重（kg；σ 是存储权威，对照基准）
+             */
+            m_dry_sigma_kg: number;
+            /**
+             * Relative Deviation
+             * @description 相对偏差（|几何 − σ| / σ）
+             */
+            relative_deviation: number;
+            /**
+             * Exceeds Threshold
+             * @description 是否超过 §8.4 的 20% 阈值
+             */
+            exceeds_threshold: boolean;
         };
         /**
          * DiagnoseResponse
@@ -1682,6 +1733,71 @@ export interface components {
             stage_index?: number | null;
         };
         /**
+         * SizingResult
+         * @description ``POST /api/sizing/solve`` 的响应体（§8.5 / §10.1：同步、纯数值）。
+         */
+        SizingResult: {
+            /**
+             * Glow Kg
+             * @description 起飞质量 GLOW（kg）
+             */
+            glow_kg: number;
+            /**
+             * Payload Mass Kg
+             * @description 有效载荷质量（kg）
+             */
+            payload_mass_kg: number;
+            /**
+             * Target Delta V M S
+             * @description 目标总 ΔV（m/s）
+             */
+            target_delta_v_m_s: number;
+            /**
+             * Achieved Delta V M S
+             * @description 实算总 ΔV（m/s，含 0 级段）
+             */
+            achieved_delta_v_m_s: number;
+            /**
+             * Stages
+             * @description 芯级串联链逐级结果（自下而上）
+             */
+            stages: components["schemas"]["StageSizing"][];
+            /** @description 0 级段明细（无助推器为 null） */
+            zero_stage?: components["schemas"]["ZeroStageSizing"] | null;
+            /** @description 求解报告（§8.5） */
+            report: components["schemas"]["SolveReport"];
+            /**
+             * Warnings
+             * @description 全部警告（交叉校验 >20%、σ 越域、跨段账封顶等）
+             */
+            warnings: string[];
+            /**
+             * Provenance
+             * @description 溯源账目：Isp 来源 / σ 来源 / 双来源分歧 / 0 级段口径
+             */
+            provenance: {
+                [key: string]: string;
+            };
+        };
+        /**
+         * SizingSolveRequest
+         * @description ``POST /api/sizing/solve`` 的请求体。
+         */
+        SizingSolveRequest: {
+            /** @description 飞行器参数（§6.1 全量） */
+            vehicle: components["schemas"]["Vehicle"];
+            /**
+             * Target Delta V M S
+             * @description 目标总 ΔV（m/s，真空口径；损失预算属 §8.6 另片，由调用方计入）
+             */
+            target_delta_v_m_s: number;
+            /**
+             * Stage Delta V M S
+             * @description 用户显式的逐级 ΔV（m/s，自下而上、逐芯级；求和须等于目标总 ΔV；省略 = Lagrange √Isp 加权初值分配，§8.5）
+             */
+            stage_delta_v_m_s?: number[] | null;
+        };
+        /**
          * SnapshotOut
          * @description 本目录库的快照来源（§7.8：数值随 provenance 下发的锚点）。
          */
@@ -1701,6 +1817,42 @@ export interface components {
              * @description 快照登记的总记录数（六表合计）
              */
             total_records: number;
+        };
+        /**
+         * SolveReport
+         * @description §8.5 求解报告：迭代次数、残差、上限命中、σ 有效域。
+         */
+        SolveReport: {
+            /**
+             * Iterations
+             * @description 割线迭代次数（内层求值次数，≥ 1）
+             */
+            iterations: number;
+            /**
+             * Residual Relative
+             * @description 最终残差 |ΣΔV − 目标| / 目标
+             */
+            residual_relative: number;
+            /**
+             * Converged
+             * @description 是否满足 §8.5 收敛判据（1e-6）
+             */
+            converged: boolean;
+            /**
+             * Hit Iteration Limit
+             * @description 是否命中 200 次迭代上限
+             */
+            hit_iteration_limit: boolean;
+            /**
+             * Residual Trail
+             * @description 逐次残差轨迹（相对值；不收敛时用于诊断，不静默给半收敛结果）
+             */
+            residual_trail: number[];
+            /**
+             * Sigma Domain Warnings
+             * @description σ 越出 §8.4 有效域的逐级警告（越域警告不中止求解）
+             */
+            sigma_domain_warnings: string[];
         };
         /**
          * SourcedField
@@ -1889,6 +2041,59 @@ export interface components {
             engine_name: components["schemas"]["SourcedField"];
             /** @description 发动机台数 */
             engine_count: components["schemas"]["SourcedField"];
+        };
+        /**
+         * StageSizing
+         * @description 单级（芯级串联链）的求解结果。
+         */
+        StageSizing: {
+            /**
+             * Index
+             * @description 级序号（1 = 第一级，自下而上）
+             */
+            index: number;
+            /**
+             * Isp Vacuum S
+             * @description 该级真空比冲（s；DAG 解析值，QA-1）
+             */
+            isp_vacuum_s: number;
+            /**
+             * Isp Source
+             * @description 比冲来源：engine（default）/ stage（custom 覆写）
+             */
+            isp_source: string;
+            /**
+             * Structure Coefficient
+             * @description 结构系数 σ（用户存储权威）
+             */
+            structure_coefficient: number;
+            /**
+             * M Propellant Kg
+             * @description 推进剂质量（kg）
+             */
+            m_propellant_kg: number;
+            /**
+             * M Dry Kg
+             * @description 干质量（kg）= m_prop × σ/(1−σ)
+             */
+            m_dry_kg: number;
+            /**
+             * M Total Kg
+             * @description 级总质量（kg）= 推进剂 + 干重
+             */
+            m_total_kg: number;
+            /**
+             * Delta V M S
+             * @description 该级实算 ΔV（m/s；一级为芯级段，不含 0 级段）
+             */
+            delta_v_m_s: number;
+            /**
+             * M Above Kg
+             * @description 该级之上 stacks（载荷 + 上面级总质量，kg）
+             */
+            m_above_kg: number;
+            /** @description §8.4 双来源交叉校验 */
+            cross_check: components["schemas"]["CrossCheckOutcome"];
         };
         /**
          * Tank
@@ -2459,6 +2664,57 @@ export interface components {
              * @description 候选清单（规范化子串匹配，按「完全匹配 > 前缀 > 子串 > 族/变体」排序，上限 12 条）；检索词为空时为空表
              */
             hits: components["schemas"]["VehicleSearchHitOut"][];
+        };
+        /**
+         * ZeroStageSizing
+         * @description 0 级段明细（§8.5 合并规则 / OI-36）。
+         */
+        ZeroStageSizing: {
+            /**
+             * Booster Count
+             * @description 并联助推器总枚数
+             */
+            booster_count: number;
+            /**
+             * Isp Eff S
+             * @description 段平均有效比冲 Isp_eff = ΣF_vac/Σṁ（s，派生量）
+             */
+            isp_eff_s: number;
+            /**
+             * M Start Kg
+             * @description 段初质量（kg）= GLOW
+             */
+            m_start_kg: number;
+            /**
+             * M End Kg
+             * @description 段末质量（kg）= GLOW − 助推器推进剂 − 助推器干重（助推器账口径）
+             */
+            m_end_kg: number;
+            /**
+             * Booster Propellant Kg
+             * @description 全部助推器推进剂（kg，独立核算）
+             */
+            booster_propellant_kg: number;
+            /**
+             * Booster Dry Kg
+             * @description 全部助推器干重（kg，按各自 σ 派生）
+             */
+            booster_dry_kg: number;
+            /**
+             * Core Propellant Burned Kg
+             * @description 芯一级在 0 级段内烧掉的推进剂（kg，跨段账的段内份额）
+             */
+            core_propellant_burned_kg: number;
+            /**
+             * Delta V M S
+             * @description 0 级段实算 ΔV（m/s）
+             */
+            delta_v_m_s: number;
+            /**
+             * Propellant Source
+             * @description 助推器推进剂来源：explicit_tank_lengths / geometric_estimate
+             */
+            propellant_source: string;
         };
     };
     responses: never;
@@ -3038,6 +3294,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MotorParseResult"] | components["schemas"]["RocketParseResult"];
+                };
+            };
+        };
+    };
+    solve_sizing_api_sizing_solve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SizingSolveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SizingResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

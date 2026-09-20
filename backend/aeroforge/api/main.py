@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from aeroforge import __version__
-from aeroforge.api import artifacts, catalog, geometry, importers, jobs, params
+from aeroforge.api import artifacts, catalog, geometry, importers, jobs, params, sizing
 from aeroforge.api.deps import get_runner, reset_singletons
 from aeroforge.errors import AeroForgeError, ErrorBody, to_error_body
 from aeroforge.geometry.meridian import MeridianError
@@ -39,6 +39,8 @@ _STATUS_BY_CODE: dict[str, int] = {
     "CONFIG_INVALID": 422,
     "IMPORT_FORMAT_UNSUPPORTED": 400,
     "IMPORT_PARSE_FAILED": 422,
+    "SIZING_SOLVE_FAILED": 422,
+    "SIZING_NO_CONVERGENCE": 422,
 }
 
 _STATUS_CODES: dict[int, str] = {
@@ -78,6 +80,7 @@ app.include_router(catalog.router)
 app.include_router(jobs.router)
 app.include_router(artifacts.router)
 app.include_router(importers.router)
+app.include_router(sizing.router)
 
 
 def _error_response(status_code: int, body: ErrorBody) -> JSONResponse:

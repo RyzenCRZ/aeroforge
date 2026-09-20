@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from aeroforge.api.deps import get_runner, get_store
-from aeroforge.cache.store import ArtifactStore, compute_key
+from aeroforge.cache.store import ArtifactStore, compute_key, compute_vehicle_key
 from aeroforge.errors import GeometryError
 from aeroforge.geometry.bundle import BoosterSummary
 from aeroforge.geometry.meridian import (
@@ -28,6 +28,7 @@ from aeroforge.geometry.meridian import (
     parse_profile,
 )
 from aeroforge.geometry.validate import ValidationReport, validate_meridian
+from aeroforge.params.schema import Vehicle
 from aeroforge.paths import contours_root, ensure_dir
 from aeroforge.worker.jobs import GeometryJobRunner
 
@@ -63,6 +64,20 @@ class GeometryBuildRequest(BaseModel):
             "省略 = 无助推器，GLB 场景图只含 seg-<i> 节点"
         ),
     )
+
+
+class VehicleBuildRequest(BaseModel):
+    """``POST /api/geometry/build`` 的**车辆形态**请求体（M5，九段分区装配树）。
+
+    从 ``Vehicle`` 的 Stage 参数映射 §5.9 的 9 段轴向分区，GLB 节点名 = 分区名
+    （``s<级序>-<分区>`` / ``fin-<k>`` / ``booster-<k>``）；metrics 扩
+    ``assembly_tree`` 与 ``common_bulkhead_saving_m``。与剖面形态并存——
+    自由母线走既有 profile 形态（节点名 ``seg-<i>``），两条通路互不污染缓存。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    vehicle: Vehicle = Field(description="飞行器参数（含 boosters / 共底 / 扁度 / 尾翼）")
 
 
 class ContourResponse(BaseModel):
@@ -153,16 +168,26 @@ def validate_profile(profile: MeridianProfile) -> ValidationReport:
 
 @router.post("/api/geometry/build", response_model=BuildResponse)
 def build_geometry(
-    request: MeridianProfile | GeometryBuildRequest,
+    request: MeridianProfile | GeometryBuildRequest | VehicleBuildRequest,
     runner: Annotated[GeometryJobRunner, Depends(get_runner)],
     store: Annotated[ArtifactStore, Depends(get_store)],
 ) -> BuildResponse:
     """构建回转几何：**命中即同步返回**，未命中建异步作业（规格 §9.3）。
 
-    请求体兼容两种形态：裸剖面（既有契约）或 ``{"profile", "boosters"}``
-    捆绑构型（OI-36）。键计算按同一份剖面对 boosters 敏感、对省略 boosters
-    逐字节不敏感（§9.2）。
+    请求体兼容三种形态：裸剖面（既有契约）、``{"profile", "boosters"}`` 捆绑构型
+    （OI-36）、``{"vehicle"}`` 车辆形态（M5 九段分区装配树）。剖面形态的键对
+    boosters 敏感、对省略 boosters 逐字节不敏感（§9.2）；车辆形态的键走
+    vehicle canonical，与剖面形态天然分离。
     """
+    if isinstance(request, VehicleBuildRequest):
+        key = compute_vehicle_key(request.vehicle).key
+        if store.is_cached(key):
+            metrics = store.load_metrics(key)
+            if metrics is not None:
+                return BuildResponse(cache_hit=True, key=key, metrics=metrics)
+        record = runner.submit_vehicle(request.vehicle)
+        return BuildResponse(cache_hit=False, key=key, job_id=record.job_id)
+
     if isinstance(request, MeridianProfile):
         profile, boosters = request, None
     else:

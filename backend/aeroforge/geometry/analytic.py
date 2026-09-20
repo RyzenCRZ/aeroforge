@@ -32,8 +32,10 @@ from scipy.integrate import quad
 
 from aeroforge.geometry.meridian import (
     GEOM_TOL,
+    CurveSpec,
     ResolvedProfile,
     SegmentGeometry,
+    curve_point,
     resolve,
 )
 from aeroforge.geometry.meridian import (
@@ -44,6 +46,83 @@ from aeroforge.geometry.meridian import (
 _QUAD_EPSABS = 1e-14
 _QUAD_EPSREL = 1e-13
 _QUAD_LIMIT = 200
+
+#: 曲线族导数求值的参数钳位（避开幂律 n<1 等族的端点可积奇点；损失 ≤1e-12 量级）。
+_DERIV_EPS = 1e-12
+
+
+def curve_derivs(spec: CurveSpec, t: float) -> tuple[float, float]:
+    """曲线族在链内参数 ``t`` 处的 ``(dr/dt, dz/dt)``（解析导数）。
+
+    供本模块的 quad 积分使用（体积 / 表面积 / 矩）；与内核侧的 B 样条构边
+    算法无关，二者构成 §5.7 的独立对照。reverse 放置的变换与切向一致：
+    ``(−dr_local, +dz_local)``。
+    """
+    tau = min(max(1.0 - t if spec.reverse else t, _DERIV_EPS), 1.0 - _DERIV_EPS)
+    dr, dz = _curve_local_derivs(spec, tau)
+    if spec.reverse:
+        return (-dr, dz)
+    return (dr, dz)
+
+
+def _curve_local_derivs(spec: CurveSpec, tau: float) -> tuple[float, float]:
+    """local 参数式对 τ 的导数（各族解析式）。"""
+    kind = spec.kind
+    if kind == "ogive":
+        _radius_r, length, _c_r, rho, psi_tip = spec.params
+        psi = psi_tip * (1.0 - tau)
+        d_psi = -psi_tip
+        return (-rho * math.sin(psi) * d_psi, rho * math.cos(psi) * d_psi)
+    if kind == "parabola":
+        radius_r, length, coefficient = spec.params
+        return (radius_r * (2.0 - 2.0 * coefficient * tau) / (2.0 - coefficient), length)
+    if kind == "von_karman":
+        radius_r, length = spec.params
+        # φ = acos(1−2τ)；dφ/dτ = 1/√(τ(1−τ))；dr/dφ = (R/√π)·sin²φ/√(φ−sin2φ/2)
+        phi = math.acos(max(-1.0, min(1.0, 1.0 - 2.0 * tau)))
+        shape = phi - math.sin(2.0 * phi) / 2.0
+        if shape <= 0.0:
+            return (0.0, length)
+        dr_dphi = radius_r / math.sqrt(math.pi) * math.sin(phi) ** 2 / math.sqrt(shape)
+        dphi_dtau = 1.0 / math.sqrt(tau * (1.0 - tau))
+        return (dr_dphi * dphi_dtau, length)
+    if kind == "power":
+        r0, r1, length, exponent = spec.params
+        return (exponent * (r1 - r0) * tau ** (exponent - 1.0), length)
+    if kind == "bell":
+        (
+            _throat,
+            exit_radius,
+            length,
+            theta_n,
+            _theta_e,
+            arc_radius,
+            q_r,
+            q_z,
+            p1_r,
+            p1_z,
+            t_q,
+        ) = spec.params
+        if tau <= t_q:
+            phi = theta_n * (tau / t_q if t_q > 0.0 else 0.0)
+            scale = theta_n / t_q if t_q > 0.0 else 0.0
+            return (arc_radius * math.sin(phi) * scale, arc_radius * math.cos(phi) * scale)
+        span = 1.0 - t_q
+        s = (tau - t_q) / span if span > 0.0 else 1.0
+        dr_ds = 2.0 * (1.0 - s) * (p1_r - q_r) + 2.0 * s * (exit_radius - p1_r)
+        dz_ds = 2.0 * (1.0 - s) * (p1_z - q_z) + 2.0 * s * (length - p1_z)
+        return (dr_ds / span, dz_ds / span)
+    if kind == "spline":
+        count = int(spec.params[0])
+        knots = spec.params[1 : 1 + count]
+        values = spec.params[1 + count :]
+        # 样条以 z 为参数：dr/dτ = (dr/dz)·L，dz/dτ = L
+        from aeroforge.geometry.meridian import _spline_slope
+
+        slope = _spline_slope(knots, values, spec.length * tau)
+        return (slope * spec.length, spec.length)
+    msg = f"未知曲线族 {kind!r}"
+    raise ValueError(msg)
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,11 +157,24 @@ def _dome_shape_integral(theta0_deg: float, theta1_deg: float) -> float:
 
 
 def segment_volume(geom: SegmentGeometry) -> float:
-    """单段的回转体积（闭式解，m³）。"""
+    """单段的回转体积（闭式解 / 曲线族参数式 quad，m³）。"""
     if geom.kind == "line":
         r0, z0 = geom.start
         r1, z1 = geom.end
         return math.pi * (z1 - z0) * (r0 * r0 + r0 * r1 + r1 * r1) / 3.0
+
+    if geom.curve is not None:
+        spec = geom.curve
+
+        def integrand(t: float) -> float:
+            radius, _z = curve_point(spec, t)
+            _dr, dz = curve_derivs(spec, t)
+            return math.pi * radius * radius * dz
+
+        value, _ = quad(
+            integrand, 0.0, 1.0, epsabs=_QUAD_EPSABS, epsrel=_QUAD_EPSREL, limit=_QUAD_LIMIT
+        )
+        return float(value)
 
     assert geom.semi_r is not None
     assert geom.semi_z is not None
@@ -99,6 +191,19 @@ def _segment_lateral_area(geom: SegmentGeometry) -> float:
         r1, z1 = geom.end
         slant = math.hypot(r1 - r0, z1 - z0)
         return math.pi * (r0 + r1) * slant
+
+    if geom.curve is not None:
+        spec = geom.curve
+
+        def curve_integrand(t: float) -> float:
+            radius, _z = curve_point(spec, t)
+            dr, dz = curve_derivs(spec, t)
+            return 2.0 * math.pi * radius * math.hypot(dr, dz)
+
+        value, _ = quad(
+            curve_integrand, 0.0, 1.0, epsabs=_QUAD_EPSABS, epsrel=_QUAD_EPSREL, limit=_QUAD_LIMIT
+        )
+        return float(value)
 
     assert geom.semi_r is not None
     assert geom.semi_z is not None
@@ -140,6 +245,19 @@ def _segment_first_moment_z(geom: SegmentGeometry) -> float:
 
         value, _ = quad(
             integrand_line, z0, z1, epsabs=_QUAD_EPSABS, epsrel=_QUAD_EPSREL, limit=_QUAD_LIMIT
+        )
+        return float(value)
+
+    if geom.curve is not None:
+        spec = geom.curve
+
+        def integrand_curve(t: float) -> float:
+            radius, z = curve_point(spec, t)
+            _dr, dz = curve_derivs(spec, t)
+            return z * radius * radius * dz
+
+        value, _ = quad(
+            integrand_curve, 0.0, 1.0, epsabs=_QUAD_EPSABS, epsrel=_QUAD_EPSREL, limit=_QUAD_LIMIT
         )
         return float(value)
 

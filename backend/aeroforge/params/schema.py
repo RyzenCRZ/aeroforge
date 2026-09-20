@@ -33,7 +33,7 @@ import json
 from collections.abc import Iterable, Mapping
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from aeroforge.geometry.meridian import MeridianProfile, round_floats
 from aeroforge.params.propellants import PropellantCombination
@@ -69,6 +69,9 @@ StageSeparationType = Literal["cold_staging", "hot_staging", "none"]
 
 BoosterLayout = Literal["radial_even"]
 """捆绑布局（§1.7.6 OI-36 ④）。M4 仅周向均布（``radial_even``）；完整布局随 M5 扩展。"""
+
+FinAirfoil = Literal["flat", "wedge", "double_wedge"]
+"""尾翼剖面翼型（§5.5）：平板 / 楔形 / 双楔。"""
 
 IspSource = Literal["default", "custom"]
 """比冲来源：取自发动机定义 / 用户自定义。"""
@@ -269,7 +272,9 @@ class Geometry(ParamsModel):
     **整箭纵剖面**，而共底 / 储箱排列 / 两箱本身是**逐级**属性——若把二者放进一个
     ``Geometry``，多级火箭就会出现"一份轮廓对应多个构型"的歧义。
 
-    ⚠ 装配关系（§6.1 的示例字段之一）**不在此层**：它随 M5 装配树一并建模（§16）。
+    尾翼参数（M5，§5.5）：``fins_enabled`` 为 QA-4 既有占位挂点，本片补全参数——
+    全部可选（``None``），启用时由模型校验器强制齐备；数量合法域 0 / 3 / 4
+    （0 = 启用但无翼，语义等于关闭）。
     """
 
     common_bulkhead: bool = Field(default=False, description="共底设计开关（§5.9 默认关闭）")
@@ -280,8 +285,54 @@ class Geometry(ParamsModel):
         default="oxidizer_upper", description="储箱排列（§5.9 非铁律，用户可配置）"
     )
     fins_enabled: bool = Field(default=False, description="尾翼 / 稳定面是否启用")
+    fin_airfoil: FinAirfoil | None = Field(
+        default=None, description="尾翼剖面翼型（flat 平板 / wedge 楔形 / double_wedge 双楔）"
+    )
+    fin_span_m: float | None = si_field(
+        "length", "尾翼展长（翼根弦到翼梢的径向跨度）", default=None, gt=0.0
+    )
+    fin_root_chord_m: float | None = si_field(
+        "length", "翼根弦长（箭体壁处的轴向弦长）", default=None, gt=0.0
+    )
+    fin_tip_chord_m: float | None = si_field("length", "翼梢弦长", default=None, gt=0.0)
+    fin_sweep_deg: float | None = Field(
+        default=None, ge=0.0, le=75.0, description="后掠角（前缘自翼根向翼梢的后倾角）"
+    )
+    fin_count: int | None = Field(
+        default=None, ge=0, le=4, description="周向数量（等角均布；合法域 0 / 3 / 4，0 = 无）"
+    )
+    fin_roll_deg: float | None = Field(
+        default=None, ge=0.0, lt=360.0, description="滚转角（首片尾翼的方位角基准）"
+    )
     oxidizer_tank: Tank = Field(description="氧化剂箱")
     fuel_tank: Tank = Field(description="燃料箱")
+
+    @model_validator(mode="after")
+    def _check_fins(self) -> Geometry:
+        """启用尾翼时参数必须齐备，且数量 ∈ {0, 3, 4}（§5.5 / 任务口径）。"""
+        if not self.fins_enabled:
+            return self
+        missing = [
+            name
+            for name, value in (
+                ("fin_airfoil", self.fin_airfoil),
+                ("fin_span_m", self.fin_span_m),
+                ("fin_root_chord_m", self.fin_root_chord_m),
+                ("fin_tip_chord_m", self.fin_tip_chord_m),
+                ("fin_sweep_deg", self.fin_sweep_deg),
+                ("fin_count", self.fin_count),
+                ("fin_roll_deg", self.fin_roll_deg),
+            )
+            if value is None
+        ]
+        if missing:
+            msg = f"fins_enabled=true 但尾翼参数缺失：{missing}（§5.5 尾翼参数须齐备）"
+            raise ValueError(msg)
+        assert self.fin_count is not None
+        if self.fin_count not in (0, 3, 4):
+            msg = f"尾翼数量 {self.fin_count} 不在合法域 {{0, 3, 4}}（0 = 无翼）"
+            raise ValueError(msg)
+        return self
 
 
 class Stage(ParamsModel):

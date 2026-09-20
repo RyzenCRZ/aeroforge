@@ -119,6 +119,28 @@ def compute_key(profile: MeridianProfile, *, boosters: BoosterSummary | None = N
     )
 
 
+def compute_vehicle_key(vehicle: Vehicle) -> CacheKey:
+    """车辆形态构建（M5 装配树）的缓存键。
+
+    与 :func:`compute_key` 同构（canonical + kernel + SPEC_VERSION，``\\x00`` 防拼接
+    碰撞）；键输入 = **飞行器参数**的 canonical JSON（含 boosters / flatness /
+    共底开关等几何语义字段），与剖面形态的键天然分离——两种形态同一输入各得其所，
+    互不污染缓存。``profile_hash`` 字段此处承载 vehicle canonical 的 sha256
+    （溯源口径一致，字段名沿用）。
+    """
+    vehicle_json = vehicle_canonical_json(vehicle)
+    kernel = kernel_version()
+    digest = hashlib.sha256(
+        "\x00".join((vehicle_json, kernel, SPEC_VERSION)).encode("utf-8")
+    ).hexdigest()
+    return CacheKey(
+        key=digest,
+        profile_hash=hashlib.sha256(vehicle_json.encode("utf-8")).hexdigest(),
+        kernel_version=kernel,
+        spec_version=SPEC_VERSION,
+    )
+
+
 def evaluate_cache_key(vehicle: Vehicle) -> str:
     """``POST /api/perf/evaluate`` 的缓存键（§9.2 同构：canonical + spec_version）。
 

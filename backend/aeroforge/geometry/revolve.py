@@ -24,7 +24,14 @@ from typing import Any
 
 import build123d as bd
 
-from aeroforge.geometry.meridian import GEOM_TOL, ResolvedProfile, SegmentGeometry, resolve
+from aeroforge.geometry.meridian import (
+    G1_MAX_ANGLE_DEG,
+    GEOM_TOL,
+    MeridianError,
+    ResolvedProfile,
+    SegmentGeometry,
+    resolve,
+)
 from aeroforge.geometry.meridian import MeridianProfile as MeridianProfile
 
 # LOD 网格参数（规格 §5.4）：LOD1 供交互预览，LOD2 供交付与精修
@@ -53,6 +60,40 @@ def kernel_version() -> str:
 
 
 # ---------------------------------------------------------------------------
+# G1 生成期门禁（§5.3：违反 G1 的连接点在生成阶段即报错并指出段索引）
+# ---------------------------------------------------------------------------
+
+
+def assert_g1(resolved: ResolvedProfile) -> None:
+    """可见接头（半径 > :data:`GEOM_TOL`）的切向夹角 > 0.5° 即抛错并指段索引。
+
+    轴处接头（r=0）**不在本门禁**：轴处反向对接（pinch）与退化段的 90° 折角
+    由 :func:`aeroforge.geometry.validate.validate_meridian` 以报告级裁定留痕
+    （pinch = warn、轴处折角 = fail），几何层不拦——它们在回转面上退化为
+    单点，不构成"能生成但看起来有折痕"的可见缺陷。
+    """
+    for index in range(len(resolved.segments) - 1):
+        before = resolved.segments[index]
+        after = resolved.segments[index + 1]
+        radius = before.end[0]
+        if radius <= GEOM_TOL:
+            continue
+        dot = (
+            before.end_tangent[0] * after.start_tangent[0]
+            + before.end_tangent[1] * after.start_tangent[1]
+        )
+        angle = math.degrees(math.acos(max(-1.0, min(1.0, dot))))
+        if angle > G1_MAX_ANGLE_DEG:
+            msg = (
+                f"段 {index}（{before.kind}）与段 {index + 1}（{after.kind}）的连接处"
+                f"（r={radius:.6f} m）切向夹角 {angle:.2f}° 超过 {G1_MAX_ANGLE_DEG}°——"
+                'G1 折痕，§5.3 不允许"能生成但看起来有折痕"的结果。'
+                "请调整相邻段参数使其相切（头锥族基底/柱段接口、幂律指数、样条控制点）。"
+            )
+            raise MeridianError(msg)
+
+
+# ---------------------------------------------------------------------------
 # 剖面 → 实体
 # ---------------------------------------------------------------------------
 
@@ -63,11 +104,20 @@ def _plane_at_z(z: float) -> bd.Plane:
 
 
 def _segment_edge(geom: SegmentGeometry) -> bd.Edge:
-    """由段的精确几何构出一条边（位于 XZ 剖面平面内）。"""
+    """由段的精确几何构出一条边（位于 XZ 剖面平面内）。
+
+    - ``line``：直线边；
+    - ``arc`` / ``ellipse``：**精确弧边**（make_ellipse，绝不用折线替代——§5.7）；
+    - 曲线族（M5）：穿过密集采样点的**插值 B 样条边**（build123d 原生 spline）。
+      解析侧对同一曲线用参数式 quad 积分，两侧算法无关，对照仍然有效（§5.7）。
+    """
     if geom.kind == "line":
         r0, z0 = geom.start
         r1, z1 = geom.end
         return bd.Edge.make_line((r0, 0.0, z0), (r1, 0.0, z1))
+
+    if geom.points is not None:
+        return bd.Edge.make_spline([(r, 0.0, z) for r, z in geom.points])
 
     assert geom.center is not None
     assert geom.semi_r is not None
@@ -122,6 +172,7 @@ def build_solid(profile: MeridianProfile) -> bd.Part:
     与"算的"仍是同一个外形（P1 / ADR-012）。
     """
     resolved = resolve(profile)
+    assert_g1(resolved)
     face = profile_face(resolved)
     part = bd.revolve(face, axis=bd.Axis.Z)
     if part is None:
@@ -181,6 +232,7 @@ def segment_solids(profile: MeridianProfile) -> list[bd.Part]:
     装进同一个根复合体时沿用这些节点名。
     """
     resolved = resolve(profile)
+    assert_g1(resolved)
     children: list[bd.Part] = []
     for index, geom in enumerate(resolved.segments):
         face = segment_face(geom)

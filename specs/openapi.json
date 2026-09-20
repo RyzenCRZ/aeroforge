@@ -142,7 +142,7 @@
           "geometry"
         ],
         "summary": "Build Geometry",
-        "description": "构建回转几何：**命中即同步返回**，未命中建异步作业（规格 §9.3）。\n\n请求体兼容两种形态：裸剖面（既有契约）或 ``{\"profile\", \"boosters\"}``\n捆绑构型（OI-36）。键计算按同一份剖面对 boosters 敏感、对省略 boosters\n逐字节不敏感（§9.2）。",
+        "description": "构建回转几何：**命中即同步返回**，未命中建异步作业（规格 §9.3）。\n\n请求体兼容三种形态：裸剖面（既有契约）、``{\"profile\", \"boosters\"}`` 捆绑构型\n（OI-36）、``{\"vehicle\"}`` 车辆形态（M5 九段分区装配树）。剖面形态的键对\nboosters 敏感、对省略 boosters 逐字节不敏感（§9.2）；车辆形态的键走\nvehicle canonical，与剖面形态天然分离。",
         "operationId": "build_geometry_api_geometry_build_post",
         "requestBody": {
           "content": {
@@ -154,6 +154,9 @@
                   },
                   {
                     "$ref": "#/components/schemas/GeometryBuildRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/VehicleBuildRequest"
                   }
                 ],
                 "title": "Request"
@@ -1072,6 +1075,50 @@
         ],
         "title": "AvailabilityOut",
         "description": "检索候选的可用性摘要：四个概览字段各自是否可得（缺列不入摘要，§7.5）。"
+      },
+      "BellNozzleSegment": {
+        "properties": {
+          "length": {
+            "type": "number",
+            "title": "Length",
+            "description": "轴向跨度（m），正 = 沿 +Z 推进"
+          },
+          "end_radius": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "End Radius",
+            "description": "本段结束处的半径（m）"
+          },
+          "type": {
+            "type": "string",
+            "const": "bell",
+            "title": "Type",
+            "default": "bell"
+          },
+          "throat_radius": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Throat Radius",
+            "description": "喉部半径（m）"
+          },
+          "length_ratio": {
+            "type": "number",
+            "maximum": 1.5,
+            "exclusiveMinimum": 0.0,
+            "title": "Length Ratio",
+            "description": "钟形长度比 L/L₁₅°（0.8 = 80% 钟，Rao 常用值）"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "length",
+          "end_radius",
+          "throat_radius",
+          "length_ratio"
+        ],
+        "title": "BellNozzleSegment",
+        "description": "钟形喷管段（§5.3 曲线族，M5）：Rao 抛物线近似钟形。\n\n参数化（Rao 型）：喉部半径 ``throat_radius``、出口半径（段另一端的半径）、\n长度比 ``length_ratio`` = L / L₁₅°（L₁₅° = (Rₑ−Rₜ)/tan15°，0.8 = 80% 钟形）。\n型面 = 喉部圆弧（半径 0.382·Rₜ，Rao 经典值）+ 二次 Bézier 抛物线（起端壁角 θₙ、\n出口壁角 θₑ 由膨胀比 ε = (Rₑ/Rₜ)² 的对数拟合工程近似给出）。\n\n⚠ 两端中**恰有一端**为喉部（半径 = throat_radius），另一端为出口（必须更大）；\n``length`` 与 ``length_ratio`` 必须自洽（意图断言：L = ratio·(Rₑ−Rₜ)/tan15°）。"
       },
       "Booster": {
         "properties": {
@@ -2067,6 +2114,110 @@
             "description": "尾翼 / 稳定面是否启用",
             "default": false
           },
+          "fin_airfoil": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "flat",
+                  "wedge",
+                  "double_wedge"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fin Airfoil",
+            "description": "尾翼剖面翼型（flat 平板 / wedge 楔形 / double_wedge 双楔）"
+          },
+          "fin_span_m": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fin Span M",
+            "description": "尾翼展长（翼根弦到翼梢的径向跨度）",
+            "display_unit": "m",
+            "unit": "m"
+          },
+          "fin_root_chord_m": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fin Root Chord M",
+            "description": "翼根弦长（箭体壁处的轴向弦长）",
+            "display_unit": "m",
+            "unit": "m"
+          },
+          "fin_tip_chord_m": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fin Tip Chord M",
+            "description": "翼梢弦长",
+            "display_unit": "m",
+            "unit": "m"
+          },
+          "fin_sweep_deg": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 75.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fin Sweep Deg",
+            "description": "后掠角（前缘自翼根向翼梢的后倾角）"
+          },
+          "fin_count": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 4.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fin Count",
+            "description": "周向数量（等角均布；合法域 0 / 3 / 4，0 = 无）"
+          },
+          "fin_roll_deg": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMaximum": 360.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fin Roll Deg",
+            "description": "滚转角（首片尾翼的方位角基准）"
+          },
           "oxidizer_tank": {
             "$ref": "#/components/schemas/Tank",
             "description": "氧化剂箱"
@@ -2083,7 +2234,7 @@
           "fuel_tank"
         ],
         "title": "Geometry",
-        "description": "构型（§6.1 Geometry 层），**每级一个**。\n\n整箭外轮廓（§5.2 的母线段列表）挂在 :attr:`Vehicle.profile`：M1 的母线描述的是\n**整箭纵剖面**，而共底 / 储箱排列 / 两箱本身是**逐级**属性——若把二者放进一个\n``Geometry``，多级火箭就会出现\"一份轮廓对应多个构型\"的歧义。\n\n⚠ 装配关系（§6.1 的示例字段之一）**不在此层**：它随 M5 装配树一并建模（§16）。"
+        "description": "构型（§6.1 Geometry 层），**每级一个**。\n\n整箭外轮廓（§5.2 的母线段列表）挂在 :attr:`Vehicle.profile`：M1 的母线描述的是\n**整箭纵剖面**，而共底 / 储箱排列 / 两箱本身是**逐级**属性——若把二者放进一个\n``Geometry``，多级火箭就会出现\"一份轮廓对应多个构型\"的歧义。\n\n尾翼参数（M5，§5.5）：``fins_enabled`` 为 QA-4 既有占位挂点，本片补全参数——\n全部可选（``None``），启用时由模型校验器强制齐备；数量合法域 0 / 3 / 4\n（0 = 启用但无翼，语义等于关闭）。"
       },
       "GeometryBuildRequest": {
         "properties": {
@@ -2643,14 +2794,38 @@
                 },
                 {
                   "$ref": "#/components/schemas/EllipseSegment"
+                },
+                {
+                  "$ref": "#/components/schemas/TangentOgiveSegment"
+                },
+                {
+                  "$ref": "#/components/schemas/ParabolaSegment"
+                },
+                {
+                  "$ref": "#/components/schemas/VonKarmanSegment"
+                },
+                {
+                  "$ref": "#/components/schemas/PowerLawSegment"
+                },
+                {
+                  "$ref": "#/components/schemas/BellNozzleSegment"
+                },
+                {
+                  "$ref": "#/components/schemas/SplineSegment"
                 }
               ],
               "discriminator": {
                 "propertyName": "type",
                 "mapping": {
                   "arc": "#/components/schemas/ArcSegment",
+                  "bell": "#/components/schemas/BellNozzleSegment",
                   "ellipse": "#/components/schemas/EllipseSegment",
-                  "line": "#/components/schemas/LineSegment"
+                  "line": "#/components/schemas/LineSegment",
+                  "ogive": "#/components/schemas/TangentOgiveSegment",
+                  "parabola": "#/components/schemas/ParabolaSegment",
+                  "power": "#/components/schemas/PowerLawSegment",
+                  "spline": "#/components/schemas/SplineSegment",
+                  "von_karman": "#/components/schemas/VonKarmanSegment"
                 }
               }
             },
@@ -2982,6 +3157,43 @@
         "title": "OrbitPayload",
         "description": "运力表中一个目标轨道的点值（OI-38 / §8.8 ``payload_by_orbit`` 行）。"
       },
+      "ParabolaSegment": {
+        "properties": {
+          "length": {
+            "type": "number",
+            "title": "Length",
+            "description": "轴向跨度（m），正 = 沿 +Z 推进"
+          },
+          "end_radius": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "End Radius",
+            "description": "本段结束处的半径（m）"
+          },
+          "type": {
+            "type": "string",
+            "const": "parabola",
+            "title": "Type",
+            "default": "parabola"
+          },
+          "coefficient": {
+            "type": "number",
+            "maximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Coefficient",
+            "description": "抛物线系数 K（1 = 全抛物线，基底相切；趋 0 = 锥形）"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "length",
+          "end_radius",
+          "coefficient"
+        ],
+        "title": "ParabolaSegment",
+        "description": "抛物线头锥段（§5.3 曲线族，M5）：头锥（低阻）。\n\n母线 ``r(t) = R·(2t − K·t²)/(2−K)``，``t = z/L`` ∈ [0, 1]，K 为抛物线系数：\nK = 1 全抛物线（基底切向竖直，与柱段 G1）；K → 0 退化为锥。穹顶型放置。"
+      },
       "PerfEvaluateRequest": {
         "properties": {
           "vehicle": {
@@ -3103,6 +3315,43 @@
         ],
         "title": "PointEvaluation",
         "description": "点值结果（§8.7 阶段 ① 的 ``point`` 载荷）。"
+      },
+      "PowerLawSegment": {
+        "properties": {
+          "length": {
+            "type": "number",
+            "title": "Length",
+            "description": "轴向跨度（m），正 = 沿 +Z 推进"
+          },
+          "end_radius": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "End Radius",
+            "description": "本段结束处的半径（m）"
+          },
+          "type": {
+            "type": "string",
+            "const": "power",
+            "title": "Type",
+            "default": "power"
+          },
+          "exponent": {
+            "type": "number",
+            "maximum": 10.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Exponent",
+            "description": "幂律指数 n"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "length",
+          "end_radius",
+          "exponent"
+        ],
+        "title": "PowerLawSegment",
+        "description": "幂律过渡段（§5.3 曲线族，M5）：通用过渡。\n\n母线 ``r(t) = r₀ + (r₁ − r₀)·tⁿ``：n = 1 直线（锥/锥台）；n < 1 起始切向水平\n（钝过渡）；n > 1 起始切向竖直。非穹顶型——两端半径任意（通用过渡用途）。"
       },
       "Recovery": {
         "properties": {
@@ -3940,6 +4189,55 @@
         "title": "SourcedField",
         "description": "单个已知参数字段：值 + 出处锚点 + 单位存疑标记（§7.8 溯源红线）。\n\n``value`` 为 ``null`` 表示 GCAT 源缺失——**缺失是状态不是 0**（§7.5 规则 2），\n一律入响应顶层的 ``missing`` 清单，禁止编造替代值。"
       },
+      "SplineSegment": {
+        "properties": {
+          "length": {
+            "type": "number",
+            "title": "Length",
+            "description": "轴向跨度（m），正 = 沿 +Z 推进"
+          },
+          "end_radius": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "End Radius",
+            "description": "本段结束处的半径（m）"
+          },
+          "type": {
+            "type": "string",
+            "const": "spline",
+            "title": "Type",
+            "default": "spline"
+          },
+          "control_points": {
+            "items": {
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array",
+              "maxItems": 2,
+              "minItems": 2
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Control Points",
+            "description": "内部控制点 (r, z) 列表（z 严格递增，落在 (0, length) 内）"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "length",
+          "end_radius",
+          "control_points"
+        ],
+        "title": "SplineSegment",
+        "description": "样条段（§5.3 曲线族，M5）：自定义 / 逆向。\n\n控制点为**内部节点**（不含两端）：曲线 = 自然三次样条插值\n[起点, *控制点, 终点]，以 z 为参数（r(z) 单值、z 严格单调由结构保证）。\n控制点的 z 必须严格递增且落在 (0, length) 内；r ≥ 0。"
+      },
       "Stage": {
         "properties": {
           "index": {
@@ -4347,6 +4645,35 @@
         ],
         "title": "StageSizing",
         "description": "单级（芯级串联链）的求解结果。"
+      },
+      "TangentOgiveSegment": {
+        "properties": {
+          "length": {
+            "type": "number",
+            "title": "Length",
+            "description": "轴向跨度（m），正 = 沿 +Z 推进"
+          },
+          "end_radius": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "End Radius",
+            "description": "本段结束处的半径（m）"
+          },
+          "type": {
+            "type": "string",
+            "const": "ogive",
+            "title": "Type",
+            "default": "ogive"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "length",
+          "end_radius"
+        ],
+        "title": "TangentOgiveSegment",
+        "description": "切线卵形段（§5.3 曲线族，M5）：头锥（工程常用）。\n\n由 ``{length, end_radius}`` **完全确定**：基底半径 R = 半径端半径、锥长 L = length，\n长径比 = L/(2R) 为派生量；卵形圆半径 ρ = (R²+L²)/(2R)，圆心在 (R−ρ, L)——基底切向\n严格竖直，故与柱段 G1 连续（这正是\"切线\"卵形的含义）。穹顶型放置（恰一端在轴线上）。\n⚠ 值域：L ≥ R——过钝（L < R）的切线卵形弧会下探到负 z，破坏剖面的 z 单调性。"
       },
       "Tank": {
         "properties": {
@@ -5107,6 +5434,21 @@
         "title": "Vehicle",
         "description": "飞行器总纲（§6.1 Vehicle 层）——前端与后端之间传递的唯一顶层参数对象。\n\n``total_length_m`` / ``max_diameter_m`` 等**派生量不在此层**：它们由\n:mod:`aeroforge.params.dag` 算出并随结果下发（前端零几何计算，ADR-011）。"
       },
+      "VehicleBuildRequest": {
+        "properties": {
+          "vehicle": {
+            "$ref": "#/components/schemas/Vehicle",
+            "description": "飞行器参数（含 boosters / 共底 / 扁度 / 尾翼）"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "vehicle"
+        ],
+        "title": "VehicleBuildRequest",
+        "description": "``POST /api/geometry/build`` 的**车辆形态**请求体（M5，九段分区装配树）。\n\n从 ``Vehicle`` 的 Stage 参数映射 §5.9 的 9 段轴向分区，GLB 节点名 = 分区名\n（``s<级序>-<分区>`` / ``fin-<k>`` / ``booster-<k>``）；metrics 扩\n``assembly_tree`` 与 ``common_bulkhead_saving_m``。与剖面形态并存——\n自由母线走既有 profile 形态（节点名 ``seg-<i>``），两条通路互不污染缓存。"
+      },
       "VehicleFieldsOut": {
         "properties": {
           "name": {
@@ -5374,6 +5716,35 @@
         ],
         "title": "VehicleSearchResponse",
         "description": "``GET /api/catalog/vehicles/search`` 的响应体。"
+      },
+      "VonKarmanSegment": {
+        "properties": {
+          "length": {
+            "type": "number",
+            "title": "Length",
+            "description": "轴向跨度（m），正 = 沿 +Z 推进"
+          },
+          "end_radius": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "End Radius",
+            "description": "本段结束处的半径（m）"
+          },
+          "type": {
+            "type": "string",
+            "const": "von_karman",
+            "title": "Type",
+            "default": "von_karman"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "length",
+          "end_radius"
+        ],
+        "title": "VonKarmanSegment",
+        "description": "冯·卡门头锥段（§5.3 曲线族，M5）：跨声速最优头锥（LDHV）。\n\nHaack 级 C=0 特例（标准 LDHV 近似式）::\n\n    φ = arccos(1 − 2t),  r(t) = (R/√π)·√(φ − sin(2φ)/2)\n\n顶端切向水平（钝头）、基底切向竖直（与柱段 G1）。穹顶型放置。"
       },
       "ZeroStageSizing": {
         "properties": {

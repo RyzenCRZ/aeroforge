@@ -143,13 +143,20 @@ class TankGeometryEstimate:
     """柱段长度来源：显式箱长（user，§5.9 规则 2）/ §5.9 容积比派生（derived）。"""
 
 
-def resolve_tank_geometry(stage: Stage) -> tuple[TankGeometryEstimate, TankGeometryEstimate]:
+def resolve_tank_geometry(
+    stage: Stage, *, reserved_m: float = 0.0
+) -> tuple[TankGeometryEstimate, TankGeometryEstimate]:
     """解析一级的两箱几何（氧化剂箱、燃料箱）。
 
     箱长优先级（读 Schema 裁定）：Tank 层**不存容积**（派生量不存储，§6.1），
     用户显式通道只有 ``Tank.length_m``——两箱都显式 → 直接用；只有一箱显式 →
     另一箱按 §5.9 容积比由显式箱长锚定；都缺 → 按容积比分配可用长度（级长 −
-    发动机高度，裙 / 级间舱 / 仪器舱不另扣减，工程估算口径）。
+    发动机高度 − ``reserved_m``）。
+
+    ``reserved_m``（M5 装配树引入，默认 0 = 既有口径）：从可用长度中额外扣除的
+    轴向预留（封头占位 / 共底隔板段等）。装配布局传该参数使九段分区恰好铺满
+    级长；性能评估链不传（保持 §8.4 既有工程估算口径）——**同一函数、两种调用
+    约定**，不另立第二套箱体解析（M5 任务口径）。
     """
     ox_tank = stage.geometry.oxidizer_tank
     fuel_tank = stage.geometry.fuel_tank
@@ -173,11 +180,12 @@ def resolve_tank_geometry(stage: Stage) -> tuple[TankGeometryEstimate, TankGeome
     elif fuel_length is not None:
         ox_length = fuel_length * ratio
     else:
-        available = stage.length_m - stage.engine_height_m
+        available = stage.length_m - stage.engine_height_m - reserved_m
         if available <= 0.0:
             msg = (
                 f"第 {stage.index} 级可用箱长非正（级长 {stage.length_m} m − 发动机高度 "
-                f"{stage.engine_height_m} m = {available} m），无法按 §5.9 分配两箱柱长"
+                f"{stage.engine_height_m} m − 轴向预留 {reserved_m:.6f} m = {available:.6f} m），"
+                "无法按 §5.9 分配两箱柱长"
             )
             raise ValueError(msg)
         # §5.9 容积比 → 柱长比（两箱截面积按各自直径，容积比与柱长比仅在等直径时
@@ -218,22 +226,29 @@ def propellant_mass_kg(stage: Stage) -> float:
     ) * stage.fill_fraction
 
 
-def dry_mass_geometric_kg(stage: Stage) -> float:
-    """几何解析干重（kg）= 两箱湿面积 × 面密度之和。
+def tank_dry_masses_kg(stage: Stage, *, reserved_m: float = 0.0) -> tuple[float, float]:
+    """按箱分列的几何解析干重（kg）：``(氧化剂箱, 燃料箱)``。
 
-    面密度 = 材料库 ``typical_min_wall_thickness_m × density_kg_m3``（**工程惯例
-    估算**：取箱层引用的材料；刻意不用用户的壁厚输入，保持本来源独立于细观参数）。
+    与 :func:`dry_mass_geometric_kg` 同式（湿面积 × 面密度；面密度 = 材料库
+    ``typical_min_wall_thickness_m × density_kg_m3``，工程惯例估算——刻意不用
+    用户的壁厚输入，保持本来源独立于细观参数）。M5 装配树按箱取质量贡献时调用
+    （``reserved_m`` 语义同 :func:`resolve_tank_geometry`）。
     """
-    ox, fuel = resolve_tank_geometry(stage)
-    total = 0.0
+    ox, fuel = resolve_tank_geometry(stage, reserved_m=reserved_m)
+    masses: list[float] = []
     for estimate, material_id in (
         (ox, stage.geometry.oxidizer_tank.material),
         (fuel, stage.geometry.fuel_tank.material),
     ):
         material = get_material(material_id)
         areal_density = material.typical_min_wall_thickness_m * material.density_kg_m3
-        total += estimate.wetted_area_m2 * areal_density
-    return total
+        masses.append(estimate.wetted_area_m2 * areal_density)
+    return (masses[0], masses[1])
+
+
+def dry_mass_geometric_kg(stage: Stage) -> float:
+    """几何解析干重（kg）= 两箱湿面积 × 面密度之和。"""
+    return sum(tank_dry_masses_kg(stage))
 
 
 @dataclass(frozen=True, slots=True)
@@ -560,6 +575,7 @@ __all__ = [
     "resolve_position",
     "resolve_tank_geometry",
     "summarize_sigma_bins",
+    "tank_dry_masses_kg",
     "tank_volume_m3",
     "tank_wetted_area_m2",
 ]

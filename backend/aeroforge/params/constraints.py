@@ -194,6 +194,39 @@ def _check_stage(stage: Stage, *, prefix: str) -> list[Diagnostic]:
             )
         )
 
+    # 尾翼相容（M5，§5.5）：启用但数量 0 = 语义关闭；参数已填但未启用 = 不生效
+    if geometry.fins_enabled and geometry.fin_count == 0:
+        items.append(
+            _warn(
+                "ENGINEER_FINS_ENABLED_NO_FIN",
+                f"{prefix}.geometry.fin_count",
+                f"第 {stage.index} 级启用了尾翼（fins_enabled=true）但数量为 0——"
+                "语义上等于关闭，不会生成任何 fin-<k> 节点",
+                "把 fin_count 设为 3 或 4，或关闭 fins_enabled 以免误以为已有尾翼",
+            )
+        )
+    if not geometry.fins_enabled and any(
+        value is not None
+        for value in (
+            geometry.fin_airfoil,
+            geometry.fin_span_m,
+            geometry.fin_root_chord_m,
+            geometry.fin_tip_chord_m,
+            geometry.fin_sweep_deg,
+            geometry.fin_count,
+            geometry.fin_roll_deg,
+        )
+    ):
+        items.append(
+            _warn(
+                "ENGINEER_FIN_PARAMS_UNUSED",
+                f"{prefix}.geometry.fins_enabled",
+                f"第 {stage.index} 级填写了尾翼参数但未启用（fins_enabled=false）——"
+                "这些参数不会生效",
+                "打开 fins_enabled，或清空尾翼参数以消除歧义",
+            )
+        )
+
     engine = stage.engine
     # 唯一权威（QA-1，v0.6.2）：发动机标称比冲是权威，级层只在覆写时才存值。
     if stage.isp_source == "default":

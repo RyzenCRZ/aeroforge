@@ -3,11 +3,17 @@ import { canAppendSegment, chainEndRadius, useParamsStore } from '../store/param
 import { useViewStore } from '../store/view'
 import './SegmentPanel.css'
 
-/** 段类型的中文名（§16.3 的 M1 曲线族裁剪）。 */
+/** 段类型的中文名（§5.3 曲线族——M5 起九种全量；编辑器新增入口随后续片开放）。 */
 const SEGMENT_TYPE_TEXT: Record<SegmentType, string> = {
   line: '直线（柱 / 锥 / 锥台）',
   arc: '圆弧（球冠 / 球底）',
   ellipse: '椭圆弧（椭球底 / 共底）',
+  ogive: '切线卵形（头锥）',
+  parabola: '抛物线（头锥）',
+  von_karman: '冯·卡门（跨声速头锥）',
+  power: '幂律（通用过渡）',
+  bell: '钟形喷管（Rao 近似）',
+  spline: '样条（自定义）',
 }
 
 const SEGMENT_TYPE_OPTIONS: SegmentType[] = ['line', 'arc', 'ellipse']

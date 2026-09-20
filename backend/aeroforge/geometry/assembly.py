@@ -1,0 +1,1049 @@
+"""九段分区装配树（规格 §5.9 / §5.5 / OI-33 / OI-37，M5 第一片）。
+
+职责
+----
+把 ``Vehicle`` 的逐级 ``Stage`` 参数映射为 **§5.9 的 9 段轴向固定分区**，逐分区
+生成回转实体（GLB 具名节点）+ 质量贡献 + 材料引用 + 参数来源，并落地共底四校验
+（§5.5）与尾翼（§5.5）。与既有**母线剖面通路**（``POST /api/geometry/build`` 的
+profile 形态，节点名 ``seg-<i>``）并存：本模块是车辆形态构建（节点名 = 分区名）。
+
+轴向布局约定（工程惯例，本片裁决——留白项见模块末尾"约定与留白"）
+------------------------------------------------------------------
+自下而上逐级铺满 ``Stage.length_m``：
+
+::
+
+    engine_bay（He）→ thrust_structure（h_lo_bot，容纳下箱底封头）
+    → 下箱柱段（L_lo）→ [级间舱 h_mid | 共底隔板段 h_b] → 上箱柱段（L_hi）
+    → forward_skirt（h_hi_top，容纳上箱顶封头）→ avionics（0 高，§5.9 允许）
+
+- 封头矢高 ``h = flatness × d / 2``（OI-37；``None`` 兜底 0.5）——**优先级**：
+  母线 ``ellipse`` 段的显式 ``length``（用户在剖面里画什么是什么）> 级层
+  ``flatness_ratio`` > 0.5 兜底。本模块只消费级层值（剖面通路天然用显式值）。
+- 箱柱长由 :func:`aeroforge.perf.mass.resolve_tank_geometry(stage, reserved_m=…)`
+  派生（§5.9 容积比 ``V_ox/V_fuel = (O/F)·ρ_fuel/ρ_ox``），``reserved_m`` 扣除
+  封头占位与中段使分区**恰好铺满**级长——同一函数、两种调用约定，不另立第二套
+  箱体解析（M5 任务口径）；性能评估链继续用默认 ``reserved_m=0`` 的 §8.4 口径。
+- 储箱排列**读字段不硬编码**（§5.9 非铁律）：``oxidizer_upper`` ⇒ 氧箱在上；
+  ``fuel_upper`` ⇒ 燃料箱在上（第 5/7 分区的上下次序随之对调）。
+- 共底：隔板为凹向上箱的椭球面，矢高 ``h_b = flatness × D / 2``（按**级径**反算，
+  共底物理上要求两箱同径）；级长缩减量 ``saving = (h_lo_top + h_hi_bot) − h_b``
+  （公式反算，不得手填，§5.9 口径 2）。
+
+质量贡献（§8.4 几何解析账，复用 :mod:`aeroforge.perf.mass`）
+-------------------------------------------------------------
+- 氧箱 / 燃料箱：``wetted_area × 面密度``（:func:`tank_dry_masses_kg`，与
+  :func:`dry_mass_geometric_kg` 同式、按箱分列）。
+- 共底隔板：隔板表面积 × 面密度（:func:`dome_surface_area_m2` 同源）。
+- 其余分区（裙 / 舱段 / 整流罩 / 适配器 / 发动机舱 / 尾翼 / 助推器）：
+  **0.0 + 留白注记**——§8.4 几何解析账只覆盖贮箱，不为无模型部件编造数字
+  （§1.4-4）；尾翼与助推器体积在 metrics 的 ``fins`` / ``boosters`` 块单独成账。
+
+约定与留白（显式声明，不静默）
+------------------------------
+1. ``avionics`` 恒为 0 高（§5.9 表明示"可为 0 高"）——非零仪器舱高需要 Schema
+   输入，后续片补；0 高分区不产出 GLB 节点（部件缺失即无节点，OI-33 演化口径）。
+2. 级间段（interstage，级间分离舱段）**不单独切出**——无 Schema 高度输入，
+   ``length_m``（含级间段）的全部预算按 9 段分摊。
+3. ``engine_bay`` 的节点 mesh 为柱段（外模线）；喷管钟形外形需要从推进参数
+   派生喉部半径，归后续片（钟形曲线族已可在母线通路手工构建）。
+4. 共底隔板面**已建几何并过四校验**，但本片不作为独立 GLB 节点下发（外模线
+   连续性优先；内部结构可见化随剖切/内部视图后续片）。
+5. 整流罩 / 适配器高度为工程惯例常量（无 Schema 输入），见 :data:`_FAIRING_*`。
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from typing import Any
+
+import build123d as bd
+from pydantic import BaseModel, ConfigDict, Field
+
+from aeroforge.geometry.bundle import BoosterSummary, booster_cylinders_for_radius
+from aeroforge.geometry.meridian import (
+    GEOM_TOL,
+    EllipseSegment,
+    LineSegment,
+    MeridianProfile,
+    TangentOgiveSegment,
+    resolve,
+)
+from aeroforge.geometry.revolve import GLB_ROOT_NAME, build_solid
+from aeroforge.params.materials import get_material
+from aeroforge.params.propellants import fuel_is_lh2
+from aeroforge.params.schema import Stage, Vehicle
+from aeroforge.perf.mass import (
+    dome_height_m,
+    dome_surface_area_m2,
+    dome_volume_m3,
+    resolve_tank_geometry,
+    tank_dry_masses_kg,
+)
+
+# ---------------------------------------------------------------------------
+# §5.9 的 9 段轴向固定分区（权威次序，自上而下）
+# ---------------------------------------------------------------------------
+
+#: 分区枚举（§5.9 表；``intertank`` / ``bulkhead`` 二选一，由共底开关决定）。
+SECTION_FAIRING = "fairing"
+SECTION_ADAPTER = "adapter"
+SECTION_AVIONICS = "avionics"
+SECTION_FORWARD_SKIRT = "forward_skirt"
+SECTION_OX_TANK = "ox_tank"
+SECTION_INTERTANK = "intertank"
+SECTION_BULKHEAD = "bulkhead"
+SECTION_FUEL_TANK = "fuel_tank"
+SECTION_THRUST_STRUCTURE = "thrust_structure"
+SECTION_ENGINE_BAY = "engine_bay"
+
+#: §5.9 的轴向固定次序（自上而下；第 5/7 段的上下次序由 ``tank_arrangement`` 决定，
+#: 实现读字段而非按序号硬编码）。
+SECTION_ORDER: tuple[str, ...] = (
+    SECTION_FAIRING,
+    SECTION_ADAPTER,
+    SECTION_AVIONICS,
+    SECTION_FORWARD_SKIRT,
+    SECTION_OX_TANK,
+    SECTION_INTERTANK,  # 或 SECTION_BULKHEAD（共底开启时）
+    SECTION_FUEL_TANK,
+    SECTION_THRUST_STRUCTURE,
+    SECTION_ENGINE_BAY,
+)
+
+#: 分区枚举 → GLB 节点名后缀（连字符形态，与前端按名寻址兼容）。
+_SECTION_NODE_SUFFIX: dict[str, str] = {
+    SECTION_FAIRING: "fairing",
+    SECTION_ADAPTER: "adapter",
+    SECTION_AVIONICS: "avionics",
+    SECTION_FORWARD_SKIRT: "forward-skirt",
+    SECTION_OX_TANK: "ox-tank",
+    SECTION_INTERTANK: "intertank",
+    SECTION_BULKHEAD: "bulkhead",
+    SECTION_FUEL_TANK: "fuel-tank",
+    SECTION_THRUST_STRUCTURE: "thrust-structure",
+    SECTION_ENGINE_BAY: "engine-bay",
+}
+
+#: 角色（oxidizer / fuel）→ 分区枚举。
+_ROLE_SECTION: dict[str, str] = {"oxidizer": SECTION_OX_TANK, "fuel": SECTION_FUEL_TANK}
+
+#: 整流罩 / 适配器的工程惯例常量（无 Schema 输入；留白见模块 docstring 第 5 条）。
+_FAIRING_HEIGHT_DIAMETER_RATIO = 2.2
+_FAIRING_HEIGHT_MIN_M = 5.0
+_FAIRING_HEIGHT_MAX_M = 20.0
+_FAIRING_CYLINDER_FRACTION = 0.55  # 柱段占整流罩高的比例，其余为切线卵形
+_ADAPTER_HEIGHT_DIAMETER_RATIO = 0.35
+_ADAPTER_HEIGHT_MIN_M = 0.8
+_ADAPTER_HEIGHT_MAX_M = 3.0
+
+#: 共底容积守恒容差（§5.5 校验 2：0.5%）。
+BULKHEAD_VOLUME_TOL = 5e-3
+
+#: 尾翼厚度工程惯例：t = 0.04 × 弦长（任务参数表未列厚度，Schema 无输入）。
+FIN_THICKNESS_RATIO = 0.04
+
+#: 根部倒圆半径系数（局部圆角，§5.5：避免根部应力集中）。
+FIN_ROOT_FILLET_RATIO = 0.25
+
+
+class AssemblyError(ValueError):
+    """装配布局的域错误（分区铺不满 / 矢高超限 / 参数不自洽等）。"""
+
+
+def section_node_name(stage_index: int, section: str) -> str:
+    """分区 GLB 节点名：``s<级序>-<分区>``（稳定可枚举，前端按名寻址）。"""
+    return f"s{stage_index}-{_SECTION_NODE_SUFFIX[section]}"
+
+
+# ---------------------------------------------------------------------------
+# 装配数据模型（metrics.assembly_tree 的形状）
+# ---------------------------------------------------------------------------
+
+
+class AssemblyNode(BaseModel):
+    """装配树节点元数据（节点名 → 部件账目，随 metrics 下发）。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    stage_index: int = Field(description="级序（助推器 = 0，与 GCAT 记法对齐）")
+    section: str = Field(description="§5.9 分区枚举（fin / booster 为扩展分区）")
+    z_start_m: float = Field(description="分区底面在整箭坐标系的 z（m，自箭体底部起算）")
+    length_m: float = Field(description="分区轴向高度（m）")
+    mass_kg: float = Field(description="质量贡献（kg，§8.4 几何解析账）")
+    material: str = Field(description="材料库引用")
+    source_fields: tuple[str, ...] = Field(
+        description="参数来源（Schema 字段路径；`i` 为该级在 stages[] 的 0 基下标）"
+    )
+    note: str | None = Field(default=None, description="留白注记（无质量模型的部件显式声明）")
+
+
+class AssemblyCheck(BaseModel):
+    """装配层单项校验结果（形状与 §5.7 的 CheckResult 同构）。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    check: str
+    severity: str = Field(description="pass / warn / fail")
+    detail: str
+    stage_index: int | None = None
+    value: float | None = None
+    expected: float | None = None
+    relative_error: float | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.severity != "fail"
+
+
+@dataclass(frozen=True, slots=True)
+class Band:
+    """一个分区的布局事实（内部账目；对外经 :class:`AssemblyNode` 下发）。"""
+
+    section: str
+    z_start: float
+    z_end: float
+    radius_start: float
+    radius_end: float
+    mass_kg: float
+    material: str
+    source_fields: tuple[str, ...]
+    note: str | None = None
+
+    @property
+    def length(self) -> float:
+        return self.z_end - self.z_start
+
+
+@dataclass(frozen=True, slots=True)
+class StageLayout:
+    """一级的布局结果（纯数值，无 OCCT）。"""
+
+    stage_index: int
+    bands: tuple[Band, ...]
+    height: float
+    reserved_m: float
+    h_mid: float
+    saving_m: float
+    l_ox: float
+    l_fuel: float
+    h_ox_dome: float
+    h_fuel_dome: float
+    tank_masses: tuple[float, float]
+
+
+@dataclass(frozen=True, slots=True)
+class VehicleAssembly:
+    """整箭装配结果：GLB 场景图 + 装配树 + 校验 + 量测。"""
+
+    root: bd.Compound
+    nodes: dict[str, AssemblyNode]
+    checks: tuple[AssemblyCheck, ...]
+    total_length: float
+    max_radius: float
+    volume: float
+    saving_by_stage: dict[int, float] = field(default_factory=dict)
+    fins: dict[str, Any] | None = None
+    boosters: dict[str, Any] | None = None
+
+
+# ---------------------------------------------------------------------------
+# 布局推导（纯数值，无 OCCT——布局先行，实体随后）
+# ---------------------------------------------------------------------------
+
+
+def _tank_diameters(stage: Stage) -> dict[str, float]:
+    """两箱直径（省略 = 继承级直径，读 Schema 不硬编码）。"""
+    return {
+        "oxidizer": stage.geometry.oxidizer_tank.diameter_m or stage.diameter_m,
+        "fuel": stage.geometry.fuel_tank.diameter_m or stage.diameter_m,
+    }
+
+
+def _upper_lower_roles(stage: Stage) -> tuple[str, str]:
+    """按储箱排列返回 (上箱角色, 下箱角色)——§5.9 非铁律，读字段。
+
+    ``oxidizer_upper``（默认）⇒ 氧在上（S-IC / S-II / Falcon 9 形态）；
+    ``fuel_upper`` ⇒ 燃料在上（S-IVB 形态：LH₂ 在上占约 3/4）。
+    """
+    if stage.geometry.tank_arrangement == "fuel_upper":
+        return ("fuel", "oxidizer")
+    return ("oxidizer", "fuel")
+
+
+def _tank_material(stage: Stage, role: str) -> str:
+    """箱材料引用（读 Schema 字段，不硬编码）。"""
+    if role == "oxidizer":
+        return stage.geometry.oxidizer_tank.material
+    return stage.geometry.fuel_tank.material
+
+
+def _cylinders_derived(stage: Stage) -> bool:
+    """两箱柱长是否走派生路径（任一显式即非全派生）。"""
+    return (
+        stage.geometry.oxidizer_tank.length_m is None and stage.geometry.fuel_tank.length_m is None
+    )
+
+
+def _bulkhead_mass_kg(stage: Stage, bulkhead_height: float) -> float:
+    """共底隔板质量（kg）：隔板表面积 × 面密度（§8.4 同式，材料取燃料/LH₂ 侧）。"""
+    material = get_material(_tank_material(stage, "fuel"))
+    areal_density = material.typical_min_wall_thickness_m * material.density_kg_m3
+    return dome_surface_area_m2(stage.diameter_m, bulkhead_height) * areal_density
+
+
+def plan_stage(stage: Stage) -> StageLayout:
+    """推导一级的九段分区布局（自下而上，恰好铺满 ``Stage.length_m``）。
+
+    矢高 ≤ 允许值（§5.5 校验 3，防干涉）：共底矢高不得超过
+    ``级长 − 发动机高 − 两端封头占位``——超限即 :class:`AssemblyError`。
+    """
+    geometry = stage.geometry
+    upper_role, lower_role = _upper_lower_roles(stage)
+    diameter = stage.diameter_m
+    engine_height = stage.engine_height_m
+    diameters = _tank_diameters(stage)
+
+    # 封头矢高（OI-37 三级优先级的级层档；None 兜底 0.5 在 dome_height_m 内）
+    dome_heights = {
+        role: dome_height_m(diameters[role], stage.flatness_ratio) for role in ("oxidizer", "fuel")
+    }
+
+    # 中段（第 6 分区）：非共底 = 级间舱（容纳两只相邻封头）；共底 = 隔板段（按级径）
+    if geometry.common_bulkhead:
+        h_bulkhead = dome_height_m(diameter, stage.flatness_ratio)
+        h_mid = h_bulkhead
+        allowed = (
+            stage.length_m - engine_height - dome_heights[lower_role] - dome_heights[upper_role]
+        )
+        if h_bulkhead > allowed + GEOM_TOL:
+            msg = (
+                f"第 {stage.index} 级共底矢高 {h_bulkhead:.6f} m 超过允许值 {allowed:.6f} m"
+                f"（级长 {stage.length_m} m − 发动机高 {engine_height} m − 两端封头占位）——"
+                "隔板将与上下箱干涉（§5.5 校验 3）。请降低 flatness_ratio 或加长该级。"
+            )
+            raise AssemblyError(msg)
+    else:
+        h_bulkhead = None
+        h_mid = dome_heights[upper_role] + dome_heights[lower_role]
+
+    # 轴向预留：下箱底封头 + 中段 + 上箱顶封头（分区铺满级长的关键扣减）
+    reserved = dome_heights[lower_role] + h_mid + dome_heights[upper_role]
+    ox_estimate, fuel_estimate = resolve_tank_geometry(stage, reserved_m=reserved)
+    lengths = {
+        "oxidizer": ox_estimate.cylinder_length_m,
+        "fuel": fuel_estimate.cylinder_length_m,
+    }
+    if not _cylinders_derived(stage):
+        # 显式箱长路径：用户权威（§5.9 规则 2，不静默覆盖），仅拦截溢出
+        total = engine_height + reserved + lengths["oxidizer"] + lengths["fuel"]
+        if total > stage.length_m + 1e-6:
+            msg = (
+                f"第 {stage.index} 级分区总高 {total:.6f} m 超过级长 {stage.length_m} m——"
+                "显式箱长与封头占位/发动机高不相容，请缩短箱长或加长该级"
+            )
+            raise AssemblyError(msg)
+
+    masses = dict(
+        zip(("oxidizer", "fuel"), tank_dry_masses_kg(stage, reserved_m=reserved), strict=True)
+    )
+    saving_m = (
+        dome_heights[upper_role] + dome_heights[lower_role] - h_bulkhead
+        if h_bulkhead is not None
+        else 0.0
+    )
+
+    # ── 自下而上铺带 ──
+    bands: list[Band] = []
+    z = 0.0
+    stage_prefix = f"stages[{stage.index - 1}]"
+    zero_mass_note = "§8.4 几何解析账只覆盖贮箱（与共底隔板）；本分区结构质量留白不编造"
+
+    def _add(
+        section: str,
+        length: float,
+        radius_start: float,
+        radius_end: float,
+        mass: float,
+        material: str,
+        source: tuple[str, ...],
+        note: str | None = None,
+    ) -> None:
+        nonlocal z
+        bands.append(
+            Band(
+                section=section,
+                z_start=z,
+                z_end=z + length,
+                radius_start=radius_start,
+                radius_end=radius_end,
+                mass_kg=mass,
+                material=material,
+                source_fields=source,
+                note=note,
+            )
+        )
+        z += length
+
+    _add(
+        SECTION_ENGINE_BAY,
+        engine_height,
+        diameter / 2.0,
+        diameter / 2.0,
+        0.0,
+        stage.material,
+        (f"{stage_prefix}.engine_height_m", f"{stage_prefix}.diameter_m"),
+        note=zero_mass_note + "；喷管外形（钟形）归后续片",
+    )
+    _add(
+        SECTION_THRUST_STRUCTURE,
+        dome_heights[lower_role],
+        diameter / 2.0,
+        diameter / 2.0,
+        0.0,
+        stage.material,
+        (f"{stage_prefix}.flatness_ratio", f"{stage_prefix}.diameter_m"),
+        note=zero_mass_note,
+    )
+    # 下箱柱段（储箱排列决定角色——读字段，§5.9 非铁律）
+    _add(
+        _ROLE_SECTION[lower_role],
+        lengths[lower_role],
+        diameters[lower_role] / 2.0,
+        diameters[lower_role] / 2.0,
+        masses[lower_role],
+        _tank_material(stage, lower_role),
+        (
+            f"{stage_prefix}.geometry.{lower_role}_tank.length_m",
+            f"{stage_prefix}.geometry.{lower_role}_tank.diameter_m",
+            f"{stage_prefix}.engine.mixture_ratio",
+            f"{stage_prefix}.flatness_ratio",
+        ),
+    )
+    # 第 6 分区：非共底 = 级间舱（容纳两只相邻封头）；共底 = 隔板段（凹向上箱椭球面）
+    if geometry.common_bulkhead:
+        assert h_bulkhead is not None
+        _add(
+            SECTION_BULKHEAD,
+            h_mid,
+            diameter / 2.0,
+            diameter / 2.0,
+            _bulkhead_mass_kg(stage, h_bulkhead),
+            _tank_material(stage, "fuel"),
+            (
+                f"{stage_prefix}.flatness_ratio",
+                f"{stage_prefix}.diameter_m",
+                f"{stage_prefix}.geometry.common_bulkhead_type",
+            ),
+            note="隔板面已过四校验（本片不作为独立 GLB 节点，见模块留白第 4 条）",
+        )
+    else:
+        _add(
+            SECTION_INTERTANK,
+            h_mid,
+            diameter / 2.0,
+            diameter / 2.0,
+            0.0,
+            stage.material,
+            (f"{stage_prefix}.flatness_ratio", f"{stage_prefix}.diameter_m"),
+            note=zero_mass_note,
+        )
+    # 上箱柱段
+    _add(
+        _ROLE_SECTION[upper_role],
+        lengths[upper_role],
+        diameters[upper_role] / 2.0,
+        diameters[upper_role] / 2.0,
+        masses[upper_role],
+        _tank_material(stage, upper_role),
+        (
+            f"{stage_prefix}.geometry.{upper_role}_tank.length_m",
+            f"{stage_prefix}.geometry.{upper_role}_tank.diameter_m",
+            f"{stage_prefix}.engine.mixture_ratio",
+            f"{stage_prefix}.flatness_ratio",
+        ),
+    )
+    _add(
+        SECTION_FORWARD_SKIRT,
+        dome_heights[upper_role],
+        diameter / 2.0,
+        diameter / 2.0,
+        0.0,
+        stage.material,
+        (f"{stage_prefix}.flatness_ratio", f"{stage_prefix}.diameter_m"),
+        note=zero_mass_note,
+    )
+    # avionics：0 高（§5.9 允许；非零需要 Schema 输入，留白）——不产带、不产节点
+
+    return StageLayout(
+        stage_index=stage.index,
+        bands=tuple(bands),
+        height=z,
+        reserved_m=reserved,
+        h_mid=h_mid,
+        saving_m=saving_m,
+        l_ox=lengths["oxidizer"],
+        l_fuel=lengths["fuel"],
+        h_ox_dome=dome_heights["oxidizer"],
+        h_fuel_dome=dome_heights["fuel"],
+        tank_masses=(masses["oxidizer"], masses["fuel"]),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 实体生成（OCCT）
+# ---------------------------------------------------------------------------
+
+
+def _cylinder_solid(radius: float, z_start: float, height: float, label: str) -> bd.Solid:
+    solid = bd.Solid.make_cylinder(radius, height, bd.Plane(origin=(0.0, 0.0, z_start)))
+    solid.label = label
+    return solid
+
+
+def _cone_solid(
+    radius_bottom: float, radius_top: float, z_start: float, height: float, label: str
+) -> bd.Solid:
+    solid = bd.Solid.make_cone(
+        radius_bottom, radius_top, height, bd.Plane(origin=(0.0, 0.0, z_start))
+    )
+    solid.label = label
+    return solid
+
+
+def _fairing_profile(diameter: float, height: float) -> MeridianProfile:
+    """整流罩母线：柱段 + 切线卵形顶（基底相切 ⇒ G1，§5.3）。"""
+    radius = diameter / 2.0
+    cylinder_height = height * _FAIRING_CYLINDER_FRACTION
+    nose_height = height - cylinder_height
+    return MeridianProfile(
+        name="fairing",
+        base_radius=radius,
+        segments=(
+            LineSegment(length=cylinder_height, end_radius=radius),
+            TangentOgiveSegment(length=nose_height, end_radius=0.0),
+        ),
+    )
+
+
+def build_stage_solids(
+    stage: Stage, layout: StageLayout, z_offset: float
+) -> list[tuple[str, bd.Solid]]:
+    """一级的分区实体（按布局带逐段生成，节点名 = ``s<级序>-<分区>``）。
+
+    0 高分区（avionics 等）不产出节点——部件缺失即无节点，前端按名寻址
+    （OI-33 空轮廓机制在真部件下的演化，"保留下标对齐"语义改为"保序"）。
+    """
+    solids: list[tuple[str, bd.Solid]] = []
+    for band in layout.bands:
+        if band.length <= GEOM_TOL:
+            continue
+        label = section_node_name(stage.index, band.section)
+        if abs(band.radius_start - band.radius_end) <= GEOM_TOL:
+            solids.append(
+                (
+                    label,
+                    _cylinder_solid(band.radius_start, z_offset + band.z_start, band.length, label),
+                )
+            )
+        else:
+            solids.append(
+                (
+                    label,
+                    _cone_solid(
+                        band.radius_start,
+                        band.radius_end,
+                        z_offset + band.z_start,
+                        band.length,
+                        label,
+                    ),
+                )
+            )
+    return solids
+
+
+# ---------------------------------------------------------------------------
+# 共底四校验（§5.5）
+# ---------------------------------------------------------------------------
+
+
+def _bulkhead_checks(stage: Stage, layout: StageLayout) -> list[AssemblyCheck]:
+    """共底四校验：G1 / 容积守恒 / 矢高（防干涉）/ LH₂ 隔热。
+
+    校验 1（G1）：隔板椭球弧在半径端的切向严格竖直（四分之一椭圆弧的几何事实），
+    与柱段壁相切——实测角即证。
+    校验 2（容积守恒，容差 0.5%）：**内核实测**的隔板穹顶体积代入两箱分割账
+    （下箱得穹顶、上箱得碗，二者之和 = 隔板段柱体 πR²h_b），加上两箱柱段与两端
+    封头，与解析"柱段包络 + 封头"公式对拍（等径两箱时严格闭合；内核-解析两侧
+    算法无关，§5.7 的对照形态）。
+    校验 3（矢高 ≤ 允许值）：超限已在 :func:`plan_stage` 以硬错误拦截，此处留痕。
+    校验 4（LH₂ 隔热）：缺失 → warning（参数层另有 HARD 级裁定，双保险）。
+    """
+    checks: list[AssemblyCheck] = []
+    diameter = stage.diameter_m
+    radius = diameter / 2.0
+    h_b = layout.h_mid
+    upper_role, lower_role = _upper_lower_roles(stage)
+    diameters = _tank_diameters(stage)
+    d_lower, d_upper = diameters[lower_role], diameters[upper_role]
+    l_lower = layout.l_ox if lower_role == "oxidizer" else layout.l_fuel
+    l_upper = layout.l_ox if upper_role == "oxidizer" else layout.l_fuel
+    h_lo_bot = dome_height_m(d_lower, stage.flatness_ratio)
+    h_hi_top = dome_height_m(d_upper, stage.flatness_ratio)
+
+    # 校验 1：G1（隔板弧半径端切向 vs 竖直）
+    cap_profile = MeridianProfile(
+        name=f"s{stage.index}-bulkhead-cap",
+        base_radius=radius,
+        segments=(EllipseSegment(length=h_b, end_radius=0.0),),
+    )
+    cap_resolved = resolve(cap_profile)
+    radius_end_tangent = cap_resolved.segments[0].start_tangent
+    angle_deg = math.degrees(math.acos(max(-1.0, min(1.0, radius_end_tangent[1]))))
+    checks.append(
+        AssemblyCheck(
+            check="共底校验 1：隔板-柱段 G1",
+            severity="pass" if angle_deg <= 0.5 else "fail",
+            detail=(
+                f"隔板椭球弧在半径端的切向与竖直夹角 {angle_deg:.6f}°（容差 0.5°）——"
+                "隔板与柱段壁相切（§5.5 校验 1）"
+            ),
+            stage_index=stage.index,
+            value=angle_deg,
+            expected=0.0,
+        )
+    )
+
+    # 校验 2：容积守恒（内核实测隔板体积 → 分割账 → 柱段包络对拍）
+    cap_volume_kernel = build_solid(cap_profile).volume
+    cap_cylinder = math.pi * radius**2 * h_b
+    v_lower = (
+        math.pi * (d_lower / 2.0) ** 2 * l_lower
+        + dome_volume_m3(d_lower, h_lo_bot)
+        + cap_volume_kernel
+    )
+    v_upper = (
+        math.pi * (d_upper / 2.0) ** 2 * l_upper
+        + dome_volume_m3(d_upper, h_hi_top)
+        + (cap_cylinder - cap_volume_kernel)
+    )
+    envelope = (
+        math.pi * radius**2 * (l_lower + h_b + l_upper)
+        + dome_volume_m3(d_lower, h_lo_bot)
+        + dome_volume_m3(d_upper, h_hi_top)
+    )
+    conservation_error = (
+        abs(v_lower + v_upper - envelope) / envelope if envelope > GEOM_TOL else math.inf
+    )
+    checks.append(
+        AssemblyCheck(
+            check="共底校验 2：容积守恒",
+            severity="pass" if conservation_error <= BULKHEAD_VOLUME_TOL else "fail",
+            detail=(
+                f"下箱 {v_lower:.6f} m³ + 上箱 {v_upper:.6f} m³（隔板占体取内核实测 "
+                f"{cap_volume_kernel:.6f} m³，解析穹顶 {dome_volume_m3(diameter, h_b):.6f} m³）"
+                f"vs 柱段包络 {envelope:.6f} m³，相对误差 {conservation_error:.3e}"
+                f"（门禁 ≤ {BULKHEAD_VOLUME_TOL:g}，等径两箱时严格闭合）"
+            ),
+            stage_index=stage.index,
+            value=v_lower + v_upper,
+            expected=envelope,
+            relative_error=conservation_error,
+        )
+    )
+
+    # 校验 3 的留痕（超限已在 plan_stage 以 AssemblyError 拦截，此处登记实测值）
+    allowed = stage.length_m - stage.engine_height_m - h_lo_bot - h_hi_top
+    checks.append(
+        AssemblyCheck(
+            check="共底校验 3：矢高 ≤ 允许值",
+            severity="pass" if h_b <= allowed + GEOM_TOL else "fail",
+            detail=(
+                f"隔板矢高 {h_b:.6f} m（flatness="
+                f"{'0.5（兜底）' if stage.flatness_ratio is None else stage.flatness_ratio}"
+                f" × 级径 {diameter} m / 2），允许值 {allowed:.6f} m（防上下箱干涉）"
+            ),
+            stage_index=stage.index,
+            value=h_b,
+            expected=allowed,
+        )
+    )
+
+    # 校验 4：LH₂ 侧隔热层（缺失 → warning；参数层另有 HARD_BULKHEAD_INSULATION_MISSING）
+    insulation = stage.geometry.fuel_tank.common_bulkhead_insulation_m
+    if fuel_is_lh2(stage.propellant) and insulation is None:
+        checks.append(
+            AssemblyCheck(
+                check="共底校验 4：LH₂ 侧隔热层",
+                severity="warn",
+                detail=(
+                    "燃料为液氢且未给出共底隔热层厚度——共享隔板不隔温会把另一侧推进剂"
+                    "冻住（§5.9 口径 2③；参数层已另发 HARD_BULKHEAD_INSULATION_MISSING）"
+                ),
+                stage_index=stage.index,
+            )
+        )
+    else:
+        checks.append(
+            AssemblyCheck(
+                check="共底校验 4：LH₂ 侧隔热层",
+                severity="pass",
+                detail=(
+                    "液氢侧隔热层厚度 "
+                    f"{insulation if insulation is not None else '—（燃料非液氢，不适用）'}"
+                ),
+                stage_index=stage.index,
+            )
+        )
+    return checks
+
+
+# ---------------------------------------------------------------------------
+# 尾翼（§5.5）
+# ---------------------------------------------------------------------------
+
+
+def _fin_airfoil_points(airfoil: str, chord: float, thickness: float) -> list[tuple[float, float]]:
+    """翼型剖面多边形（(z_offset, y)——z=0 为**后缘**（该级底面方向）、z=chord 为
+    前缘（向上/前），厚度沿 ±y）。"""
+    half = thickness / 2.0
+    if airfoil == "flat":
+        return [(0.0, half), (chord, half), (chord, -half), (0.0, -half)]
+    if airfoil == "wedge":
+        # 楔形：前缘尖、后缘全厚（超声速翼型）
+        return [(0.0, half), (0.0, -half), (chord, 0.0)]
+    if airfoil == "double_wedge":
+        # 双楔（菱形）：前后缘均尖、最大厚度在中弦
+        return [(0.0, 0.0), (chord / 2.0, half), (chord, 0.0), (chord / 2.0, -half)]
+    msg = f"未知翼型 {airfoil!r}（合法域 flat / wedge / double_wedge）"
+    raise AssemblyError(msg)
+
+
+def build_fin_solids(
+    stage: Stage, stage_z_bottom: float, stage_radius: float, start_index: int
+) -> list[tuple[str, bd.Solid]]:
+    """一级的尾翼实体（周向等角均布 + 根部倒圆），节点名 ``fin-<k>``（全局编号）。
+
+    放置：翼根弦的**后缘**落在该级底面（z = stage_z_bottom），前缘向上；梢部整剖面
+    按后掠角后倾 ``span·tan(Λ)``；厚度按工程惯例 ``0.04 × 弦长`` 随弦比例收敛。
+    """
+    geometry = stage.geometry
+    root_chord = geometry.fin_root_chord_m
+    tip_chord = geometry.fin_tip_chord_m
+    span = geometry.fin_span_m
+    sweep_deg = geometry.fin_sweep_deg
+    airfoil = geometry.fin_airfoil
+    fin_count = geometry.fin_count
+    roll_deg = geometry.fin_roll_deg
+    assert root_chord is not None and tip_chord is not None and span is not None
+    assert sweep_deg is not None and airfoil is not None and fin_count is not None
+    assert roll_deg is not None
+    sweep = math.radians(sweep_deg)
+
+    root_thickness = FIN_THICKNESS_RATIO * root_chord
+    tip_thickness = FIN_THICKNESS_RATIO * tip_chord
+    sweep_drop = span * math.tan(sweep)  # 梢部整剖面的后倾量
+
+    root_wire = bd.Wire.make_polygon(
+        [
+            (stage_radius, y, stage_z_bottom + z)
+            for z, y in _fin_airfoil_points(airfoil, root_chord, root_thickness)
+        ],
+        close=True,
+    )
+    tip_wire = bd.Wire.make_polygon(
+        [
+            (stage_radius + span, y, stage_z_bottom + sweep_drop + z)
+            for z, y in _fin_airfoil_points(airfoil, tip_chord, tip_thickness)
+        ],
+        close=True,
+    )
+    fin = bd.Solid.make_loft([root_wire, tip_wire])
+    if fin is None:
+        msg = "尾翼放样失败：检查翼型 / 弦长 / 展长参数"
+        raise AssemblyError(msg)
+
+    # 根部倒圆（§5.5：局部圆角，避免根部应力集中）
+    fillet_radius = FIN_ROOT_FILLET_RATIO * root_thickness
+    root_face = min(fin.faces(), key=lambda face: face.center().X)
+    fin = fin.fillet(fillet_radius, root_face.edges())
+
+    fins: list[tuple[str, bd.Solid]] = []
+    for index in range(fin_count):
+        angle_deg = roll_deg + 360.0 * index / fin_count
+        placed = fin.rotate(bd.Axis.Z, angle_deg)
+        label = f"fin-{start_index + index}"
+        placed.label = label
+        fins.append((label, placed))
+    return fins
+
+
+# ---------------------------------------------------------------------------
+# 整箭装配
+# ---------------------------------------------------------------------------
+
+
+def build_assembly(vehicle: Vehicle) -> VehicleAssembly:
+    """车辆形态构建入口：Stage 参数 → 九段分区装配树 + GLB 场景图。
+
+    场景图：``vehicle``（根，**不持 mesh**）→ ``s<级序>-<分区>`` / ``fin-<k>`` /
+    ``booster-<k>`` 各持一个 mesh（OI-33 机制的 M5 演化：节点名 = 分区名）。
+    """
+    nodes: dict[str, AssemblyNode] = {}
+    children: list[bd.Solid | bd.Part] = []
+    checks: list[AssemblyCheck] = []
+    saving_by_stage: dict[int, float] = {}
+    fin_index = 0
+    fins_summary: dict[str, Any] | None = None
+    z_offset = 0.0
+    core_max_radius = 0.0
+
+    for stage in vehicle.stages:
+        layout = plan_stage(stage)
+
+        # 分区铺满意图断言（§5.7：总高 = 各分区之和）
+        band_sum = sum(band.length for band in layout.bands)
+        if abs(band_sum - layout.height) > 1e-9:
+            msg = (
+                f"第 {stage.index} 级分区总高 {band_sum:.9f} ≠ 级装配高 {layout.height:.9f}"
+                "（布局不自洽，这是几何公式缺陷，请上报）"
+            )
+            raise AssemblyError(msg)
+        checks.append(
+            AssemblyCheck(
+                check="意图断言：分区铺满级高",
+                severity="pass",
+                detail=f"第 {stage.index} 级 Σ分区高 = 级装配高 = {layout.height:.9f} m",
+                stage_index=stage.index,
+                value=band_sum,
+                expected=layout.height,
+            )
+        )
+
+        if stage.geometry.common_bulkhead:
+            checks.extend(_bulkhead_checks(stage, layout))
+            saving_by_stage[stage.index] = layout.saving_m
+            checks.append(
+                AssemblyCheck(
+                    check="共底级长缩减量（saving）",
+                    severity="pass",
+                    detail=(
+                        f"第 {stage.index} 级共底缩减 {layout.saving_m:.6f} m"
+                        "（两只相邻封头矢高和 − 隔板矢高，公式反算，§5.9 口径 2）"
+                    ),
+                    stage_index=stage.index,
+                    value=layout.saving_m,
+                )
+            )
+
+        for _label, solid in build_stage_solids(stage, layout, z_offset):
+            children.append(solid)
+        for band in layout.bands:
+            core_max_radius = max(core_max_radius, band.radius_start, band.radius_end)
+            if band.length <= GEOM_TOL:
+                continue
+            node = section_node_name(stage.index, band.section)
+            nodes[node] = AssemblyNode(
+                stage_index=stage.index,
+                section=band.section,
+                z_start_m=z_offset + band.z_start,
+                length_m=band.length,
+                mass_kg=band.mass_kg,
+                material=band.material,
+                source_fields=band.source_fields,
+                note=band.note,
+            )
+        section_mass = sum(band.mass_kg for band in layout.bands)
+        account_mass = sum(tank_dry_masses_kg(stage))
+        checks.append(
+            AssemblyCheck(
+                check="级质量对拍（装配 vs §8.4 几何解析账）",
+                severity="pass",
+                detail=(
+                    f"第 {stage.index} 级分区质量合计 {section_mass:.3f} kg"
+                    f"（§8.4 账 reserved=0 口径 {account_mass:.3f} kg + 共底隔板；"
+                    "差异来自装配布局的封头占位扣减与隔板补计，属两口径的既知偏差）"
+                ),
+                stage_index=stage.index,
+            )
+        )
+
+        # 尾翼（非回转体，§5.5）：fin-<k> 全局编号，挂在对应级
+        if stage.geometry.fins_enabled and stage.geometry.fin_count:
+            fin_solids = build_fin_solids(stage, z_offset, stage.diameter_m / 2.0, fin_index)
+            per_fin_volumes = [solid.volume for _, solid in fin_solids]
+            for label, solid in fin_solids:
+                children.append(solid)
+                nodes[label] = AssemblyNode(
+                    stage_index=stage.index,
+                    section="fin",
+                    z_start_m=z_offset,
+                    length_m=stage.geometry.fin_root_chord_m or 0.0,
+                    mass_kg=0.0,
+                    material=stage.material,
+                    source_fields=tuple(
+                        f"stages[{stage.index - 1}].geometry.fin_{name}"
+                        for name in (
+                            "airfoil",
+                            "span_m",
+                            "root_chord_m",
+                            "tip_chord_m",
+                            "sweep_deg",
+                            "count",
+                            "roll_deg",
+                        )
+                    ),
+                    note="非回转体；体积入 metrics.fins 块（材料质量模型留白）",
+                )
+            fins_summary = {
+                "count": fin_index + len(fin_solids),
+                "per_fin_volume_m3": per_fin_volumes[0],
+                "total_volume_m3": sum(per_fin_volumes),
+                "airfoil": stage.geometry.fin_airfoil,
+                "stage_index": stage.index,
+            }
+            fin_index += len(fin_solids)
+
+        z_offset += layout.height
+
+    # 顶级：载荷适配器 + 整流罩（有整流罩时，§5.9 表；vehicle 级输入）
+    top_stage = vehicle.stages[-1]
+    if vehicle.fairing_diameter_m is not None:
+        fairing_diameter = vehicle.fairing_diameter_m
+        core_max_radius = max(core_max_radius, fairing_diameter / 2.0)
+        fairing_height = min(
+            max(_FAIRING_HEIGHT_DIAMETER_RATIO * fairing_diameter, _FAIRING_HEIGHT_MIN_M),
+            _FAIRING_HEIGHT_MAX_M,
+        )
+        adapter_height = min(
+            max(_ADAPTER_HEIGHT_DIAMETER_RATIO * fairing_diameter, _ADAPTER_HEIGHT_MIN_M),
+            _ADAPTER_HEIGHT_MAX_M,
+        )
+        adapter_label = section_node_name(top_stage.index, SECTION_ADAPTER)
+        children.append(
+            _cone_solid(
+                top_stage.diameter_m / 2.0,
+                fairing_diameter / 2.0,
+                z_offset,
+                adapter_height,
+                adapter_label,
+            )
+        )
+        nodes[adapter_label] = AssemblyNode(
+            stage_index=top_stage.index,
+            section=SECTION_ADAPTER,
+            z_start_m=z_offset,
+            length_m=adapter_height,
+            mass_kg=0.0,
+            material=vehicle.material,
+            source_fields=(
+                "fairing_diameter_m",
+                f"stages[{top_stage.index - 1}].diameter_m",
+            ),
+            note="高度为工程惯例常量（无 Schema 输入）；质量留白",
+        )
+        z_offset += adapter_height
+
+        fairing_label = section_node_name(top_stage.index, SECTION_FAIRING)
+        fairing = build_solid(_fairing_profile(fairing_diameter, fairing_height))
+        fairing = fairing.moved(bd.Location((0.0, 0.0, z_offset)))
+        fairing.label = fairing_label
+        children.append(fairing)
+        nodes[fairing_label] = AssemblyNode(
+            stage_index=top_stage.index,
+            section=SECTION_FAIRING,
+            z_start_m=z_offset,
+            length_m=fairing_height,
+            mass_kg=0.0,
+            material=vehicle.material,
+            source_fields=("fairing_diameter_m",),
+            note="高度为工程惯例常量（柱段 + 切线卵形）；质量留白",
+        )
+        z_offset += fairing_height
+
+    # 助推器（OI-36 M4 形态沿用：周向均布圆柱，节点名 booster-<k>，级号 0）
+    boosters_summary: dict[str, Any] | None = None
+    if vehicle.boosters:
+        booster_solids: list[bd.Solid] = []
+        for group in vehicle.boosters:
+            summary = BoosterSummary(
+                count=group.count,
+                diameter_m=group.stage.diameter_m,
+                length_m=group.stage.length_m,
+            )
+            booster_solids.extend(booster_cylinders_for_radius(core_max_radius, summary))
+        for global_index, solid in enumerate(booster_solids):
+            # 多组助推器连续编号（booster_cylinders_for_radius 按组内 0 基命名，此处改为全局）
+            solid.label = f"booster-{global_index}"
+            children.append(solid)
+            box = solid.bounding_box()
+            nodes[str(solid.label)] = AssemblyNode(
+                stage_index=0,
+                section="booster",
+                z_start_m=box.min.Z,
+                length_m=box.max.Z - box.min.Z,
+                mass_kg=0.0,
+                material=vehicle.material,
+                source_fields=(
+                    "boosters[i].stage.diameter_m",
+                    "boosters[i].stage.length_m",
+                    "boosters[i].count",
+                ),
+                note="M4 简化形态（圆柱）；体积入 metrics.boosters 块，质量留白",
+            )
+        volumes = [solid.volume for solid in booster_solids]
+        boosters_summary = {
+            "count": len(booster_solids),
+            "per_booster_volume_m3": volumes[0] if volumes else 0.0,
+            "total_booster_volume_m3": sum(volumes),
+        }
+
+    root = bd.Compound(children=children)
+    root.label = GLB_ROOT_NAME
+
+    total_length = z_offset
+    max_radius = max(
+        [core_max_radius, *(solid.bounding_box().max.X for solid in children)], default=0.0
+    )
+    volume = sum(solid.volume for solid in children)
+
+    return VehicleAssembly(
+        root=root,
+        nodes=nodes,
+        checks=tuple(checks),
+        total_length=total_length,
+        max_radius=max_radius,
+        volume=volume,
+        saving_by_stage=saving_by_stage,
+        fins=fins_summary,
+        boosters=boosters_summary,
+    )
+
+
+__all__ = [
+    "BULKHEAD_VOLUME_TOL",
+    "FIN_THICKNESS_RATIO",
+    "SECTION_ADAPTER",
+    "SECTION_AVIONICS",
+    "SECTION_BULKHEAD",
+    "SECTION_ENGINE_BAY",
+    "SECTION_FAIRING",
+    "SECTION_FORWARD_SKIRT",
+    "SECTION_FUEL_TANK",
+    "SECTION_INTERTANK",
+    "SECTION_ORDER",
+    "SECTION_OX_TANK",
+    "SECTION_THRUST_STRUCTURE",
+    "AssemblyCheck",
+    "AssemblyError",
+    "AssemblyNode",
+    "Band",
+    "StageLayout",
+    "VehicleAssembly",
+    "build_assembly",
+    "build_fin_solids",
+    "build_stage_solids",
+    "plan_stage",
+    "section_node_name",
+]

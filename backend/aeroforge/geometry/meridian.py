@@ -70,7 +70,118 @@ class EllipseSegment(_SegmentBase):
     type: Literal["ellipse"] = "ellipse"
 
 
-Segment = Annotated[LineSegment | ArcSegment | EllipseSegment, Field(discriminator="type")]
+class TangentOgiveSegment(_SegmentBase):
+    """切线卵形段（§5.3 曲线族，M5）：头锥（工程常用）。
+
+    由 ``{length, end_radius}`` **完全确定**：基底半径 R = 半径端半径、锥长 L = length，
+    长径比 = L/(2R) 为派生量；卵形圆半径 ρ = (R²+L²)/(2R)，圆心在 (R−ρ, L)——基底切向
+    严格竖直，故与柱段 G1 连续（这正是"切线"卵形的含义）。穹顶型放置（恰一端在轴线上）。
+    ⚠ 值域：L ≥ R——过钝（L < R）的切线卵形弧会下探到负 z，破坏剖面的 z 单调性。
+    """
+
+    type: Literal["ogive"] = "ogive"
+
+
+class ParabolaSegment(_SegmentBase):
+    """抛物线头锥段（§5.3 曲线族，M5）：头锥（低阻）。
+
+    母线 ``r(t) = R·(2t − K·t²)/(2−K)``，``t = z/L`` ∈ [0, 1]，K 为抛物线系数：
+    K = 1 全抛物线（基底切向竖直，与柱段 G1）；K → 0 退化为锥。穹顶型放置。
+    """
+
+    type: Literal["parabola"] = "parabola"
+    coefficient: float = Field(
+        gt=0.0,
+        le=1.0,
+        description="抛物线系数 K（1 = 全抛物线，基底相切；趋 0 = 锥形）",
+    )
+
+
+class VonKarmanSegment(_SegmentBase):
+    """冯·卡门头锥段（§5.3 曲线族，M5）：跨声速最优头锥（LDHV）。
+
+    Haack 级 C=0 特例（标准 LDHV 近似式）::
+
+        φ = arccos(1 − 2t),  r(t) = (R/√π)·√(φ − sin(2φ)/2)
+
+    顶端切向水平（钝头）、基底切向竖直（与柱段 G1）。穹顶型放置。
+    """
+
+    type: Literal["von_karman"] = "von_karman"
+
+
+class PowerLawSegment(_SegmentBase):
+    """幂律过渡段（§5.3 曲线族，M5）：通用过渡。
+
+    母线 ``r(t) = r₀ + (r₁ − r₀)·tⁿ``：n = 1 直线（锥/锥台）；n < 1 起始切向水平
+    （钝过渡）；n > 1 起始切向竖直。非穹顶型——两端半径任意（通用过渡用途）。
+    """
+
+    type: Literal["power"] = "power"
+    exponent: float = Field(gt=0.0, le=10.0, description="幂律指数 n")
+
+
+class BellNozzleSegment(_SegmentBase):
+    """钟形喷管段（§5.3 曲线族，M5）：Rao 抛物线近似钟形。
+
+    参数化（Rao 型）：喉部半径 ``throat_radius``、出口半径（段另一端的半径）、
+    长度比 ``length_ratio`` = L / L₁₅°（L₁₅° = (Rₑ−Rₜ)/tan15°，0.8 = 80% 钟形）。
+    型面 = 喉部圆弧（半径 0.382·Rₜ，Rao 经典值）+ 二次 Bézier 抛物线（起端壁角 θₙ、
+    出口壁角 θₑ 由膨胀比 ε = (Rₑ/Rₜ)² 的对数拟合工程近似给出）。
+
+    ⚠ 两端中**恰有一端**为喉部（半径 = throat_radius），另一端为出口（必须更大）；
+    ``length`` 与 ``length_ratio`` 必须自洽（意图断言：L = ratio·(Rₑ−Rₜ)/tan15°）。
+    """
+
+    type: Literal["bell"] = "bell"
+    throat_radius: float = Field(gt=0.0, description="喉部半径（m）")
+    length_ratio: float = Field(
+        gt=0.0, le=1.5, description="钟形长度比 L/L₁₅°（0.8 = 80% 钟，Rao 常用值）"
+    )
+
+
+class SplineSegment(_SegmentBase):
+    """样条段（§5.3 曲线族，M5）：自定义 / 逆向。
+
+    控制点为**内部节点**（不含两端）：曲线 = 自然三次样条插值
+    [起点, *控制点, 终点]，以 z 为参数（r(z) 单值、z 严格单调由结构保证）。
+    控制点的 z 必须严格递增且落在 (0, length) 内；r ≥ 0。
+    """
+
+    type: Literal["spline"] = "spline"
+    control_points: tuple[tuple[float, float], ...] = Field(
+        min_length=1, description="内部控制点 (r, z) 列表（z 严格递增，落在 (0, length) 内）"
+    )
+
+    @model_validator(mode="after")
+    def _check_control_points(self) -> SplineSegment:
+        previous = 0.0
+        for index, (radius, z) in enumerate(self.control_points):
+            if radius < -GEOM_TOL:
+                msg = f"样条段控制点 {index} 的半径为负（{radius}）——回转体不可穿越轴线"
+                raise MeridianError(msg)
+            if not previous < z < self.length:
+                msg = (
+                    f"样条段控制点 {index} 的 z={z} 必须严格递增且落在 (0, {self.length}) 内"
+                    "（z 单调是 r(z) 单值的结构前提）"
+                )
+                raise MeridianError(msg)
+            previous = z
+        return self
+
+
+Segment = Annotated[
+    LineSegment
+    | ArcSegment
+    | EllipseSegment
+    | TangentOgiveSegment
+    | ParabolaSegment
+    | VonKarmanSegment
+    | PowerLawSegment
+    | BellNozzleSegment
+    | SplineSegment,
+    Field(discriminator="type"),
+]
 
 
 class MeridianProfile(BaseModel):
@@ -101,15 +212,212 @@ class MeridianProfile(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+#: 段种类全集：M1 三段型（line/arc/ellipse）+ M5 曲线族六种。
+SegmentKind = Literal[
+    "line",
+    "arc",
+    "ellipse",
+    "ogive",
+    "parabola",
+    "von_karman",
+    "power",
+    "bell",
+    "spline",
+]
+
+#: 曲线族采样点数（含两端）：供前端渲染、GLB 样条构边与解析积分共用同一份求值器。
+#: 解析侧用**精确参数式**积分（quad），内核侧用穿过这批点的 B 样条构边——两侧
+# . 算法无关，仍构成 §5.7 要求的独立对照。
+CURVE_SAMPLE_COUNT = 65
+
+
+@dataclass(frozen=True, slots=True)
+class CurveSpec:
+    """曲线族段的求值规格（M5）：local 参数式 + 链内放置。
+
+    local 坐标系：各族的标准形（ogive/parabola/von_karman：尖在 (0,0) → 基底 (R, L)；
+    bell：喉部 (Rₜ, 0) → 出口 (Rₑ, L)；power/spline：起点 (r₀, 0) → 终点 (r₁, L)）。
+    链内放置：``z = z0 + z_local``（正向）或 ``z = z0 + L − z_local``（reverse），
+    ``r = r_local``。``params`` 为各族固定次序的参数元组（见 :func:`curve_point`）。
+    """
+
+    kind: str
+    z0: float
+    length: float
+    reverse: bool
+    params: tuple[float, ...]
+
+
+def curve_point(spec: CurveSpec, t: float) -> tuple[float, float]:
+    """曲线族 local 参数式的链内坐标（``t ∈ [0, 1]``，沿链推进方向）。"""
+    local_t = 1.0 - t if spec.reverse else t
+    r, z = _curve_local(spec.kind, spec.params, local_t)
+    if spec.reverse:
+        return (r, spec.z0 + spec.length - z)
+    return (r, spec.z0 + z)
+
+
+def _curve_local(kind: str, params: tuple[float, ...], t: float) -> tuple[float, float]:
+    """曲线族 local 参数式（各族标准形，t 沿 local 正向）。"""
+    if kind == "ogive":
+        radius_r, length, c_r, rho, psi_tip = params
+        psi = psi_tip * (1.0 - t)
+        return (c_r + rho * math.cos(psi), length + rho * math.sin(psi))
+    if kind == "parabola":
+        radius_r, length, coefficient = params
+        return (
+            radius_r * (2.0 * t - coefficient * t * t) / (2.0 - coefficient),
+            length * t,
+        )
+    if kind == "von_karman":
+        radius_r, length = params
+        phi = math.acos(max(-1.0, min(1.0, 1.0 - 2.0 * t)))
+        shape = phi - math.sin(2.0 * phi) / 2.0
+        return (radius_r / math.sqrt(math.pi) * math.sqrt(max(0.0, shape)), length * t)
+    if kind == "power":
+        r0, r1, length, exponent = params
+        return (r0 + (r1 - r0) * t**exponent, length * t)
+    if kind == "bell":
+        (
+            _throat,
+            _exit,
+            length,
+            theta_n,
+            _theta_e,
+            arc_radius,
+            q_r,
+            q_z,
+            p1_r,
+            p1_z,
+            t_q,
+        ) = params
+        if t <= t_q:
+            phi = theta_n * (t / t_q if t_q > 0.0 else 0.0)
+            return (params[0] + arc_radius * (1.0 - math.cos(phi)), arc_radius * math.sin(phi))
+        span = 1.0 - t_q
+        s = (t - t_q) / span if span > 0.0 else 1.0
+        u = 1.0 - s
+        r = u * u * q_r + 2.0 * s * u * p1_r + s * s * params[1]
+        z = u * u * q_z + 2.0 * s * u * p1_z + s * s * length
+        return (r, z)
+    if kind == "spline":
+        count = int(params[0])
+        knots = params[1 : 1 + count]
+        values = params[1 + count :]
+        z = knots[-1] * t  # 末节点即 local 长度（控制点 z 严格落在 (0, L) 内）
+        return (_spline_eval(knots, values, z), z)
+    msg = f"未知曲线族 {kind!r}"
+    raise MeridianError(msg)
+
+
+def _natural_cubic_second_derivatives(
+    knots: tuple[float, ...], values: tuple[float, ...]
+) -> tuple[float, ...]:
+    """自然三次样条的节点二阶导数（Mᵢ，端点为 0）——Thomas 追赶法解三对角方程。
+
+    以 z 为参数：``r(z)`` 在节点间为三次多项式，全局 C²。纯 Python 实现，
+    供母线层（无内核）求得样条段的端点切向与采样。
+    """
+    count = len(knots)
+    if count < 2:
+        msg = "样条至少需要两个节点"
+        raise MeridianError(msg)
+    if count == 2:
+        return (0.0, 0.0)
+    n = count - 1
+    h = [knots[i + 1] - knots[i] for i in range(n)]
+    sub = [0.0] * (n + 1)  # 下对角
+    diag = [2.0] * (n + 1)  # 主对角
+    sup = [0.0] * (n + 1)  # 上对角
+    rhs = [0.0] * (n + 1)
+    for i in range(1, n):
+        sub[i] = h[i - 1]
+        diag[i] = 2.0 * (h[i - 1] + h[i])
+        sup[i] = h[i]
+        rhs[i] = 6.0 * ((values[i + 1] - values[i]) / h[i] - (values[i] - values[i - 1]) / h[i - 1])
+    # Thomas 前消后回
+    for i in range(1, n + 1):
+        factor = sub[i] / diag[i - 1] if diag[i - 1] != 0.0 else 0.0
+        diag[i] -= factor * sup[i - 1]
+        rhs[i] -= factor * rhs[i - 1]
+    m = [0.0] * (count)
+    m[n] = rhs[n] / diag[n] if diag[n] != 0.0 else 0.0
+    for i in range(n - 1, 0, -1):
+        m[i] = (rhs[i] - sup[i] * m[i + 1]) / diag[i] if diag[i] != 0.0 else 0.0
+    m[0] = 0.0
+    return tuple(m)
+
+
+def _spline_interval(knots: tuple[float, ...], z: float) -> int:
+    """z 所属的节点区间下标（z 已夹到 [knots[0], knots[-1]]）。"""
+    for i in range(len(knots) - 1):
+        if knots[i] <= z <= knots[i + 1]:
+            return i
+    return len(knots) - 2
+
+
+def _spline_eval(knots: tuple[float, ...], values: tuple[float, ...], z: float) -> float:
+    """自然三次样条在 z 处的 r 值（z 以 local 坐标给出，落在 [0, L]）。
+
+    区间内公式（a = (x_{i+1}−z)/h、b = (z−x_i)/h，a+b=1）::
+
+        S(z) = a·rᵢ + b·rᵢ₊₁ − (h²/6)·a·b·[(1+a)·Mᵢ + (1+b)·Mᵢ₊₁]
+    """
+    z = min(max(z, knots[0]), knots[-1])
+    index = _spline_interval(knots, z)
+    h = knots[index + 1] - knots[index]
+    m = _spline_m(knots, values)
+    a = (knots[index + 1] - z) / h
+    b = 1.0 - a
+    return (
+        values[index] * a
+        + values[index + 1] * b
+        - a * b * h * h / 6.0 * ((1.0 + a) * m[index] + (1.0 + b) * m[index + 1])
+    )
+
+
+def _spline_slope(knots: tuple[float, ...], values: tuple[float, ...], z: float) -> float:
+    """自然三次样条在 z 处的 dr/dz（端点切向用）。
+
+    ``S'(z) = (rᵢ₊₁−rᵢ)/h − (h/6)·(Mᵢ₊₁−Mᵢ) − (Mᵢ·a² − Mᵢ₊₁·b²)·h/2``。
+    """
+    z = min(max(z, knots[0]), knots[-1])
+    index = _spline_interval(knots, z)
+    h = knots[index + 1] - knots[index]
+    m = _spline_m(knots, values)
+    a = (knots[index + 1] - z) / h
+    b = 1.0 - a
+    return (
+        (values[index + 1] - values[index]) / h
+        - h / 6.0 * (m[index + 1] - m[index])
+        - (m[index] * a * a - m[index + 1] * b * b) * h / 2.0
+    )
+
+
+#: 样条二阶导数缓存（冻结元组可哈希；段链复用同一样条时避免重复解三对角方程）。
+_SPLINE_CACHE: dict[tuple[tuple[float, ...], tuple[float, ...]], tuple[float, ...]] = {}
+
+
+def _spline_m(knots: tuple[float, ...], values: tuple[float, ...]) -> tuple[float, ...]:
+    """节点二阶导数（带缓存）。"""
+    cached = _SPLINE_CACHE.get((knots, values))
+    if cached is None:
+        cached = _natural_cubic_second_derivatives(knots, values)
+        _SPLINE_CACHE[(knots, values)] = cached
+    return cached
+
+
 @dataclass(frozen=True, slots=True)
 class SegmentGeometry:
     """一段的精确几何：端点、切向、以及弧段的圆心/半轴/起止角（度）。
 
     切向为单位矢量 ``(dr, dz)``，方向与剖面推进方向（自下而上）一致。
-    直线段的弧参数为 ``None``。
+    直线段的弧参数为 ``None``。曲线族段（M5）另带：``points``（含两端的密集采样，
+    供 GLB 样条构边与前端渲染）与 ``curve``（参数式求值规格，供解析积分——与内核
+    的 B 样条构边构成 §5.7 的独立对照）。
     """
 
-    kind: Literal["line", "arc", "ellipse"]
+    kind: SegmentKind
     start: tuple[float, float]
     end: tuple[float, float]
     start_tangent: tuple[float, float]
@@ -119,10 +427,13 @@ class SegmentGeometry:
     semi_z: float | None = None
     angle_start_deg: float | None = None
     angle_end_deg: float | None = None
+    points: tuple[tuple[float, float], ...] | None = None
+    curve: CurveSpec | None = None
 
     @property
     def is_dome(self) -> bool:
-        return self.kind in ("arc", "ellipse")
+        """穹顶型段（一端在轴线上、钝头收拢）：pinch 例外判定的域。"""
+        return self.kind in ("arc", "ellipse", "ogive", "parabola", "von_karman")
 
 
 def _unit(vector: tuple[float, float]) -> tuple[float, float]:
@@ -242,7 +553,291 @@ def resolve_segment(start_r: float, start_z: float, seg: Segment) -> SegmentGeom
     """把一段（连同其起点）推算为精确几何。"""
     if isinstance(seg, LineSegment):
         return _resolve_line(start_r, start_z, seg)
-    return _resolve_dome(start_r, start_z, seg)
+    if isinstance(seg, (ArcSegment, EllipseSegment)):
+        return _resolve_dome(start_r, start_z, seg)
+    return _resolve_curve(start_r, start_z, seg)
+
+
+# ---------------------------------------------------------------------------
+# 曲线族（M5，§5.3）：local 参数式 + 链内放置 + 精确端点切向 + 密集采样
+# ---------------------------------------------------------------------------
+
+#: Rao 抛物线近似的喉部下游圆弧半径系数（0.382·Rₜ，Rao 经典值）。
+_BELL_THROAT_ARC_FACTOR = 0.382
+
+#: 80% 钟形壁角的对数拟合（Rao 图表的工程近似，非查表精确值）：
+#: θₙ = 20.5° + 3.8°·ln(ε)、θₑ = 14.2° − 1.9°·ln(ε)，ε = (Rₑ/Rₜ)²。
+#: 锚点：ε=10 → θₙ≈29.3°/θₑ≈9.8°；ε=4 → 25.7°/11.6°（与公开 Rao 图表量级一致）。
+_BELL_THETA_N_BASE_DEG = 20.5
+_BELL_THETA_N_LOG_DEG = 3.8
+_BELL_THETA_E_BASE_DEG = 14.2
+_BELL_THETA_E_LOG_DEG = 1.9
+
+
+def _bell_wall_angles_deg(expansion_ratio: float) -> tuple[float, float]:
+    """Rao 80% 钟形的起端/出口壁角（度，对数拟合工程近似）。"""
+    theta_n = _BELL_THETA_N_BASE_DEG + _BELL_THETA_N_LOG_DEG * math.log(expansion_ratio)
+    theta_e = _BELL_THETA_E_BASE_DEG - _BELL_THETA_E_LOG_DEG * math.log(expansion_ratio)
+    return (min(40.0, max(20.0, theta_n)), min(16.0, max(4.0, theta_e)))
+
+
+def _place_tangent(tangent: tuple[float, float], reverse: bool) -> tuple[float, float]:
+    """local 切向 → 链内切向。
+
+    reverse 放置是 **z 镜像 + 参数反转**（链内 z 恒向上）：链内切向 = (−dr, +dz)——
+    r 分量取负（内收/外张互换），z 分量不变（链推进方向恒为 +z）。
+    """
+    if reverse:
+        return (-tangent[0], tangent[1])
+    return tangent
+
+
+def _finish_curve(
+    seg: Segment,
+    kind: str,
+    start: tuple[float, float],
+    end: tuple[float, float],
+    start_tangent_local: tuple[float, float],
+    end_tangent_local: tuple[float, float],
+    spec: CurveSpec,
+) -> SegmentGeometry:
+    """组装曲线族段的几何：链内端点/切向 + 密集采样 + 单调性自检。"""
+    reverse = spec.reverse
+    points = tuple(
+        curve_point(spec, index / CURVE_SAMPLE_COUNT) for index in range(CURVE_SAMPLE_COUNT + 1)
+    )
+    geometry = SegmentGeometry(
+        kind=kind,  # type: ignore[arg-type]
+        start=start,
+        end=end,
+        start_tangent=_unit(_place_tangent(start_tangent_local, reverse)),
+        end_tangent=_unit(_place_tangent(end_tangent_local, reverse)),
+        points=points,
+        curve=spec,
+    )
+    # 端点自检（G0 结构前提，公式错误应在此暴露）
+    for label, expected, actual in (
+        ("起点", start, points[0]),
+        ("终点", end, points[-1]),
+    ):
+        if math.hypot(expected[0] - actual[0], expected[1] - actual[1]) > 1e-9:
+            msg = (
+                f"{kind} 段{label}推算不自洽：声明 {expected}、推算 {actual}。"
+                "这是几何公式缺陷，请上报。"
+            )
+            raise MeridianError(msg)
+    # z 单调 + 半径非负（r(z) 单值与回转体不自交的结构前提）
+    for index in range(1, len(points)):
+        _r_prev, z_prev = points[index - 1]
+        r_next, z_next = points[index]
+        if z_next <= z_prev - 1e-12:
+            msg = f"{kind} 段采样在 z={z_next:.9f} 处非单调——母线必须是 z 的单值函数"
+            raise MeridianError(msg)
+        if r_next < -1e-9:
+            msg = f"{kind} 段采样在 z={z_next:.9f} 处出现负半径 {r_next:.9f}——回转体不可穿越轴线"
+            raise MeridianError(msg)
+    return geometry
+
+
+def _resolve_curve(start_r: float, start_z: float, seg: Segment) -> SegmentGeometry:
+    """曲线族段的统一入口：判方向 → 建 local 参数式 → 放置到链内。"""
+    end_r = seg.end_radius
+    length = seg.length
+    start = (start_r, start_z)
+    end = (end_r, start_z + length)
+
+    if isinstance(seg, TangentOgiveSegment | ParabolaSegment | VonKarmanSegment):
+        start_on_axis = start_r <= GEOM_TOL
+        end_on_axis = end_r <= GEOM_TOL
+        if start_on_axis == end_on_axis:
+            msg = (
+                f"{seg.type} 段是头锥段（穹顶型放置），两端中**恰有一端**必须落在轴线上（r=0）；"
+                f"实际起点 r={start_r}、终点 r={end_r}。"
+                "若为过渡段请改用 power / spline 段。"
+            )
+            raise MeridianError(msg)
+        radius_r = end_r if start_on_axis else start_r
+        if radius_r <= GEOM_TOL:
+            msg = f"{seg.type} 段的基底半径必须为正，得到 {radius_r}"
+            raise MeridianError(msg)
+        reverse = end_on_axis  # 链内 base→tip 时反向遍历 local（tip→base）
+        spec = _build_head_spec(seg, radius_r, length, start_z, reverse)
+        tip_tangent, base_tangent = _head_tangents(seg, radius_r, length)
+        if reverse:
+            # 链起点 = 基底、链终点 = 尖端 → 切向配对随放置互换
+            tip_tangent, base_tangent = base_tangent, tip_tangent
+        return _finish_curve(seg, seg.type, start, end, tip_tangent, base_tangent, spec)
+
+    if isinstance(seg, PowerLawSegment):
+        params = (start_r, end_r, length, seg.exponent)
+        spec = CurveSpec(kind="power", z0=start_z, length=length, reverse=False, params=params)
+        n = seg.exponent
+        if n < 1.0:
+            tangent_start = (1.0, 0.0)
+        elif n > 1.0:
+            tangent_start = (0.0, 1.0)
+        else:
+            tangent_start = (end_r - start_r, length)
+        tangent_end = (n * (end_r - start_r), length)
+        return _finish_curve(seg, "power", start, end, tangent_start, tangent_end, spec)
+
+    if isinstance(seg, BellNozzleSegment):
+        return _resolve_bell(start_r, start_z, seg)
+
+    if isinstance(seg, SplineSegment):
+        knots = (0.0, *(z for _, z in seg.control_points), length)
+        values = (start_r, *(r for r, _ in seg.control_points), end_r)
+        spline_params: tuple[float, ...] = (float(len(knots)), *knots, *values)
+        spec = CurveSpec(
+            kind="spline", z0=start_z, length=length, reverse=False, params=spline_params
+        )
+        slope_start = _spline_slope(knots, values, 0.0)
+        slope_end = _spline_slope(knots, values, length)
+        return _finish_curve(
+            seg,
+            "spline",
+            start,
+            end,
+            (slope_start, 1.0),
+            (slope_end, 1.0),
+            spec,
+        )
+
+    msg = f"未实现的曲线族段：{type(seg).__name__}"
+    raise MeridianError(msg)
+
+
+def _build_head_spec(
+    seg: TangentOgiveSegment | ParabolaSegment | VonKarmanSegment,
+    radius_r: float,
+    length: float,
+    start_z: float,
+    reverse: bool,
+) -> CurveSpec:
+    """头锥族（ogive/parabola/von_karman）的 local 参数式规格。"""
+    params: tuple[float, ...]
+    if isinstance(seg, TangentOgiveSegment):
+        if length < radius_r - GEOM_TOL:
+            msg = (
+                f"ogive 段的锥长 {length} m 小于基底半径 {radius_r} m（长径比过钝）——"
+                "此时切线卵形弧会下探到负 z，破坏母线的 z 单调性"
+            )
+            raise MeridianError(msg)
+        rho = (radius_r**2 + length**2) / (2.0 * radius_r)
+        c_r = (radius_r**2 - length**2) / (2.0 * radius_r)
+        psi_tip = math.atan2(-length, -c_r) if c_r != 0.0 else -math.pi / 2.0
+        params = (radius_r, length, c_r, rho, psi_tip)
+    elif isinstance(seg, ParabolaSegment):
+        params = (radius_r, length, seg.coefficient)
+    else:
+        params = (radius_r, length)
+    return CurveSpec(kind=seg.type, z0=start_z, length=length, reverse=reverse, params=params)
+
+
+def _head_tangents(
+    seg: TangentOgiveSegment | ParabolaSegment | VonKarmanSegment,
+    radius_r: float,
+    length: float,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """头锥族的 local 端点切向（t=0 尖端、t=1 基底）。"""
+    if isinstance(seg, TangentOgiveSegment):
+        rho = (radius_r**2 + length**2) / (2.0 * radius_r)
+        c_r = (radius_r**2 - length**2) / (2.0 * radius_r)
+        psi_tip = math.atan2(-length, -c_r) if c_r != 0.0 else -math.pi / 2.0
+        # dP/dψ = (−ρ·sinψ, ρ·cosψ)；ψ_tip 处取正方向的切向（远离尖端）
+        tip = (-rho * math.sin(psi_tip), rho * math.cos(psi_tip))
+        if tip[1] < 0.0:
+            tip = (-tip[0], -tip[1])
+        return tip, (0.0, 1.0)
+    if isinstance(seg, ParabolaSegment):
+        coefficient = seg.coefficient
+        tip = (2.0 * radius_r / (2.0 - coefficient), length)
+        base = (2.0 * radius_r * (1.0 - coefficient) / (2.0 - coefficient), length)
+        return tip, base
+    return (1.0, 0.0), (0.0, 1.0)
+
+
+def _resolve_bell(start_r: float, start_z: float, seg: BellNozzleSegment) -> SegmentGeometry:
+    """钟形喷管段：判喉部方向 → Rao 近似型面 → 一致性意图断言。"""
+    throat = seg.throat_radius
+    length = seg.length
+    start_is_throat = abs(start_r - throat) <= GEOM_TOL
+    end_is_throat = abs(seg.end_radius - throat) <= GEOM_TOL
+    if start_is_throat == end_is_throat:
+        msg = (
+            f"bell 段两端中**恰有一端**必须是喉部（r = throat_radius = {throat}）；"
+            f"实际起点 r={start_r}、终点 r={seg.end_radius}。"
+            "喷管段从喉部张开到出口，两端不能同为喉部或同非喉部。"
+        )
+        raise MeridianError(msg)
+    exit_radius = seg.end_radius if start_is_throat else start_r
+    if exit_radius <= throat + GEOM_TOL:
+        msg = f"bell 段出口半径 {exit_radius} 必须大于喉部半径 {throat}（扩张段）"
+        raise MeridianError(msg)
+
+    # 意图断言（§5.7）：长度与长度比必须自洽——L = ratio·(Rₑ−Rₜ)/tan15°
+    derived_length = seg.length_ratio * (exit_radius - throat) / math.tan(math.radians(15.0))
+    if abs(length - derived_length) > 1e-6 * max(1.0, derived_length):
+        msg = (
+            f"bell 段长度 {length:.9f} m 与长度比 {seg.length_ratio} 不自洽："
+            f"按 L = ratio·(Rₑ−Rₜ)/tan15° 应为 {derived_length:.9f} m（意图断言，§5.7）。"
+            "请以长度比反算长度，或调整长度比。"
+        )
+        raise MeridianError(msg)
+
+    expansion = (exit_radius / throat) ** 2
+    theta_n_deg, theta_e_deg = _bell_wall_angles_deg(expansion)
+    theta_n = math.radians(theta_n_deg)
+    theta_e = math.radians(theta_e_deg)
+    arc_radius = _BELL_THROAT_ARC_FACTOR * throat
+    q = (throat + arc_radius * (1.0 - math.cos(theta_n)), arc_radius * math.sin(theta_n))
+    if q[1] >= length - GEOM_TOL:
+        msg = (
+            f"bell 段抛物线区间为负：喉部圆弧占据 z ∈ [0, {q[1]:.6f}]，"
+            f"而钟形总长仅 {length:.6f} m——请增大长度比或减小喉部半径"
+        )
+        raise MeridianError(msg)
+    # 抛物线（二次 Bézier）：起端切向 (sinθₙ, cosθₙ)、出口切向 (sinθₑ, cosθₑ)
+    direction_n = (math.sin(theta_n), math.cos(theta_n))
+    direction_e = (math.sin(theta_e), math.cos(theta_e))
+    # P1 = 两条切线的交点：Q + t·dₙ = E − s·dₑ（E = (Rₑ, L)，坐标序 (r, z)）
+    determinant = direction_n[0] * (-direction_e[1]) - direction_n[1] * (-direction_e[0])
+    if abs(determinant) <= GEOM_TOL:
+        msg = "bell 段抛物线切向平行，无法构造 Bézier 控制点"
+        raise MeridianError(msg)
+    delta = (exit_radius - q[0], length - q[1])
+    t_parameter = (delta[0] * (-direction_e[1]) - delta[1] * (-direction_e[0])) / determinant
+    p1 = (q[0] + t_parameter * direction_n[0], q[1] + t_parameter * direction_n[1])
+
+    reverse = not start_is_throat  # 链内出口→喉部时反向遍历 local（喉部→出口）
+    params = (
+        throat,
+        exit_radius,
+        length,
+        theta_n,
+        theta_e,
+        arc_radius,
+        q[0],
+        q[1],
+        p1[0],
+        p1[1],
+        q[1] / length,
+    )
+    spec = CurveSpec(kind="bell", z0=start_z, length=length, reverse=reverse, params=params)
+    throat_tangent = (0.0, 1.0)  # 喉部：壁面与轴平行
+    exit_tangent = (math.sin(theta_e), math.cos(theta_e))  # 出口壁角 θₑ
+    if reverse:
+        # 链起点 = 出口、链终点 = 喉部 → 切向配对随放置互换
+        throat_tangent, exit_tangent = exit_tangent, throat_tangent
+    return _finish_curve(
+        seg,
+        "bell",
+        (start_r, start_z),
+        (seg.end_radius, start_z + length),
+        throat_tangent,
+        exit_tangent,
+        spec,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +862,17 @@ class ResolvedProfile:
 
     @property
     def max_radius(self) -> float:
-        return max([self.profile.base_radius, *(max(s.start[0], s.end[0]) for s in self.segments)])
+        """剖面最大半径（m）。
+
+        端点半径与曲线族**采样内点**一并取最大——样条段可在内段鼓出超过两端
+        （头锥/钟形族母线 r 单调，内点不会超过端点，扫描它们无副作用）。
+        """
+        candidates: list[float] = [self.profile.base_radius]
+        for segment in self.segments:
+            candidates.append(max(segment.start[0], segment.end[0]))
+            if segment.points is not None:
+                candidates.append(max(r for r, _ in segment.points))
+        return max(candidates)
 
     def closed_outline(self) -> list[tuple[float, float]]:
         """闭合轮廓（含轴线段与两端径向段），供 2D 剖面绘制与前端车削网格使用。
@@ -355,8 +960,11 @@ def sample_segment(geom: SegmentGeometry, max_step_deg: float = 5.0) -> list[tup
     """按角度步长采样一段，返回含起止点的折线（米）。
 
     采样的用途仅为**前端渲染**与 2D 剖面绘制；解析对照与内核建模均使用精确弧，
-    故此处精度不影响 §5.7 的检验有效性。
+    故此处精度不影响 §5.7 的检验有效性。曲线族段（M5）返回构建期已生成的密集采样
+    （:data:`CURVE_SAMPLE_COUNT` 点，含两端）——与 GLB 样条构边共用同一份点列。
     """
+    if geom.points is not None:
+        return list(geom.points)
     if not geom.is_dome:
         return [geom.start, geom.end]
     assert geom.center is not None

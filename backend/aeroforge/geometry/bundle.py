@@ -78,7 +78,18 @@ def booster_cylinders(profile: MeridianProfile, boosters: BoosterSummary) -> lis
     与 GLB / STEP 共用同一份实体——两通道的助推器**是同一几何**，不是各画一份。
     """
     resolved = resolve(profile)
-    axis_radius = booster_axis_radius(resolved.max_radius, boosters.diameter_m)
+    return booster_cylinders_for_radius(resolved.max_radius, boosters)
+
+
+def booster_cylinders_for_radius(
+    core_max_radius_m: float, boosters: BoosterSummary
+) -> list[bd.Solid]:
+    """按芯级最大半径布置的助推器圆柱体（M5 装配通路复用，几何与 M4 形态一致）。
+
+    车辆形态构建没有母线剖面，芯级最大半径来自装配布局（整流罩 / 各级直径的最大
+    半径）——与 :func:`booster_cylinders` 共用同一份径向定位公式与节点名约定。
+    """
+    axis_radius = booster_axis_radius(core_max_radius_m, boosters.diameter_m)
     radius = boosters.diameter_m / 2.0
     solids: list[bd.Solid] = []
     for index in range(boosters.count):

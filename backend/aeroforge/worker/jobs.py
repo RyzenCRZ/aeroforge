@@ -54,10 +54,12 @@ from aeroforge.cache.store import (
     ArtifactStore,
     build_manifest,
     compute_key,
+    compute_vehicle_key,
     mc_cache_key,
 )
 from aeroforge.errors import AeroForgeError, ErrorBody, to_error_body
 from aeroforge.geometry.analytic import analyze
+from aeroforge.geometry.assembly import build_assembly
 from aeroforge.geometry.bundle import BoosterSummary, booster_assembly, build_bundle
 from aeroforge.geometry.meridian import MeridianProfile, resolve
 from aeroforge.geometry.revolve import (
@@ -256,9 +258,9 @@ class GeometryJobRunner:
     ) -> None:
         self.store = store or ArtifactStore()
         self.board = board if board is not None else JobBoard()
-        self._queue: queue.Queue[tuple[str, MeridianProfile, BoosterSummary | None] | None] = (
-            queue.Queue(maxsize=queue_size)
-        )
+        self._queue: queue.Queue[
+            tuple[str, MeridianProfile | None, BoosterSummary | None, Vehicle | None] | None
+        ] = queue.Queue(maxsize=queue_size)
         self._stop_lock = threading.Lock()
         self._stopped = False
         self._thread = threading.Thread(target=self._worker, name="aeroforge-geometry", daemon=True)
@@ -272,7 +274,7 @@ class GeometryJobRunner:
     def submit(
         self, profile: MeridianProfile, *, boosters: BoosterSummary | None = None
     ) -> JobRecord:
-        """入队一个几何构建作业并立即返回 ``queued`` 快照。
+        """入队一个几何构建作业（剖面形态）并立即返回 ``queued`` 快照。
 
         ``boosters`` 是 M4 简化捆绑摘要（OI-36）；省略 = 无助推器，构建路径与
         既有实现逐字节一致（§9.2 缓存纪律）。
@@ -280,7 +282,17 @@ class GeometryJobRunner:
         ⚠ 本方法**不做几何计算**：只有键计算（JSON + sha256，微秒级）与入队。
         """
         record = self.board.create()
-        self._queue.put((record.job_id, profile, boosters))
+        self._queue.put((record.job_id, profile, boosters, None))
+        return record
+
+    def submit_vehicle(self, vehicle: Vehicle) -> JobRecord:
+        """入队一个车辆形态构建作业（M5 九段分区装配树，§5.9 / OI-33）。
+
+        与剖面形态并存：同一执行线程（OCCT 串行硬规则不变），键计算走
+        :func:`aeroforge.cache.store.compute_vehicle_key`（vehicle canonical）。
+        """
+        record = self.board.create()
+        self._queue.put((record.job_id, None, None, vehicle))
         return record
 
     def get(self, job_id: str) -> JobRecord | None:
@@ -312,9 +324,13 @@ class GeometryJobRunner:
             item = self._queue.get()
             if item is None:
                 return
-            job_id, profile, boosters = item
+            job_id, profile, boosters, vehicle = item
             try:
-                self._run(job_id, profile, boosters)
+                if vehicle is not None:
+                    self._run_vehicle(job_id, vehicle)
+                else:
+                    assert profile is not None
+                    self._run(job_id, profile, boosters)
             except BaseException as exc:
                 self._settle_failure(job_id, exc)
 
@@ -421,6 +437,93 @@ class GeometryJobRunner:
                     "per_booster_volume_m3": volumes[0],
                     "total_booster_volume_m3": sum(volumes),
                 }
+            staged.write_json(ARTIFACT_METRICS, metrics)
+
+            timings[JobStage.DONE.value] = round((time.perf_counter() - started) * 1000.0, 2)
+            manifest.timings_ms = dict(timings)
+            staged.commit(manifest)
+
+        self.board.update(
+            job_id,
+            status=JobStatus.SUCCEEDED,
+            stage=JobStage.DONE,
+            progress=1.0,
+            result_key=cache_key.key,
+            metrics=metrics,
+            finished_at=_now(),
+            timings_ms=timings,
+        )
+
+    def _run_vehicle(self, job_id: str, vehicle: Vehicle) -> None:
+        """车辆形态构建（M5 九段分区装配树）：布局 → 实体 + 校验 → GLB/STEP → metrics。
+
+        metrics 扩展：``assembly_tree``（节点名 → 部件账目）与
+        ``common_bulkhead_saving_m``（级序 → 级长缩减量）；尾翼 / 助推器体积
+        单独成账（``fins`` / ``boosters`` 块），不并入 ``volume``。
+        """
+        started = time.perf_counter()
+        timings: dict[str, float] = {}
+        self.board.update(job_id, status=JobStatus.RUNNING, started_at=_now())
+        self._raise_if_cancelled(job_id)
+
+        # ── 阶段 1：九段分区布局（纯数值，无 OCCT） ──
+        self._stage(job_id, JobStage.MERIDIAN, started, timings)
+
+        # ── 阶段 2：分区实体 + §5.5 共底四校验 + 意图断言 ──
+        self._stage(job_id, JobStage.SOLID, started, timings)
+        assembly = build_assembly(vehicle)
+        checks_ok = all(check.ok for check in assembly.checks)
+
+        cache_key = compute_vehicle_key(vehicle)
+        manifest = build_manifest(cache_key)
+        written: list[str] = []
+
+        with self.store.stage(cache_key.key) as staged:
+            # ── 阶段 3：LOD 网格（分区具名节点：s<级序>-<分区> / fin-<k> / booster-<k>） ──
+            self._stage(job_id, JobStage.MESH, started, timings)
+            export_glb(
+                assembly.root,
+                staged.register(ARTIFACT_LOD1),
+                deflection=LOD1_DEFLECTION,
+                angular=LOD1_ANGULAR,
+            )
+            written.append(ARTIFACT_LOD1)
+            export_glb(
+                assembly.root,
+                staged.register(ARTIFACT_LOD2),
+                deflection=LOD2_DEFLECTION,
+                angular=LOD2_ANGULAR,
+            )
+            written.append(ARTIFACT_LOD2)
+
+            # ── 阶段 4：STEP（§5.8 规则 4：校验未通过则拒绝精确格式导出） ──
+            self._stage(job_id, JobStage.STEP, started, timings)
+            if checks_ok:
+                export_step(assembly.root, staged.register(ARTIFACT_STEP))
+                written.append(ARTIFACT_STEP)
+
+            metrics: dict[str, Any] = {
+                "key": cache_key.key,
+                "form": "vehicle",
+                "volume": assembly.volume,
+                "total_length": assembly.total_length,
+                "max_radius": assembly.max_radius,
+                "node_count": len(assembly.nodes),
+                "assembly_tree": {
+                    name: node.model_dump(mode="json") for name, node in assembly.nodes.items()
+                },
+                "common_bulkhead_saving_m": {
+                    str(index): saving for index, saving in assembly.saving_by_stage.items()
+                },
+                "checks": [check.model_dump(mode="json") for check in assembly.checks],
+                "artifacts": [*written, ARTIFACT_METRICS, ARTIFACT_PROVENANCE],
+                "kernel_version": cache_key.kernel_version,
+                "spec_version": cache_key.spec_version,
+            }
+            if assembly.fins is not None:
+                metrics["fins"] = assembly.fins
+            if assembly.boosters is not None:
+                metrics["boosters"] = assembly.boosters
             staged.write_json(ARTIFACT_METRICS, metrics)
 
             timings[JobStage.DONE.value] = round((time.perf_counter() - started) * 1000.0, 2)

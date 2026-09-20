@@ -86,6 +86,25 @@ function defaultSegment(type: SegmentType, startRadius: number): MeridianSegment
     case 'ellipse':
       // 穹顶段：自当前末端半径收拢到轴线（穹顶要求恰有一端 r=0，此处即终点）
       return { type, length: 1, end_radius: 0 }
+    case 'ogive':
+      // 切线卵形：L = R 恰为半球极限（L < R 会破坏 z 单调），恒合法
+      return { type: 'ogive', length: startRadius, end_radius: 0 }
+    case 'parabola':
+      // K = 1 全抛物线：基底相切（G1）
+      return { type: 'parabola', length: 1, end_radius: 0, coefficient: 1 }
+    case 'von_karman':
+      return { type: 'von_karman', length: 1, end_radius: 0 }
+    case 'power':
+      // n > 1 起始切向竖直（与柱段 G1）；末端保持半径（过渡段语义）
+      return { type: 'power', length: 1, end_radius: startRadius, exponent: 1.5 }
+    case 'bell': {
+      // 80% 钟：喉部在上（倒放，车辆形态），长度按 ratio·(Re−Rt)/tan15° 自洽
+      const throat = startRadius * 0.3
+      const length = (0.8 * (startRadius - throat)) / Math.tan((15 * Math.PI) / 180)
+      return { type: 'bell', length, end_radius: throat, throat_radius: throat, length_ratio: 0.8 }
+    }
+    case 'spline':
+      return { type: 'spline', length: 1, end_radius: startRadius, control_points: [[startRadius, 0.5]] }
   }
 }
 
@@ -97,6 +116,18 @@ function mergeSegment(segment: MeridianSegment, patch: SegmentPatch): MeridianSe
       return { ...segment, ...patch, type: 'arc' }
     case 'ellipse':
       return { ...segment, ...patch, type: 'ellipse' }
+    case 'ogive':
+      return { ...segment, ...patch, type: 'ogive' }
+    case 'parabola':
+      return { ...segment, ...patch, type: 'parabola' }
+    case 'von_karman':
+      return { ...segment, ...patch, type: 'von_karman' }
+    case 'power':
+      return { ...segment, ...patch, type: 'power' }
+    case 'bell':
+      return { ...segment, ...patch, type: 'bell' }
+    case 'spline':
+      return { ...segment, ...patch, type: 'spline' }
   }
 }
 

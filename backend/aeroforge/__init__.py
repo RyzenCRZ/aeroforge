@@ -19,6 +19,6 @@ except PackageNotFoundError:  # 未以发行版安装（例如直接从源码树
 #:
 #: ⚠ 必须与 ``AeroForge-Spec.md`` 的「文档版本」一致；由
 #: ``backend/tests/unit/test_spec_version.py`` 强制校对，防止文档与代码漂移。
-SPEC_VERSION = "0.6.1"
+SPEC_VERSION = "0.7.0"
 
 __all__ = ["SPEC_VERSION", "__version__"]

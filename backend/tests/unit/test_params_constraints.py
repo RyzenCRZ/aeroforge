@@ -377,7 +377,8 @@ def test_only_solid_phase_triggers_the_liquid_fields_warning(
 
 
 def test_missing_aero_and_small_fairing_warn(single_stage_vehicle: Vehicle) -> None:
-    """气动缺失按默认处理但必须留痕；整流罩小于最大级直径要提示确认。"""
+    """气动缺失按默认处理但必须留痕；整流罩小于最大级直径要提示确认；
+    整流罩高缺省走惯例常量也要留痕（M5 第二片，仅诊断查询可见）。"""
 
     def strip_aero(payload: dict[str, Any]) -> None:
         payload.update({"aero": None, "fairing_diameter_m": 2.5})
@@ -386,6 +387,7 @@ def test_missing_aero_and_small_fairing_warn(single_stage_vehicle: Vehicle) -> N
 
     assert [item.code for item in items] == [
         "COMPAT_FAIRING_SMALLER_THAN_STAGE",
+        "ENGINEER_FAIRING_HEIGHT_DEFAULTED",
         "ENGINEER_AERO_DEFAULTED",
     ]
     assert not has_hard(items)

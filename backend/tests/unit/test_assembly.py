@@ -3,7 +3,7 @@
 覆盖口径（任务交付 2/3/4/6）：
 - 节点名稳定枚举（falcon-9 的树样例）、退化分区无节点（0 高 avionics、无整流罩）；
 - ``assembly_tree`` 下发形状（级序 / 分区 / z / 质量贡献 / 材料 / 参数来源）；
-- 质量贡献加总 ≈ 级质量（§8.4 几何解析账对拍，rel 10%）；
+- 质量贡献加总 ≈ 级质量（§8.4 几何解析账对拍，M5 第二片同源后 rel 5%）；
 - 储箱排列翻转（fuel_upper ⇒ 燃料箱在上——读字段不硬编码）；
 - 共底：四校验 + 容积守恒 0.5% + 矢高超限报错 + saving 下发 + LH₂ 缺隔热警告；
 - 扁度：级层 flatness 生效（封头矢高手算对拍）+ None 兜底 0.5；
@@ -82,6 +82,8 @@ def _stage(
     tank_arrangement: str = "oxidizer_upper",
     fins: dict[str, Any] | None = None,
     propellant: str = "LOX/RP-1",
+    avionics_height_m: float | None = None,
+    intertank_height_m: float | None = None,
 ) -> Stage:
     geometry_kwargs: dict[str, Any] = {
         "common_bulkhead": common_bulkhead,
@@ -109,6 +111,8 @@ def _stage(
         interstage_type="none",
         isp_source="default",
         flatness_ratio=flatness_ratio,
+        avionics_height_m=avionics_height_m,
+        intertank_height_m=intertank_height_m,
         geometry=Geometry(**geometry_kwargs),
     )
 
@@ -206,7 +210,7 @@ def test_glb_scene_graph_contract(tmp_path: object) -> None:
 
 
 def test_assembly_tree_metadata_and_mass_account() -> None:
-    """assembly_tree 形状 + 质量贡献加总 ≈ 级质量（§8.4 几何解析账对拍 rel 10%）。"""
+    """assembly_tree 形状 + 质量贡献加总 ≈ 级质量（§8.4 对拍，M5 第二片同源后 rel 5%）。"""
     stage = _stage(1)
     vehicle = _vehicle((stage,), fairing_diameter_m=None)
     assembly = build_assembly(vehicle)
@@ -217,17 +221,71 @@ def test_assembly_tree_metadata_and_mass_account() -> None:
         assert node.source_fields, "每个部件必须携带参数来源（§5.5）"
         assert node.mass_kg >= 0.0
         assert node.z_start_m >= 0.0
-    # 质量账：分区质量合计 vs §8.4 账（reserved=0 口径）——长级偏差 < 10%
+    # 质量账：M5 第二片 reserved 口径差复核裁定——两账消费同一份 §5.9 分区高度
+    # （含共底隔板干重），同源后应精确闭合（门禁放宽到 5% 防实现漂移）
     section_mass = sum(node.mass_kg for node in assembly.nodes.values())
     account = dry_mass_geometric_kg(stage)
-    assert section_mass == pytest.approx(account, rel=0.10), (
-        f"质量贡献加总 {section_mass:.3f} kg vs §8.4 账 {account:.3f} kg 偏差超 10%"
+    assert section_mass == pytest.approx(account, rel=0.05), (
+        f"质量贡献加总 {section_mass:.3f} kg vs §8.4 账 {account:.3f} kg 偏差超 5%"
     )
     # 账目完整性：两箱质量按 §8.4 同式分列（bookkeeping 不重不漏）
     layout = plan_stage(stage)
     ox_mass, fuel_mass = tank_dry_masses_kg(stage, reserved_m=layout.reserved_m)
     assert assembly.nodes["s1-ox-tank"].mass_kg == pytest.approx(ox_mass, rel=1e-12)
     assert assembly.nodes["s1-fuel-tank"].mass_kg == pytest.approx(fuel_mass, rel=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# 三 Schema 增补（M5 第二片留白清偿）：显式值生效 + None 现状不变
+# ---------------------------------------------------------------------------
+
+
+def test_explicit_avionics_height_adds_top_band_and_node() -> None:
+    """显式仪器舱高：plan_stage 产带（级顶）+ build_assembly 产节点 s1-avionics。"""
+    stage = _stage(1, avionics_height_m=1.2)
+    layout = plan_stage(stage)
+    avionics = [band for band in layout.bands if band.section == "avionics"]
+    assert len(avionics) == 1
+    assert avionics[0].length == pytest.approx(1.2, rel=1e-12)
+    assert avionics[0].z_end == pytest.approx(layout.height, rel=1e-12), (
+        "仪器舱在级顶（§5.9 第 3 段）"
+    )
+    # 分区仍恰好铺满级长：仪器舱占高由箱段让出
+    dome = dome_height_m(3.7, None)
+    expected_tanks = stage.length_m - stage.engine_height_m - (2 * dome + 2 * dome) - 1.2
+    assert layout.l_ox + layout.l_fuel == pytest.approx(expected_tanks, rel=1e-9)
+    assembly = build_assembly(_vehicle((stage,), fairing_diameter_m=None))
+    assert "s1-avionics" in assembly.nodes
+    assert assembly.nodes["s1-avionics"].length_m == pytest.approx(1.2, rel=1e-12)
+
+
+def test_explicit_intertank_height_overrides_derivation() -> None:
+    """显式级间舱高：第 6 分区取显式值（用户权威），箱段相应缩短；None 保持派生。"""
+    explicit = plan_stage(_stage(1, intertank_height_m=2.5))
+    derived = plan_stage(_stage(1))
+    assert explicit.bands[3].section == "intertank"
+    assert explicit.bands[3].length == pytest.approx(2.5, rel=1e-12)
+    assert derived.bands[3].length == pytest.approx(2 * dome_height_m(3.7, None), rel=1e-12)
+    assert explicit.l_ox + explicit.l_fuel == pytest.approx(
+        derived.l_ox + derived.l_fuel - (2.5 - derived.h_mid), rel=1e-9
+    ), "显式级间舱加高由两箱柱段让出"
+    assert explicit.height == pytest.approx(_stage(1).length_m, rel=1e-12)
+
+
+def test_explicit_intertank_below_dome_sum_raises() -> None:
+    """显式级间舱高小于两箱相邻封头矢高和 ⇒ 封头干涉，AssemblyError（§5.5 校验 3 同判据）。"""
+    with pytest.raises(AssemblyError, match=r"级间舱高.*小于两箱相邻封头矢高和"):
+        plan_stage(_stage(1, intertank_height_m=0.5))
+
+
+def test_explicit_fairing_height_overrides_convention_constant() -> None:
+    """整流罩高：Vehicle.fairing_height_m 显式值优先；None 保持惯例常量（现状值）。"""
+    default = build_assembly(_vehicle((_stage(1),)))
+    explicit = build_assembly(_vehicle((_stage(1),)).model_copy(update={"fairing_height_m": 8.0}))
+    assert default.nodes["s1-fairing"].length_m == pytest.approx(
+        min(max(2.2 * 4.6, 5.0), 20.0), rel=1e-12
+    )
+    assert explicit.nodes["s1-fairing"].length_m == pytest.approx(8.0, rel=1e-12)
 
 
 def test_tank_arrangement_flip_reads_field() -> None:

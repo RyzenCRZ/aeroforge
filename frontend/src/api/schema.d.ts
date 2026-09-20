@@ -95,6 +95,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/geometry/sections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Vehicle Sections
+         * @description §5.9 九段分区下发：2D 工程剖面图与外观图的**同一份**后端数据源（§11.10）。
+         *
+         *     纯解析（plan_stage 布局 + 分区高度事实），毫秒级、不触 OCCT、**不走缓存**
+         *     （evaluate 式缓存针对重内核，此处无必要）。段高 / 液面 / 标注数值全部由后端
+         *     算出（ADR-011），前端只做映射与排版。布局不可行（分区铺不满 / 矢高干涉）时
+         *     返回 422（GEOMETRY_INVALID）。
+         */
+        post: operations["vehicle_sections_api_geometry_sections_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/params/diagnose": {
         parameters: {
             query?: never;
@@ -943,6 +968,22 @@ export interface components {
              * @description 可操作的修复建议（§10.3 要求必填，禁止「未知错误」）
              */
             suggestion: string;
+        };
+        /**
+         * DimensionLabel
+         * @description 一条尺寸标注（§5.9 共性 7：数值后端下发，前端只排版）。
+         */
+        DimensionLabel: {
+            /**
+             * Key
+             * @description 标注键：整箭级 total_length / max_diameter / fairing_diameter；逐级前缀 s<级号>_（助推器 b<组序>_）+ ox_tank_length / fuel_tank_length / forward_skirt_height / thrust_structure_height / intertank_height | common_bulkhead_height
+             */
+            key: string;
+            /**
+             * Text
+             * @description 显示文本（如 12.30 m）
+             */
+            text: string;
         };
         /**
          * DisplayUnitOut
@@ -2142,6 +2183,124 @@ export interface components {
             uncovered: string[];
         };
         /**
+         * SectionBand
+         * @description 一个 §5.9 分区条带（§11.10：段高 / 液面 / 标注数值全部后端下发，前端零计算）。
+         *
+         *     条带按**自上而下**（§5.9 表次序）排列；缺失分区（无整流罩 / 0 高退化段）不进
+         *     数组——前端按 ``section`` 名寻址渲染，不按下标。
+         */
+        SectionBand: {
+            /**
+             * Section
+             * @description §5.9 分区枚举（共底隔板段下发为 common_bulkhead）
+             */
+            section: string;
+            /**
+             * Label Zh
+             * @description 分区中文名（2D 剖面引线标注用）
+             */
+            label_zh: string;
+            /**
+             * Length M
+             * @description 分区轴向高度（m，后端算出，ADR-011）
+             */
+            length_m: number;
+            /**
+             * Liquid Level M
+             * @description 液面高度（m，§6.1 h_liq 口径）：**自该箱箱底向上**到液面的轴向高度 = 该箱加注比例 × 箱段柱高；仅贮箱段下发，2D 剖面自箱底向上填充、气枕区（同色 15% 透明）在液面之上
+             */
+            liquid_level_m?: number | null;
+            /**
+             * Propellant Oxidizer
+             * @description 氧化剂名（如 LOX）；仅氧箱段下发
+             */
+            propellant_oxidizer?: string | null;
+            /**
+             * Propellant Fuel
+             * @description 燃料名（如 RP-1）；仅燃料箱段下发
+             */
+            propellant_fuel?: string | null;
+            /**
+             * Color Key
+             * @description 推进剂编码色键（§11.2：lox / rp1 / lh2 / ch4…）；仅贮箱段下发
+             */
+            color_key?: string | null;
+            /**
+             * Bulkhead Saving M
+             * @description 共底级长缩减量（m，两箱相邻封头矢高和 − 隔板矢高，公式反算）；仅隔板段下发
+             */
+            bulkhead_saving_m?: number | null;
+            /**
+             * Insulation
+             * @description LH₂ 侧隔热标志（燃料为液氢 = true）；仅隔板段下发
+             */
+            insulation?: boolean | null;
+        };
+        /**
+         * SectionDimensions
+         * @description 整箭量测 + 尺寸标注全清单（§11.10 坐标映射基准）。
+         */
+        SectionDimensions: {
+            /**
+             * Total Length M
+             * @description 整箭总长（m，含整流罩 / 适配器；不含助推器）
+             */
+            total_length_m: number;
+            /**
+             * Max Diameter M
+             * @description 芯级最大直径（m；整流罩直径单列）
+             */
+            max_diameter_m: number;
+            /**
+             * Fairing Diameter M
+             * @description 整流罩直径（m；无整流罩为 null）
+             */
+            fairing_diameter_m?: number | null;
+            /**
+             * Labels
+             * @description 尺寸标注全清单（§5.9 共性 7）
+             */
+            labels: components["schemas"]["DimensionLabel"][];
+        };
+        /**
+         * SectionsRequest
+         * @description ``POST /api/geometry/sections`` 的请求体：整箭参数即全部输入。
+         */
+        SectionsRequest: {
+            /** @description 飞行器参数（与 /api/geometry/build 车辆形态同构） */
+            vehicle: components["schemas"]["Vehicle"];
+        };
+        /**
+         * SectionsResponse
+         * @description ``POST /api/geometry/sections`` 的响应体：2D 外观图与工程剖面图共用的唯一数据源。
+         */
+        SectionsResponse: {
+            /**
+             * Stages
+             * @description 芯级条带（自下而上排列，与 stages[] 同序）
+             */
+            stages: components["schemas"]["StageSections"][];
+            /**
+             * Boosters
+             * @description 助推器组条带（每组一项，同构 bands；级号 0）
+             */
+            boosters: components["schemas"]["StageSections"][];
+            /** @description 整箭量测与尺寸标注 */
+            dimensions: components["schemas"]["SectionDimensions"];
+            /**
+             * Warnings
+             * @description 绘制相关警告（如共底 LH₂ 侧缺隔热层）
+             */
+            warnings: string[];
+            /**
+             * Provenance
+             * @description 近似方式与口径声明（§5.9 派生规则 1）
+             */
+            provenance: {
+                [key: string]: string;
+            };
+        };
+        /**
          * Sequence
          * @description 任务时序（§6.1 Sequence 层）。
          */
@@ -2567,6 +2726,16 @@ export interface components {
              */
             engine_height_nozzle_excluded_m?: number | null;
             /**
+             * Avionics Height M
+             * @description 仪器舱高（§5.9 分区第 3 段；省略 = 0 高——§5.9 允许，现状显式化）
+             */
+            avionics_height_m?: number | null;
+            /**
+             * Intertank Height M
+             * @description 级间舱高（§5.9 分区第 6 段，**同级内两箱之间**的承载舱段，不是两级之间的级间段；省略 = 按派生规则：两箱相邻封头矢高和。共底开启时本字段不生效，第 6 分区为隔板段）
+             */
+            intertank_height_m?: number | null;
+            /**
              * Burn Time S
              * @description 工作时间（s）；省略时由后端按 m_prop/ṁ 派生
              */
@@ -2656,6 +2825,39 @@ export interface components {
             engine_name: components["schemas"]["SourcedField"];
             /** @description 发动机台数 */
             engine_count: components["schemas"]["SourcedField"];
+        };
+        /**
+         * StageSections
+         * @description 一级（或一组助推器）的条带布置与输送管走法。
+         */
+        StageSections: {
+            /**
+             * Stage Index
+             * @description 级序：芯级为 stages[] 的 0 基下标；助推器记 0（GCAT 记法）
+             */
+            stage_index: number;
+            /**
+             * Level
+             * @description 级号：芯级自 1 起（自下而上）；助推器 = 0
+             */
+            level: number;
+            /**
+             * Bands
+             * @description §5.9 分区条带（自上而下）
+             */
+            bands: components["schemas"]["SectionBand"][];
+            /**
+             * Delivery Pipe Routing
+             * @description 输送管走法（取上箱字段：穿越下箱的管段属上箱，§5.9 口径 3）
+             * @enum {string}
+             */
+            delivery_pipe_routing: "external" | "internal";
+            /**
+             * Tank Order
+             * @description 储箱排列：自顶向下先出现的是氧化剂箱（oxidizer_first）还是燃料箱（fuel_first）
+             * @enum {string}
+             */
+            tank_order: "oxidizer_first" | "fuel_first";
         };
         /**
          * StageSizing
@@ -3135,6 +3337,11 @@ export interface components {
              */
             fairing_diameter_m?: number | null;
             /**
+             * Fairing Height M
+             * @description 整流罩高（省略 = 工程惯例：min(max(2.2×整流罩直径, 5), 20) m，可显式指定）
+             */
+            fairing_height_m?: number | null;
+            /**
              * Material
              * @description 箭体材料（全局默认，可被 Stage 覆盖）；材料库引用（/api/catalog/materials）
              */
@@ -3524,6 +3731,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BuildResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    vehicle_sections_api_geometry_sections_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SectionsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SectionsResponse"];
                 };
             };
             /** @description Validation Error */

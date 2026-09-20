@@ -389,9 +389,15 @@ def test_propellant_mass_with_explicit_tank_lengths(single_stage_vehicle: Vehicl
 
 
 def test_tank_length_split_by_volumetric_ratio(single_stage_vehicle: Vehicle) -> None:
-    """无显式箱长：按 §5.9 容积比 V_ox/V_fuel=(O/F)·(ρ_fuel/ρ_ox) 分配可用长度。"""
+    """无显式箱长：按 §5.9 容积比 V_ox/V_fuel=(O/F)·(ρ_fuel/ρ_ox) 分配可用长度。
+
+    可用长度 = 级长 − 发动机高 − 分区轴向预留（M5 第二片起与装配树同源：
+    下箱底封头 + 级间舱〔两箱相邻封头矢高和〕+ 上箱顶封头）。
+    """
     stage = single_stage_vehicle.stages[0]
-    available = stage.length_m - stage.engine_height_m
+    dome = mass_module.dome_height_m(stage.diameter_m, stage.flatness_ratio)  # 0.5×3.7/2 = 0.925
+    reserved = 4.0 * dome  # 下箱底封头 + 级间舱（两封头矢高和）+ 上箱顶封头
+    available = stage.length_m - stage.engine_height_m - reserved
     ratio = 2.36 * 810.0 / 1141.0  # LOX/RP-1 @ O/F=2.36
     expected_fuel = available / (1.0 + ratio)
     expected_ox = available - expected_fuel
@@ -400,6 +406,10 @@ def test_tank_length_split_by_volumetric_ratio(single_stage_vehicle: Vehicle) ->
     assert ox.length_source == "derived" and fuel.length_source == "derived"
     assert ox.cylinder_length_m == pytest.approx(expected_ox, rel=1e-12)
     assert fuel.cylinder_length_m == pytest.approx(expected_fuel, rel=1e-12)
+    # 与装配树分区共源：两箱柱长 + 预留 + 发动机高 = 级长（分区恰好铺满）
+    assert ox.cylinder_length_m + fuel.cylinder_length_m + reserved == pytest.approx(
+        stage.length_m - stage.engine_height_m, rel=1e-12
+    )
 
 
 def test_cross_check_threshold_warning(single_stage_vehicle: Vehicle) -> None:
@@ -415,6 +425,7 @@ def test_cross_check_threshold_warning(single_stage_vehicle: Vehicle) -> None:
     assert result.stages[0].cross_check.exceeds_threshold
 
     # 反例：σ 与几何口径一致（σ≈0.0068 → σ 推算干重 ≈ 几何干重）→ 无交叉校验警告
+    # （σ 值按 M5 第二片分区同源口径复核：两账同比例缩放，σ 值基本不变）
     consistent = single_stage_vehicle.model_copy(
         update={
             "stages": (

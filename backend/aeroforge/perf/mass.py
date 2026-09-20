@@ -17,13 +17,20 @@
   退化极限均正确）。
 - 两箱柱段长度：``Tank.length_m`` 显式给定 → 用户权威（§5.9 派生规则 2，不静默
   覆盖）；缺失 → 按 §5.9 容积比 ``V_ox/V_fuel = (O/F)·(ρ_fuel/ρ_ox)`` 分配
-  **可用长度**（级长 − 发动机高度）。Schema 的 Tank 层**不存容积**（派生量不
-  存储是 §6.1 唯一权威原则），用户显式通道只有 ``length_m``，故优先级为：
+  **可用长度**（级长 − 发动机高度 − 分区轴向预留）。Schema 的 Tank 层**不存容积**
+  （派生量不存储是 §6.1 唯一权威原则），用户显式通道只有 ``length_m``，故优先级为：
   显式箱长 > §5.9 容积比派生。
+- **分区轴向预留（M5 第二片裁定，§5.9）**：九段分区的各段高度是**几何事实**，
+  本账的贮箱容积必须与装配树消费**同一份分区高度**（燃料/氧箱柱长 = 分区里的
+  箱段高）——``resolve_tank_geometry`` 的 ``reserved_m`` 缺省即取
+  :func:`partition_reserved_m`（下箱底封头 + 第 6 分区 + 上箱顶封头 + 仪器舱），
+  使「推进剂质量（几何）」与「装配树质量贡献」同源；σ 回归干重保持独立（统计
+  来源，§8.4）。显式传 ``reserved_m=0.0`` 可退回旧口径（仅限对照）。
 - 推进剂质量 = 氧箱容积 × ρ_ox + 燃料箱容积 × ρ_fuel，再乘**级层**加注比例
   （QA-2：级层加注比例是 M4 定尺求解的整体输入）。
 - 几何干重 = 湿面积 × 面密度；面密度 = 材料库典型壁厚 × ρ_material（**工程惯例
-  估算**：刻意不用用户的 Tank.wall_thickness_m，保持几何来源独立于用户细观输入）。
+  估算**：刻意不用用户的 Tank.wall_thickness_m，保持几何来源独立于用户细观输入）；
+  共底开启时并入隔板干重（§8.4 几何解析账覆盖贮箱与共底隔板）。
 """
 
 from __future__ import annotations
@@ -127,6 +134,123 @@ def tank_wetted_area_m2(
     return cylinder + 2.0 * dome_surface_area_m2(diameter_m, dome_height_m_)
 
 
+# ---------------------------------------------------------------------------
+# §5.9 九段分区的轴向高度事实（M5 第二片：装配树与 §8.4 账共源）
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class PartitionHeights:
+    """§5.9 九段分区的封头 / 中段 / 仪器舱高度（纯数值，无 OCCT）。
+
+    装配树（:mod:`aeroforge.geometry.assembly` 的分段布局）与 §8.4 几何解析账
+    （:func:`resolve_tank_geometry` 的轴向预留）共同消费这一份高度——分区高度是
+    **几何事实**，两账不得各算一套（M5 第二片 reserved 口径差复核的裁定）。
+    """
+
+    lower_role: str
+    """下箱角色（oxidizer / fuel，由储箱排列决定）。"""
+
+    upper_role: str
+    """上箱角色。"""
+
+    diameter_lower_m: float
+    """下箱直径（m）。"""
+
+    diameter_upper_m: float
+    """上箱直径（m）。"""
+
+    dome_lower_m: float
+    """下箱封头矢高（m）＝ 推力结构段高（容纳下箱底封头）。"""
+
+    dome_upper_m: float
+    """上箱封头矢高（m）＝ 前裙段高（容纳上箱顶封头）。"""
+
+    h_mid_m: float
+    """第 6 分区高（m）：非共底 = 级间舱；共底 = 隔板段。"""
+
+    bulkhead_m: float | None
+    """共底隔板矢高（m）；非共底为 ``None``。"""
+
+    avionics_m: float
+    """仪器舱高（m）：``Stage.avionics_height_m`` 显式值，缺省 0（§5.9 允许 0 高）。"""
+
+    intertank_source: Literal["user", "derived"]
+    """第 6 分区（级间舱）高度来源：用户显式（``Stage.intertank_height_m``）/ 派生。"""
+
+    @property
+    def reserved_m(self) -> float:
+        """分区轴向预留（m）：下箱底封头 + 第 6 分区 + 上箱顶封头 + 仪器舱。
+
+        这是「级长 − 发动机高度」里**不属于两箱柱段**的部分；分区恰好铺满级长的
+        关键扣减（:func:`resolve_tank_geometry` 缺省消费它）。
+        """
+        return self.dome_lower_m + self.h_mid_m + self.dome_upper_m + self.avionics_m
+
+
+def tank_roles(stage: Stage) -> tuple[str, str]:
+    """按储箱排列返回 ``(上箱角色, 下箱角色)``——§5.9 非铁律，读字段不硬编码。
+
+    ``oxidizer_upper``（默认）⇒ 氧在上（S-IC / S-II / Falcon 9 形态）；
+    ``fuel_upper`` ⇒ 燃料在上（S-IVB 形态）。
+    """
+    if stage.geometry.tank_arrangement == "fuel_upper":
+        return ("fuel", "oxidizer")
+    return ("oxidizer", "fuel")
+
+
+def tank_diameters_m(stage: Stage) -> dict[str, float]:
+    """两箱直径（m；省略 = 继承级直径，读 Schema 不硬编码）。"""
+    return {
+        "oxidizer": stage.geometry.oxidizer_tank.diameter_m or stage.diameter_m,
+        "fuel": stage.geometry.fuel_tank.diameter_m or stage.diameter_m,
+    }
+
+
+def partition_heights(stage: Stage) -> PartitionHeights:
+    """推导一级的九段分区高度事实（封头矢高 / 第 6 分区 / 仪器舱）。
+
+    - 封头矢高：``h = 扁度系数 × 直径 / 2``（OI-37，级层 flatness，None 兜底 0.5）。
+    - 第 6 分区：共底 = 隔板段（按**级径**反算，共底物理上要求两箱同径）；
+      非共底 = 级间舱——``Stage.intertank_height_m`` 显式值优先，缺省按派生规则
+      （两箱相邻封头矢高和，容纳两只相邻封头）。
+    - 仪器舱：``Stage.avionics_height_m`` 显式值，缺省 0 高（§5.9 允许）。
+    """
+    upper_role, lower_role = tank_roles(stage)
+    diameters = tank_diameters_m(stage)
+    dome_lower = dome_height_m(diameters[lower_role], stage.flatness_ratio)
+    dome_upper = dome_height_m(diameters[upper_role], stage.flatness_ratio)
+
+    bulkhead: float | None = None
+    intertank_source: Literal["user", "derived"] = "derived"
+    if stage.geometry.common_bulkhead:
+        bulkhead = dome_height_m(stage.diameter_m, stage.flatness_ratio)
+        h_mid = bulkhead
+    elif stage.intertank_height_m is not None:
+        h_mid = stage.intertank_height_m
+        intertank_source = "user"
+    else:
+        h_mid = dome_upper + dome_lower
+
+    return PartitionHeights(
+        lower_role=lower_role,
+        upper_role=upper_role,
+        diameter_lower_m=diameters[lower_role],
+        diameter_upper_m=diameters[upper_role],
+        dome_lower_m=dome_lower,
+        dome_upper_m=dome_upper,
+        h_mid_m=h_mid,
+        bulkhead_m=bulkhead,
+        avionics_m=stage.avionics_height_m or 0.0,
+        intertank_source=intertank_source,
+    )
+
+
+def partition_reserved_m(stage: Stage) -> float:
+    """九段分区的轴向预留（m）：:meth:`PartitionHeights.reserved_m` 的便捷入口。"""
+    return partition_heights(stage).reserved_m
+
+
 @dataclass(frozen=True, slots=True)
 class TankGeometryEstimate:
     """单箱几何解析结果（工程惯例估算，非权威）。"""
@@ -144,7 +268,7 @@ class TankGeometryEstimate:
 
 
 def resolve_tank_geometry(
-    stage: Stage, *, reserved_m: float = 0.0
+    stage: Stage, *, reserved_m: float | None = None
 ) -> tuple[TankGeometryEstimate, TankGeometryEstimate]:
     """解析一级的两箱几何（氧化剂箱、燃料箱）。
 
@@ -153,14 +277,18 @@ def resolve_tank_geometry(
     另一箱按 §5.9 容积比由显式箱长锚定；都缺 → 按容积比分配可用长度（级长 −
     发动机高度 − ``reserved_m``）。
 
-    ``reserved_m``（M5 装配树引入，默认 0 = 既有口径）：从可用长度中额外扣除的
-    轴向预留（封头占位 / 共底隔板段等）。装配布局传该参数使九段分区恰好铺满
-    级长；性能评估链不传（保持 §8.4 既有工程估算口径）——**同一函数、两种调用
-    约定**，不另立第二套箱体解析（M5 任务口径）。
+    ``reserved_m``（M5 第二片裁定，§5.9）：从可用长度中扣除的**分区轴向预留**
+    （下箱底封头 + 第 6 分区 + 上箱顶封头 + 仪器舱）。缺省 ``None`` ⇒ 取
+    :func:`partition_reserved_m`——装配树九段分区与 §8.4 几何解析账消费**同一份
+    分区高度**（箱段高是几何事实，两账同源，不另立第二套箱体解析）；
+    显式传 ``0.0`` 退回旧「级长 − 发动机高全算贮箱」口径（仅限对照）。
     """
     ox_tank = stage.geometry.oxidizer_tank
     fuel_tank = stage.geometry.fuel_tank
     props = propellants.properties(stage.propellant)
+
+    if reserved_m is None:
+        reserved_m = partition_reserved_m(stage)
 
     ox_diameter = ox_tank.diameter_m or stage.diameter_m
     fuel_diameter = fuel_tank.diameter_m or stage.diameter_m
@@ -218,7 +346,11 @@ def resolve_tank_geometry(
 
 
 def propellant_mass_kg(stage: Stage) -> float:
-    """几何解析的推进剂质量（kg）：各箱容积 × 本剂密度之和 × 级层加注比例。"""
+    """几何解析的推进剂质量（kg）：各箱容积 × 本剂密度之和 × 级层加注比例。
+
+    贮箱容积消费**九段分区的箱段高**（与装配树同源，M5 第二片裁定）——分区高度
+    是几何事实，推进剂质量（几何）不得绕开分区另算一套「级长 − 发动机高」。
+    """
     ox, fuel = resolve_tank_geometry(stage)
     props = propellants.properties(stage.propellant)
     return (
@@ -226,13 +358,13 @@ def propellant_mass_kg(stage: Stage) -> float:
     ) * stage.fill_fraction
 
 
-def tank_dry_masses_kg(stage: Stage, *, reserved_m: float = 0.0) -> tuple[float, float]:
+def tank_dry_masses_kg(stage: Stage, *, reserved_m: float | None = None) -> tuple[float, float]:
     """按箱分列的几何解析干重（kg）：``(氧化剂箱, 燃料箱)``。
 
     与 :func:`dry_mass_geometric_kg` 同式（湿面积 × 面密度；面密度 = 材料库
     ``typical_min_wall_thickness_m × density_kg_m3``，工程惯例估算——刻意不用
-    用户的壁厚输入，保持本来源独立于细观参数）。M5 装配树按箱取质量贡献时调用
-    （``reserved_m`` 语义同 :func:`resolve_tank_geometry`）。
+    用户的壁厚输入，保持本来源独立于细观参数）。``reserved_m`` 语义同
+    :func:`resolve_tank_geometry`（缺省 = 分区轴向预留，与装配树同源）。
     """
     ox, fuel = resolve_tank_geometry(stage, reserved_m=reserved_m)
     masses: list[float] = []
@@ -246,9 +378,29 @@ def tank_dry_masses_kg(stage: Stage, *, reserved_m: float = 0.0) -> tuple[float,
     return (masses[0], masses[1])
 
 
+def bulkhead_dry_mass_kg(stage: Stage, bulkhead_height_m: float) -> float:
+    """共底隔板干重（kg）：隔板表面积 × 面密度（§8.4 同式，材料取燃料/LH₂ 侧）。
+
+    驻留本模块（而非装配层）：§8.4 几何解析账覆盖**贮箱与共底隔板**（§5.9 口径 2），
+    装配树的隔板质量贡献与本账必须同源——单一实现，两处消费。
+    """
+    material = get_material(stage.geometry.fuel_tank.material)
+    areal_density = material.typical_min_wall_thickness_m * material.density_kg_m3
+    return dome_surface_area_m2(stage.diameter_m, bulkhead_height_m) * areal_density
+
+
 def dry_mass_geometric_kg(stage: Stage) -> float:
-    """几何解析干重（kg）= 两箱湿面积 × 面密度之和。"""
-    return sum(tank_dry_masses_kg(stage))
+    """几何解析干重（kg）= 两箱湿面积 × 面密度之和 + 共底隔板（开启时）。
+
+    贮箱湿面积按**分区箱段高**计（与装配树同源）；共底开启时并入隔板干重
+    （§8.4 几何解析账的覆盖范围：贮箱与共底隔板）。
+    """
+    total = sum(tank_dry_masses_kg(stage))
+    if stage.geometry.common_bulkhead:
+        heights = partition_heights(stage)
+        assert heights.bulkhead_m is not None
+        total += bulkhead_dry_mass_kg(stage, heights.bulkhead_m)
+    return total
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,6 +428,8 @@ def cross_check(stage: Stage) -> CrossCheckOutcome:
 
     σ 推算干重以**几何解析推进剂质量**为基数（同一容积口径下比较结构效率），
     偏差 > 20% 意味着构型异常或外推（§8.4）——单来源不得作为结论。
+    两侧的贮箱几何均消费九段分区高度（M5 第二片起同源）；偏差的本底来自
+    面密度干重模型（湿面积 × 典型壁厚）与统计 σ 的来源差，与分区口径无关。
     """
     m_prop = propellant_mass_kg(stage)
     sigma = stage.structure_coefficient
@@ -557,6 +711,7 @@ __all__ = [
     "MIN_BIN_SIZE",
     "SIGMA_INTERVALS",
     "CrossCheckOutcome",
+    "PartitionHeights",
     "Position",
     "PropellantClass",
     "SigmaBin",
@@ -564,18 +719,23 @@ __all__ = [
     "SigmaRegressionReport",
     "SigmaSample",
     "TankGeometryEstimate",
+    "bulkhead_dry_mass_kg",
     "classify_propellant",
     "cross_check",
     "dome_height_m",
     "dome_surface_area_m2",
     "dome_volume_m3",
     "dry_mass_geometric_kg",
+    "partition_heights",
+    "partition_reserved_m",
     "propellant_mass_kg",
     "regress_structure_coefficients",
     "resolve_position",
     "resolve_tank_geometry",
     "summarize_sigma_bins",
+    "tank_diameters_m",
     "tank_dry_masses_kg",
+    "tank_roles",
     "tank_volume_m3",
     "tank_wetted_area_m2",
 ]

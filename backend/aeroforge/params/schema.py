@@ -372,6 +372,23 @@ class Stage(ParamsModel):
     engine_height_nozzle_excluded_m: float | None = si_field(
         "length", "发动机高度（不含喷管）", default=None, gt=0.0
     )
+    # §5.9 九段分区的留白清偿（M5 第二片）：仪器舱 / 级间舱高度显式输入。
+    # canonical 纪律（§9.2）：二者缺省 None，exclude_none + exclude_defaults 下
+    # 不进既有输入的字节——Schema 扩展不改变缓存键。
+    avionics_height_m: float | None = si_field(
+        "length",
+        "仪器舱高（§5.9 分区第 3 段；省略 = 0 高——§5.9 允许，现状显式化）",
+        default=None,
+        ge=0.0,
+    )
+    intertank_height_m: float | None = si_field(
+        "length",
+        "级间舱高（§5.9 分区第 6 段，**同级内两箱之间**的承载舱段，不是两级之间的"
+        "级间段；省略 = 按派生规则：两箱相邻封头矢高和。共底开启时本字段不生效，"
+        "第 6 分区为隔板段）",
+        default=None,
+        ge=0.0,
+    )
     burn_time_s: float | None = Field(
         default=None, gt=0.0, description="工作时间（s）；省略时由后端按 m_prop/ṁ 派生"
     )
@@ -485,6 +502,15 @@ class Vehicle(ParamsModel):
     )
     payload_mass_kg: float = si_field("mass", "有效载荷质量", ge=0.0)
     fairing_diameter_m: float | None = si_field("length", "整流罩直径", default=None, gt=0.0)
+    # §5.9 分区留白清偿（M5 第二片）：整流罩高显式输入。缺省 None ⇒ 装配层按工程
+    # 惯例常量派生（2.2×整流罩直径，夹于 [5, 20] m，现状值保持不变）；惯例值提示
+    # 只进诊断查询（ENGINEER_FAIRING_HEIGHT_DEFAULTED），不做常驻 warning 噪声。
+    fairing_height_m: float | None = si_field(
+        "length",
+        "整流罩高（省略 = 工程惯例：min(max(2.2×整流罩直径, 5), 20) m，可显式指定）",
+        default=None,
+        gt=0.0,
+    )
     material: str = Field(
         description="箭体材料（全局默认，可被 Stage 覆盖）；材料库引用（/api/catalog/materials）"
     )

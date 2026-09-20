@@ -1,0 +1,172 @@
+/* ============================================================================
+ * 右栏 2D 视图组（外观图 + 工程剖面图，规格 §11.10 / OI-37）。
+ *
+ * 颜色一律引用语义 token（§11.2 / tokens.css）；推进剂编码色由组件以
+ * style（内联 var()）注入——SVG 表现属性不支持 CSS 变量，故不能写在属性里。
+ * ==========================================================================*/
+
+.profile2d {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 两张图纵向排布（§11.10 视图组），各自带标题与缩放工具条 */
+.profile2d__view {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.profile2d__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.profile2d__head h3 {
+  margin: 0;
+}
+
+.profile2d__toolbar {
+  display: flex;
+  gap: 4px;
+}
+
+.profile2d__button {
+  padding: 2px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.profile2d__button:hover {
+  border-color: var(--color-accent);
+}
+
+/* SVG 按宽度自适应：viewBox 保持纵横比（等比映射的另一重保证） */
+.profile2d__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* ---- 工程剖面图元素（§11.10 绘制规范表） -------------------------------- */
+
+/* 分区条带：细实线边界；贮箱条带不填充（露出液体 / 气枕） */
+.profile2d__band {
+  fill: none;
+  stroke: var(--color-border);
+  stroke-width: 1;
+}
+
+/* 非贮箱条带（结构件）：表面色微填充以区分 */
+.profile2d__band--structure {
+  fill: var(--color-bg-surface);
+}
+
+/* 共底单线：两箱共用，比普通边界更显眼 */
+.profile2d__bulkhead {
+  stroke: var(--color-text-primary);
+  stroke-width: 1.5;
+}
+
+/* 隔热层斜线填充（LH₂ 侧，§5.9 口径 2） */
+.profile2d__hatch-line {
+  stroke: var(--color-text-secondary);
+  stroke-width: 1;
+}
+
+.profile2d__insulation {
+  pointer-events: none;
+}
+
+/* 发动机舱轮廓（宽度 = 排版比例，见 Profile2D.tsx 注释） */
+.profile2d__engine {
+  fill: none;
+  stroke: var(--color-text-secondary);
+  stroke-width: 1;
+  stroke-dasharray: 3 2;
+}
+
+/* 输送管（只画走法，§5.9 口径 3） */
+.profile2d__pipe {
+  fill: none;
+  stroke: var(--color-accent);
+  stroke-width: 1.5;
+}
+
+/* 引线与段名标注（右侧） */
+.profile2d__leader {
+  stroke: var(--color-border);
+  stroke-width: 1;
+}
+
+.profile2d__band-label {
+  fill: var(--color-text-secondary);
+  font-size: 9px;
+}
+
+/* 尺寸线与标注数值（数值 = 等宽字体，§11.2 排版规则） */
+.profile2d__dim-line {
+  stroke: var(--color-text-secondary);
+  stroke-width: 1;
+}
+
+.profile2d__dim-text {
+  fill: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+/* ---- 外观图元素（退化渲染：只画轮廓与级段分界） -------------------------- */
+
+.profile2d__outline-band {
+  fill: none;
+  stroke: var(--color-text-secondary);
+  stroke-width: 1;
+}
+
+.profile2d__stage-boundary {
+  stroke: var(--color-text-secondary);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+}
+
+/* ---- 提示与降级 -------------------------------------------------------- */
+
+.profile2d__hint {
+  margin: 6px 0 0;
+  line-height: 1.6;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* 失败降级提示行（材料下拉同款「不可用」纪律：不白屏、不影响其它面板） */
+.profile2d__fallback {
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--color-status-warn);
+  border-radius: 6px;
+  color: var(--color-status-warn);
+  line-height: 1.6;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.profile2d__warnings {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.profile2d__warning {
+  color: var(--color-status-warn);
+  text-transform: none;
+  letter-spacing: 0;
+}

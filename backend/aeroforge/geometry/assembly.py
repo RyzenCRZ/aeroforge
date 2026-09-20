@@ -20,10 +20,11 @@ profile 形态，节点名 ``seg-<i>``）并存：本模块是车辆形态构建
 - 封头矢高 ``h = flatness × d / 2``（OI-37；``None`` 兜底 0.5）——**优先级**：
   母线 ``ellipse`` 段的显式 ``length``（用户在剖面里画什么是什么）> 级层
   ``flatness_ratio`` > 0.5 兜底。本模块只消费级层值（剖面通路天然用显式值）。
-- 箱柱长由 :func:`aeroforge.perf.mass.resolve_tank_geometry(stage, reserved_m=…)`
-  派生（§5.9 容积比 ``V_ox/V_fuel = (O/F)·ρ_fuel/ρ_ox``），``reserved_m`` 扣除
-  封头占位与中段使分区**恰好铺满**级长——同一函数、两种调用约定，不另立第二套
-  箱体解析（M5 任务口径）；性能评估链继续用默认 ``reserved_m=0`` 的 §8.4 口径。
+- 箱柱长由 :func:`aeroforge.perf.mass.resolve_tank_geometry` 派生（§5.9 容积比
+  ``V_ox/V_fuel = (O/F)·ρ_fuel/ρ_ox``），轴向预留 ``reserved_m``（封头占位 +
+  第 6 分区 + 仪器舱，:func:`aeroforge.perf.mass.partition_reserved_m`）使分区
+  **恰好铺满**级长——M5 第二片起 §8.4 几何解析账缺省消费**同一份分区高度**
+  （分区高度是几何事实，两账同源），不另立第二套箱体解析。
 - 储箱排列**读字段不硬编码**（§5.9 非铁律）：``oxidizer_upper`` ⇒ 氧箱在上；
   ``fuel_upper`` ⇒ 燃料箱在上（第 5/7 分区的上下次序随之对调）。
 - 共底：隔板为凹向上箱的椭球面，矢高 ``h_b = flatness × D / 2``（按**级径**反算，
@@ -34,22 +35,28 @@ profile 形态，节点名 ``seg-<i>``）并存：本模块是车辆形态构建
 -------------------------------------------------------------
 - 氧箱 / 燃料箱：``wetted_area × 面密度``（:func:`tank_dry_masses_kg`，与
   :func:`dry_mass_geometric_kg` 同式、按箱分列）。
-- 共底隔板：隔板表面积 × 面密度（:func:`dome_surface_area_m2` 同源）。
+- 共底隔板：隔板表面积 × 面密度（:func:`bulkhead_dry_mass_kg`，与 §8.4 账同源）。
 - 其余分区（裙 / 舱段 / 整流罩 / 适配器 / 发动机舱 / 尾翼 / 助推器）：
   **0.0 + 留白注记**——§8.4 几何解析账只覆盖贮箱，不为无模型部件编造数字
   （§1.4-4）；尾翼与助推器体积在 metrics 的 ``fins`` / ``boosters`` 块单独成账。
 
 约定与留白（显式声明，不静默）
 ------------------------------
-1. ``avionics`` 恒为 0 高（§5.9 表明示"可为 0 高"）——非零仪器舱高需要 Schema
-   输入，后续片补；0 高分区不产出 GLB 节点（部件缺失即无节点，OI-33 演化口径）。
-2. 级间段（interstage，级间分离舱段）**不单独切出**——无 Schema 高度输入，
-   ``length_m``（含级间段）的全部预算按 9 段分摊。
+1. ``avionics`` 仪器舱高：``Stage.avionics_height_m`` 显式值优先（M5 第二片
+   Schema 增补）；缺省 0 高（§5.9 允许）——0 高分区不产出 GLB 节点（部件缺失
+   即无节点，OI-33 演化口径）。
+2. 级间段（interstage，级间分离舱段）**不单独切出**——Schema 只有
+   ``interstage_type``（类型）而无高度输入，``length_m``（含级间段）的全部预算
+   按 9 段分摊。⚠ 级间段（两级之间）与级间舱（intertank，同级两箱之间）是两个
+   部件（§5.9 共性 2）；级间舱高已由 ``Stage.intertank_height_m`` 显式可输入
+   （缺省按派生规则），共底开启时第 6 分区为隔板段、该字段不生效。
 3. ``engine_bay`` 的节点 mesh 为柱段（外模线）；喷管钟形外形需要从推进参数
    派生喉部半径，归后续片（钟形曲线族已可在母线通路手工构建）。
 4. 共底隔板面**已建几何并过四校验**，但本片不作为独立 GLB 节点下发（外模线
    连续性优先；内部结构可见化随剖切/内部视图后续片）。
-5. 整流罩 / 适配器高度为工程惯例常量（无 Schema 输入），见 :data:`_FAIRING_*`。
+5. 整流罩高：``Vehicle.fairing_height_m`` 显式值优先（M5 第二片 Schema 增补）；
+   缺省为工程惯例常量（见 :data:`_FAIRING_*`，现状值保持不变）。适配器高度
+   仍为惯例常量（无 Schema 输入）。
 """
 
 from __future__ import annotations
@@ -71,15 +78,18 @@ from aeroforge.geometry.meridian import (
     resolve,
 )
 from aeroforge.geometry.revolve import GLB_ROOT_NAME, build_solid
-from aeroforge.params.materials import get_material
 from aeroforge.params.propellants import fuel_is_lh2
 from aeroforge.params.schema import Stage, Vehicle
 from aeroforge.perf.mass import (
+    bulkhead_dry_mass_kg,
     dome_height_m,
-    dome_surface_area_m2,
     dome_volume_m3,
+    dry_mass_geometric_kg,
+    partition_heights,
     resolve_tank_geometry,
+    tank_diameters_m,
     tank_dry_masses_kg,
+    tank_roles,
 )
 
 # ---------------------------------------------------------------------------
@@ -253,25 +263,6 @@ class VehicleAssembly:
 # ---------------------------------------------------------------------------
 
 
-def _tank_diameters(stage: Stage) -> dict[str, float]:
-    """两箱直径（省略 = 继承级直径，读 Schema 不硬编码）。"""
-    return {
-        "oxidizer": stage.geometry.oxidizer_tank.diameter_m or stage.diameter_m,
-        "fuel": stage.geometry.fuel_tank.diameter_m or stage.diameter_m,
-    }
-
-
-def _upper_lower_roles(stage: Stage) -> tuple[str, str]:
-    """按储箱排列返回 (上箱角色, 下箱角色)——§5.9 非铁律，读字段。
-
-    ``oxidizer_upper``（默认）⇒ 氧在上（S-IC / S-II / Falcon 9 形态）；
-    ``fuel_upper`` ⇒ 燃料在上（S-IVB 形态：LH₂ 在上占约 3/4）。
-    """
-    if stage.geometry.tank_arrangement == "fuel_upper":
-        return ("fuel", "oxidizer")
-    return ("oxidizer", "fuel")
-
-
 def _tank_material(stage: Stage, role: str) -> str:
     """箱材料引用（读 Schema 字段，不硬编码）。"""
     if role == "oxidizer":
@@ -286,34 +277,36 @@ def _cylinders_derived(stage: Stage) -> bool:
     )
 
 
-def _bulkhead_mass_kg(stage: Stage, bulkhead_height: float) -> float:
-    """共底隔板质量（kg）：隔板表面积 × 面密度（§8.4 同式，材料取燃料/LH₂ 侧）。"""
-    material = get_material(_tank_material(stage, "fuel"))
-    areal_density = material.typical_min_wall_thickness_m * material.density_kg_m3
-    return dome_surface_area_m2(stage.diameter_m, bulkhead_height) * areal_density
-
-
 def plan_stage(stage: Stage) -> StageLayout:
     """推导一级的九段分区布局（自下而上，恰好铺满 ``Stage.length_m``）。
 
-    矢高 ≤ 允许值（§5.5 校验 3，防干涉）：共底矢高不得超过
-    ``级长 − 发动机高 − 两端封头占位``——超限即 :class:`AssemblyError`。
+    分区高度（封头矢高 / 第 6 分区 / 仪器舱）消费
+    :func:`aeroforge.perf.mass.partition_heights`——与 §8.4 几何解析账同一份
+    分区高度事实（M5 第二片裁定），本模块不另算第二套。
+
+    矢高 ≤ 允许值（§5.5 校验 3，防干涉）：共底隔板矢高不得超过
+    ``级长 − 发动机高 − 两端封头占位``；显式级间舱高不得小于两箱相邻封头矢高和
+    （否则两封头相互干涉）——超限即 :class:`AssemblyError`。
     """
     geometry = stage.geometry
-    upper_role, lower_role = _upper_lower_roles(stage)
+    heights = partition_heights(stage)
+    upper_role, lower_role = heights.upper_role, heights.lower_role
     diameter = stage.diameter_m
     engine_height = stage.engine_height_m
-    diameters = _tank_diameters(stage)
+    diameters = tank_diameters_m(stage)
 
     # 封头矢高（OI-37 三级优先级的级层档；None 兜底 0.5 在 dome_height_m 内）
     dome_heights = {
-        role: dome_height_m(diameters[role], stage.flatness_ratio) for role in ("oxidizer", "fuel")
+        "oxidizer": dome_height_m(diameters["oxidizer"], stage.flatness_ratio),
+        "fuel": dome_height_m(diameters["fuel"], stage.flatness_ratio),
     }
 
-    # 中段（第 6 分区）：非共底 = 级间舱（容纳两只相邻封头）；共底 = 隔板段（按级径）
+    # 中段（第 6 分区）：共底 = 隔板段（按级径）；非共底 = 级间舱（显式值优先，
+    # 缺省派生 = 两箱相邻封头矢高和——partition_heights 已裁定，此处做防干涉校验）
     if geometry.common_bulkhead:
-        h_bulkhead = dome_height_m(diameter, stage.flatness_ratio)
-        h_mid = h_bulkhead
+        h_bulkhead = heights.bulkhead_m
+        assert h_bulkhead is not None
+        h_mid = heights.h_mid_m
         allowed = (
             stage.length_m - engine_height - dome_heights[lower_role] - dome_heights[upper_role]
         )
@@ -326,10 +319,19 @@ def plan_stage(stage: Stage) -> StageLayout:
             raise AssemblyError(msg)
     else:
         h_bulkhead = None
-        h_mid = dome_heights[upper_role] + dome_heights[lower_role]
+        h_mid = heights.h_mid_m
+        if heights.intertank_source == "user":
+            dome_sum = dome_heights[lower_role] + dome_heights[upper_role]
+            if h_mid < dome_sum - GEOM_TOL:
+                msg = (
+                    f"第 {stage.index} 级级间舱高 {h_mid:.6f} m 小于两箱相邻封头矢高和 "
+                    f"{dome_sum:.6f} m——两只相邻封头将相互干涉（§5.5 校验 3 同判据）。"
+                    "请增大 intertank_height_m，或省略该字段改用派生值。"
+                )
+                raise AssemblyError(msg)
 
-    # 轴向预留：下箱底封头 + 中段 + 上箱顶封头（分区铺满级长的关键扣减）
-    reserved = dome_heights[lower_role] + h_mid + dome_heights[upper_role]
+    # 轴向预留：下箱底封头 + 中段 + 上箱顶封头 + 仪器舱（分区铺满级长的关键扣减）
+    reserved = heights.reserved_m
     ox_estimate, fuel_estimate = resolve_tank_geometry(stage, reserved_m=reserved)
     lengths = {
         "oxidizer": ox_estimate.cylinder_length_m,
@@ -429,7 +431,7 @@ def plan_stage(stage: Stage) -> StageLayout:
             h_mid,
             diameter / 2.0,
             diameter / 2.0,
-            _bulkhead_mass_kg(stage, h_bulkhead),
+            bulkhead_dry_mass_kg(stage, h_bulkhead),
             _tank_material(stage, "fuel"),
             (
                 f"{stage_prefix}.flatness_ratio",
@@ -439,6 +441,9 @@ def plan_stage(stage: Stage) -> StageLayout:
             note="隔板面已过四校验（本片不作为独立 GLB 节点，见模块留白第 4 条）",
         )
     else:
+        intertank_source = (
+            (f"{stage_prefix}.intertank_height_m",) if heights.intertank_source == "user" else ()
+        )
         _add(
             SECTION_INTERTANK,
             h_mid,
@@ -446,7 +451,7 @@ def plan_stage(stage: Stage) -> StageLayout:
             diameter / 2.0,
             0.0,
             stage.material,
-            (f"{stage_prefix}.flatness_ratio", f"{stage_prefix}.diameter_m"),
+            (f"{stage_prefix}.flatness_ratio", f"{stage_prefix}.diameter_m", *intertank_source),
             note=zero_mass_note,
         )
     # 上箱柱段
@@ -474,7 +479,19 @@ def plan_stage(stage: Stage) -> StageLayout:
         (f"{stage_prefix}.flatness_ratio", f"{stage_prefix}.diameter_m"),
         note=zero_mass_note,
     )
-    # avionics：0 高（§5.9 允许；非零需要 Schema 输入，留白）——不产带、不产节点
+    # avionics（第 3 分区，级顶）：显式值优先（M5 第二片 Schema 增补）；缺省 0 高
+    # （§5.9 允许）——0 高不产带、不产节点（部件缺失即无节点，OI-33 演化口径）
+    if heights.avionics_m > GEOM_TOL:
+        _add(
+            SECTION_AVIONICS,
+            heights.avionics_m,
+            diameter / 2.0,
+            diameter / 2.0,
+            0.0,
+            stage.material,
+            (f"{stage_prefix}.avionics_height_m", f"{stage_prefix}.diameter_m"),
+            note=zero_mass_note,
+        )
 
     return StageLayout(
         stage_index=stage.index,
@@ -505,6 +522,9 @@ def _cylinder_solid(radius: float, z_start: float, height: float, label: str) ->
 def _cone_solid(
     radius_bottom: float, radius_top: float, z_start: float, height: float, label: str
 ) -> bd.Solid:
+    # 两底半径相等时退化为圆柱（如整流罩直径 = 上面级直径的构型）——内核拒绝等径圆锥
+    if abs(radius_top - radius_bottom) <= GEOM_TOL:
+        return _cylinder_solid(radius_bottom, z_start, height, label)
     solid = bd.Solid.make_cone(
         radius_bottom, radius_top, height, bd.Plane(origin=(0.0, 0.0, z_start))
     )
@@ -525,6 +545,29 @@ def _fairing_profile(diameter: float, height: float) -> MeridianProfile:
             TangentOgiveSegment(length=nose_height, end_radius=0.0),
         ),
     )
+
+
+def fairing_adapter_heights(vehicle: Vehicle) -> tuple[float, float] | None:
+    """顶级整流罩 / 适配器段高 ``(适配器高, 整流罩高)``；无整流罩返回 ``None``。
+
+    整流罩高：``Vehicle.fairing_height_m`` **显式值优先**（M5 第二片 Schema 增补）；
+    缺省按工程惯例常量 ``min(max(2.2×直径, 5), 20)`` m——assembly 现状值保持不变
+    （惯例值提示只进诊断查询，不做常驻 warning 噪声）。适配器高无 Schema 输入，
+    维持惯例常量。装配树与 2D 分区下发（sections 端点）共同消费本函数——单一实现。
+    """
+    if vehicle.fairing_diameter_m is None:
+        return None
+    fairing_height = vehicle.fairing_height_m
+    if fairing_height is None:
+        fairing_height = min(
+            max(_FAIRING_HEIGHT_DIAMETER_RATIO * vehicle.fairing_diameter_m, _FAIRING_HEIGHT_MIN_M),
+            _FAIRING_HEIGHT_MAX_M,
+        )
+    adapter_height = min(
+        max(_ADAPTER_HEIGHT_DIAMETER_RATIO * vehicle.fairing_diameter_m, _ADAPTER_HEIGHT_MIN_M),
+        _ADAPTER_HEIGHT_MAX_M,
+    )
+    return adapter_height, fairing_height
 
 
 def build_stage_solids(
@@ -584,8 +627,8 @@ def _bulkhead_checks(stage: Stage, layout: StageLayout) -> list[AssemblyCheck]:
     diameter = stage.diameter_m
     radius = diameter / 2.0
     h_b = layout.h_mid
-    upper_role, lower_role = _upper_lower_roles(stage)
-    diameters = _tank_diameters(stage)
+    upper_role, lower_role = tank_roles(stage)
+    diameters = tank_diameters_m(stage)
     d_lower, d_upper = diameters[lower_role], diameters[upper_role]
     l_lower = layout.l_ox if lower_role == "oxidizer" else layout.l_fuel
     l_upper = layout.l_ox if upper_role == "oxidizer" else layout.l_fuel
@@ -855,17 +898,19 @@ def build_assembly(vehicle: Vehicle) -> VehicleAssembly:
                 note=band.note,
             )
         section_mass = sum(band.mass_kg for band in layout.bands)
-        account_mass = sum(tank_dry_masses_kg(stage))
+        account_mass = dry_mass_geometric_kg(stage)
         checks.append(
             AssemblyCheck(
                 check="级质量对拍（装配 vs §8.4 几何解析账）",
                 severity="pass",
                 detail=(
-                    f"第 {stage.index} 级分区质量合计 {section_mass:.3f} kg"
-                    f"（§8.4 账 reserved=0 口径 {account_mass:.3f} kg + 共底隔板；"
-                    "差异来自装配布局的封头占位扣减与隔板补计，属两口径的既知偏差）"
+                    f"第 {stage.index} 级分区质量合计 {section_mass:.3f} kg 与 §8.4 几何解析账 "
+                    f"{account_mass:.3f} kg 同源闭合（两账消费同一份 §5.9 分区高度与隔板干重，"
+                    "M5 第二片 reserved 口径差复核的裁定；账覆盖贮箱与共底隔板）"
                 ),
                 stage_index=stage.index,
+                value=section_mass,
+                expected=account_mass,
             )
         )
 
@@ -909,17 +954,12 @@ def build_assembly(vehicle: Vehicle) -> VehicleAssembly:
 
     # 顶级：载荷适配器 + 整流罩（有整流罩时，§5.9 表；vehicle 级输入）
     top_stage = vehicle.stages[-1]
-    if vehicle.fairing_diameter_m is not None:
+    top_heights = fairing_adapter_heights(vehicle)
+    if top_heights is not None and vehicle.fairing_diameter_m is not None:
         fairing_diameter = vehicle.fairing_diameter_m
+        adapter_height, fairing_height = top_heights
         core_max_radius = max(core_max_radius, fairing_diameter / 2.0)
-        fairing_height = min(
-            max(_FAIRING_HEIGHT_DIAMETER_RATIO * fairing_diameter, _FAIRING_HEIGHT_MIN_M),
-            _FAIRING_HEIGHT_MAX_M,
-        )
-        adapter_height = min(
-            max(_ADAPTER_HEIGHT_DIAMETER_RATIO * fairing_diameter, _ADAPTER_HEIGHT_MIN_M),
-            _ADAPTER_HEIGHT_MAX_M,
-        )
+        fairing_explicit = vehicle.fairing_height_m is not None
         adapter_label = section_node_name(top_stage.index, SECTION_ADAPTER)
         children.append(
             _cone_solid(
@@ -957,8 +997,15 @@ def build_assembly(vehicle: Vehicle) -> VehicleAssembly:
             length_m=fairing_height,
             mass_kg=0.0,
             material=vehicle.material,
-            source_fields=("fairing_diameter_m",),
-            note="高度为工程惯例常量（柱段 + 切线卵形）；质量留白",
+            source_fields=(
+                "fairing_diameter_m",
+                *(("fairing_height_m",) if fairing_explicit else ()),
+            ),
+            note=(
+                "高度为用户显式指定（柱段 + 切线卵形）；质量留白"
+                if fairing_explicit
+                else "高度为工程惯例常量（柱段 + 切线卵形，可显式指定 fairing_height_m）；质量留白"
+            ),
         )
         z_offset += fairing_height
 
@@ -1044,6 +1091,7 @@ __all__ = [
     "build_assembly",
     "build_fin_solids",
     "build_stage_solids",
+    "fairing_adapter_heights",
     "plan_stage",
     "section_node_name",
 ]

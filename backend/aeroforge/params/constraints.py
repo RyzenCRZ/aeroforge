@@ -409,6 +409,18 @@ def _check_mission(vehicle: Vehicle) -> list[Diagnostic]:
                     "整流罩需罩住载荷与上面级，通常不小于最大级直径；请确认该值",
                 )
             )
+        # §5.9 分区（M5 第二片）：整流罩高缺省走工程惯例常量（assembly 现状值）。
+        # 惯例值提示**只进诊断查询**（用户主动校验参数时可见），不做常驻 warning 噪声。
+        if vehicle.fairing_height_m is None:
+            items.append(
+                _warn(
+                    "ENGINEER_FAIRING_HEIGHT_DEFAULTED",
+                    "fairing_height_m",
+                    "整流罩高未显式指定，将按工程惯例常量处理："
+                    "min(max(2.2×整流罩直径, 5), 20) m（非权威来源）",
+                    "如需精确控制 2D 剖面 / 装配树的整流罩段高，请显式填写 fairing_height_m",
+                )
+            )
 
     if vehicle.aero is None:
         items.append(

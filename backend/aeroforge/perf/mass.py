@@ -28,9 +28,30 @@
   来源，§8.4）。显式传 ``reserved_m=0.0`` 可退回旧口径（仅限对照）。
 - 推进剂质量 = 氧箱容积 × ρ_ox + 燃料箱容积 × ρ_fuel，再乘**级层**加注比例
   （QA-2：级层加注比例是 M4 定尺求解的整体输入）。
-- 几何干重 = 湿面积 × 面密度；面密度 = 材料库典型壁厚 × ρ_material（**工程惯例
-  估算**：刻意不用用户的 Tank.wall_thickness_m，保持几何来源独立于用户细观输入）；
-  共底开启时并入隔板干重（§8.4 几何解析账覆盖贮箱与共底隔板）。
+- **几何干重（M6 前置专项①，分部位物理模型）**：逐级干重的清算式为
+
+  ``m_dry = (Σ_箱 A_湿·ρ·t + m_隔板 + m_发动机) / (1 − Σf_非贮箱)``
+
+  其中贮箱壁厚取**两路物理推导的大者**再乘焊缝/加强框加成系数：
+
+  - 承压路径 ``t_P = P·R/(σ_y·k)``（薄壁压力容器环向公式；P = 镇压力惯例值、
+    k = 安全系数、σ_y = 材料库室温屈服）；
+  - 轴压稳定路径 ``t_ax = √(P_ax / (2π·γ(t)·0.605·E))``（NASA SP-8007 薄壁圆柱
+    轴压屈曲，经典小挠度解系数 0.605〔ν=0.3〕，折减系数 γ 按 SP-8007 经验式
+    ``γ = 1 − 0.908(1 − e^(−φ))``、``φ = (1/16)√(R/t)`` 隐式迭代；轴压载荷以
+    **本级推进剂重量**作量级代理——下箱偏不保守〔上级与载荷未入账〕、上箱偏
+    保守，工程惯例近似并留痕）；大运载贮箱壁实际由轴压/屈曲主导尺寸，只按
+    承压推导会低估一个量级（M5 收官片登记的 ~10 倍来源差的物理根因）。
+  - 面密度 = ρ_material × t（刻意不用用户的 Tank.wall_thickness_m，保持几何
+    来源独立于用户细观输入）。
+  - 发动机质量 = 台数 × F_vac/(T/W·g₀)，T/W 按循环分档取文献惯例值。
+  - 非贮箱部位（推力结构/机架、推进系统管路与增压、裙段/级间段/舱段/航电等
+    固定件）按**占级干重质量分数**闭环：各部位质量 = f_i × m_dry，分数基准与
+    贮箱壁结果按上式闭合（分配比例见 :data:`NON_TANK_MASS_FRACTIONS`）。
+
+  **防循环验证红线**：本账全部参数取文献工程惯例（集中参数表见本模块常量区，
+  逐项出处），GCAT σ 干重样本只作对照判据（holdout），**不进入本账标定回路**
+  ——σ 回归账（本模块后半）保持独立，交叉校验才有判据效力。
 """
 
 from __future__ import annotations
@@ -45,8 +66,8 @@ from typing import Literal
 from aeroforge.data.models import EngineRecord
 from aeroforge.data.repository import CatalogRepository
 from aeroforge.params import propellants
-from aeroforge.params.dag import volumetric_ratio
-from aeroforge.params.materials import get_material
+from aeroforge.params.dag import G0, volumetric_ratio
+from aeroforge.params.materials import MaterialEntry, get_material
 from aeroforge.params.schema import Stage
 
 #: OI-37：扁度系数缺省值（2:1 椭圆封头）。兜底发生在本层（派生处），Schema 存 None。
@@ -57,6 +78,62 @@ CROSS_CHECK_THRESHOLD = 0.2
 
 #: 回归分箱的最小样本数：低于该值的箱并入相邻箱（§8.4 回归要求 + 任务口径）。
 MIN_BIN_SIZE = 5
+
+# ---------------------------------------------------------------------------
+# 分部位干重模型参数表（M6 前置专项①：集中定义、逐项出处）
+# ---------------------------------------------------------------------------
+# ⚠ 全部为「工程惯例非权威」量级，只用于 §8.4 几何解析干重账；GCAT σ 回归账
+# （本模块后半）保持独立——σ 干重样本只作对照判据（holdout），不进入本表标定
+# 回路（防循环验证红线）。改任一数值即视为质量模型版本变化：同步递增
+# :data:`MASS_MODEL_VERSION`，使几何产物缓存键失效（§9.2 / cache.store）。
+
+
+#: 质量模型版本（参与几何产物缓存键，见 cache.store.compute_vehicle_key）：
+#: 分部位物理模型首发版。参数表变更时必须递增，防旧缓存命中旧质量账。
+MASS_MODEL_VERSION = "m6-partwise-1"
+
+#: 泵压式液体贮箱镇压力（箱底增压，Pa）：工程惯例中值（典型 2–3 bar；
+#: Sutton《Rocket Propulsion Elements》贮箱增压口径；非权威）。
+TANK_ULLAGE_PRESSURE_PA = 2.5e5
+
+#: 承压路径安全系数 k（无量纲）：任务口径 1.25–1.5 取保守端 1.5（压力容器惯例）。
+PRESSURE_SAFETY_FACTOR = 1.5
+
+#: 焊缝/加强框加成系数（无量纲）：等效壁厚加成——搅拌摩擦焊焊缝增强与化铣
+#: 加强框/壁板的工程惯例区间 1.2–1.5 取中值 1.35；非权威。
+WELD_STIFFENER_FACTOR = 1.35
+
+#: NASA SP-8007《Buckling of Thin-Walled Circular Cylinders》轴压屈曲：
+#: 经典小挠度解系数 1/√(3(1−ν²)) = 0.605（ν = 0.3）、折减经验式系数 0.908 与
+#: φ = (1/16)·√(R/t) 的分母 16。
+SP8007_CLASSICAL_COEFF = 0.605
+SP8007_KNOCKDOWN_COEFF = 0.908
+SP8007_PHI_DIVISOR = 16.0
+
+#: 发动机推重比 T/W（真空推力/自重，无量纲）按循环分档的工程惯例代表值：
+#: 燃气发生器 80（公开发动机手册样本 F-1 94 / H-1 92 / RS-27 80 / J-2 59 /
+#: RS-68 52 / Merlin 1D 213——区间 52–213 的中位档）；分级燃烧 75（YF-100 74 /
+#: RD-180 77）；膨胀循环与挤压式 40（RL10 37–59 / AJ10 ≈37，小推力级轻构造）。
+#: 非权威，仅作干重量级估算。
+ENGINE_THRUST_TO_WEIGHT: dict[str, float] = {
+    "gas_generator": 80.0,
+    "staged_combustion": 75.0,
+    "expander": 40.0,
+    "pressure_fed": 40.0,
+}
+
+#: 非贮箱部位质量分数（占级干重比例；清算式各部位质量 = f_i × m_dry）：
+#: 液体级干重构成的文献惯例区间中值——推力结构/机架 3–8% 取 4%、推进系统管路
+#: 与增压 3–6% 取 4.5%、裙段/级间段/舱段/航电及其他固定件 8–12% 取 9%；
+#: 合计 17.5%（惯例区间 14–26% 之内）。非权威。
+NON_TANK_MASS_FRACTIONS: dict[str, float] = {
+    "thrust_structure": 0.04,
+    "plumbing_pressurization": 0.045,
+    "skirts_avionics_misc": 0.09,
+}
+
+#: 非贮箱部位分数合计（清算式分母 1 − Σf）。
+NON_TANK_FRACTION_TOTAL = sum(NON_TANK_MASS_FRACTIONS.values())
 
 #: §8.4 回归要求「只用 official / literature 标签的样本」——其余 quality 值跳过并计数。
 _ALLOWED_QUALITY = frozenset({"official", "literature"})
@@ -402,30 +479,161 @@ def propellant_mass_kg(stage: Stage) -> float:
     ) * stage.fill_fraction
 
 
+def axial_buckling_thickness_m(
+    axial_load_n: float, elastic_modulus_pa: float, radius_m: float
+) -> float:
+    """轴压屈曲等价壁厚（m，NASA SP-8007）：``t = √(P_ax / (2π·γ(t)·0.605·E))``。
+
+    由「环向均布轴压应力 σ = P_ax/(2πR·t) = 折减屈曲应力 γ·0.605·E·t/R」解出，
+    R 在两式相乘时消去。折减系数 γ 依 SP-8007 经验式 ``γ = 1 − 0.908(1 − e^(−φ))``、
+    ``φ = (1/16)√(R/t)``——是 t 的函数，故隐式迭代（t ∈ [√(base/1), √(base/0.092)]
+    有界，映射向不动点单调收缩，64 次内收敛到相对 1e-12）。载荷 ≤ 0 返回 0
+    （无轴压尺寸需求，承压路径仍生效）。
+    """
+    if axial_load_n <= 0.0:
+        return 0.0
+    base = axial_load_n / (2.0 * math.pi * SP8007_CLASSICAL_COEFF * elastic_modulus_pa)
+    thickness = math.sqrt(base / 0.4)  # γ = 0.4 初值（迭代收敛域中点）
+    for _ in range(64):
+        phi = math.sqrt(radius_m / thickness) / SP8007_PHI_DIVISOR
+        gamma = 1.0 - SP8007_KNOCKDOWN_COEFF * (1.0 - math.exp(-phi))
+        updated = math.sqrt(base / gamma)
+        if abs(updated - thickness) <= 1e-12 * updated:
+            return updated
+        thickness = updated
+    return thickness
+
+
+def tank_areal_density_kg_m2(
+    material: MaterialEntry, tank_diameter_m: float, axial_load_n: float
+) -> float:
+    """贮箱壁面密度（kg/m²）= ρ · max(承压, 轴压稳定) · 焊缝加成。
+
+    - 承压 ``t_P = P·R/(σ_y·k)``（薄壁压力容器环向公式，P/k 取参数表惯例值）；
+    - 轴压稳定 ``t_ax``（:func:`axial_buckling_thickness_m`，SP-8007）——大运载
+      贮箱壁的实际尺寸主导路径（环向应力仅需亚毫米壁厚，而轴压/屈曲需毫米级）；
+    - 两者取大再乘焊缝/加强框加成系数（参数表出处见常量注记）。
+    """
+    radius = tank_diameter_m / 2.0
+    t_pressure = (
+        TANK_ULLAGE_PRESSURE_PA * radius / (material.yield_strength_pa * PRESSURE_SAFETY_FACTOR)
+    )
+    t_axial = axial_buckling_thickness_m(axial_load_n, material.elastic_modulus_pa, radius)
+    t_effective = max(t_pressure, t_axial) * WELD_STIFFENER_FACTOR
+    return material.density_kg_m3 * t_effective
+
+
+def engine_dry_mass_kg(stage: Stage) -> float:
+    """发动机干重（kg）= 台数 × F_vac/(T/W·g₀)。
+
+    T/W 按循环分档取文献惯例值（:data:`ENGINE_THRUST_TO_WEIGHT`，出处见常量
+    注记）；F_vac 取发动机真空推力（Schema 必填，量级口径对两类工作点一致）。
+    """
+    thrust_to_weight = ENGINE_THRUST_TO_WEIGHT[stage.engine.cycle]
+    return stage.engine_count * stage.engine.thrust_vacuum_n / (thrust_to_weight * G0)
+
+
+@dataclass(frozen=True, slots=True)
+class StageDryMassBreakdown:
+    """逐级干重的分部位账目（M6 前置专项①；:func:`dry_mass_geometric_kg` 的展开）。
+
+    清算式：``total = (两箱壁 + 隔板 + 发动机) / (1 − Σf)``；
+    非贮箱各部位质量 = f_i × total（占级干重分数闭环，分数见
+    :data:`NON_TANK_MASS_FRACTIONS`）。装配树分区填实与本账同源（两账对拍闭合）。
+    """
+
+    tank_oxidizer_kg: float
+    """氧化剂箱壁干重（kg，湿面积 × 物理面密度）。"""
+
+    tank_fuel_kg: float
+    """燃料箱壁干重（kg，同上）。"""
+
+    bulkhead_kg: float
+    """共底隔板干重（kg）；非共底为 0.0（:func:`bulkhead_dry_mass_kg` 口径）。"""
+
+    engine_kg: float
+    """发动机干重（kg，:func:`engine_dry_mass_kg` 推算）。"""
+
+    residual_thrust_structure_kg: float
+    """非贮箱部位——推力结构/机架（kg，= f_thrust × total）。"""
+
+    residual_plumbing_kg: float
+    """非贮箱部位——推进系统管路与增压（kg，= f_plumb × total）。"""
+
+    residual_skirts_misc_kg: float
+    """非贮箱部位——裙段/级间段/舱段/航电及其他固定件（kg）。"""
+
+    total_kg: float
+    """级干重合计（kg）== :func:`dry_mass_geometric_kg`。"""
+
+
+def stage_dry_mass_breakdown_kg(
+    stage: Stage, *, reserved_m: float | None = None
+) -> StageDryMassBreakdown:
+    """逐级干重的分部位账目（清算式见模块 docstring；全部参数出处见常量参数表）。
+
+    贮箱湿面积按**分区箱段高**计（与装配树同源，``reserved_m`` 语义同
+    :func:`resolve_tank_geometry`）；轴压载荷以**本级推进剂重量**（同一份分区
+    几何的推进剂账）作量级代理——两箱同载（工程惯例近似，留痕不精确分箱）。
+    """
+    ox, fuel = resolve_tank_geometry(stage, reserved_m=reserved_m)
+    props = propellants.properties(stage.propellant)
+    m_prop = (
+        ox.volume_m3 * props.density_ox_kg_m3 + fuel.volume_m3 * props.density_fuel_kg_m3
+    ) * stage.fill_fraction
+    axial_load_n = m_prop * G0
+
+    tank_masses: dict[str, float] = {}
+    for estimate, role, material_id in (
+        (ox, "oxidizer", stage.geometry.oxidizer_tank.material),
+        (fuel, "fuel", stage.geometry.fuel_tank.material),
+    ):
+        material = get_material(material_id)
+        tank_masses[role] = estimate.wetted_area_m2 * tank_areal_density_kg_m2(
+            material, estimate.diameter_m, axial_load_n
+        )
+
+    bulkhead = 0.0
+    if stage.geometry.common_bulkhead:
+        heights = partition_heights(stage)
+        assert heights.bulkhead_m is not None
+        bulkhead = bulkhead_dry_mass_kg(stage, heights.bulkhead_m)
+
+    engine = engine_dry_mass_kg(stage)
+    core = tank_masses["oxidizer"] + tank_masses["fuel"] + bulkhead + engine
+    total = core / (1.0 - NON_TANK_FRACTION_TOTAL)
+    fractions = NON_TANK_MASS_FRACTIONS
+    return StageDryMassBreakdown(
+        tank_oxidizer_kg=tank_masses["oxidizer"],
+        tank_fuel_kg=tank_masses["fuel"],
+        bulkhead_kg=bulkhead,
+        engine_kg=engine,
+        residual_thrust_structure_kg=fractions["thrust_structure"] * total,
+        residual_plumbing_kg=fractions["plumbing_pressurization"] * total,
+        residual_skirts_misc_kg=fractions["skirts_avionics_misc"] * total,
+        total_kg=total,
+    )
+
+
 def tank_dry_masses_kg(stage: Stage, *, reserved_m: float | None = None) -> tuple[float, float]:
     """按箱分列的几何解析干重（kg）：``(氧化剂箱, 燃料箱)``。
 
-    与 :func:`dry_mass_geometric_kg` 同式（湿面积 × 面密度；面密度 = 材料库
-    ``typical_min_wall_thickness_m × density_kg_m3``，工程惯例估算——刻意不用
-    用户的壁厚输入，保持本来源独立于细观参数）。``reserved_m`` 语义同
+    与 :func:`stage_dry_mass_breakdown_kg` 同源（湿面积 × 物理面密度；壁厚 =
+    承压/轴压两路物理推导取大 × 焊缝加成，参数表见模块常量区——刻意不用用户
+    的 Tank.wall_thickness_m，保持本来源独立于细观参数）。``reserved_m`` 语义同
     :func:`resolve_tank_geometry`（缺省 = 分区轴向预留，与装配树同源）。
     """
-    ox, fuel = resolve_tank_geometry(stage, reserved_m=reserved_m)
-    masses: list[float] = []
-    for estimate, material_id in (
-        (ox, stage.geometry.oxidizer_tank.material),
-        (fuel, stage.geometry.fuel_tank.material),
-    ):
-        material = get_material(material_id)
-        areal_density = material.typical_min_wall_thickness_m * material.density_kg_m3
-        masses.append(estimate.wetted_area_m2 * areal_density)
-    return (masses[0], masses[1])
+    breakdown = stage_dry_mass_breakdown_kg(stage, reserved_m=reserved_m)
+    return (breakdown.tank_oxidizer_kg, breakdown.tank_fuel_kg)
 
 
 def bulkhead_dry_mass_kg(stage: Stage, bulkhead_height_m: float) -> float:
-    """共底隔板干重（kg）：隔板表面积 × 面密度（§8.4 同式，材料取燃料/LH₂ 侧）。
+    """共底隔板干重（kg）：隔板表面积 × 面密度（材料取燃料/LH₂ 侧）。
 
-    驻留本模块（而非装配层）：§8.4 几何解析账覆盖**贮箱与共底隔板**（§5.9 口径 2），
+    面密度口径与箱壁**不同**：共底隔板只承担两箱间的差压与惯性载荷（无环向
+    镇压、无轴压柱稳定需求），按材料库**最小工艺壁厚**口径取值——与承压/轴压
+    双路尺寸的箱壁分属不同载荷谱，故「共底另计」（任务口径）。驻留本模块
+    （而非装配层）：§8.4 几何解析账覆盖**贮箱与共底隔板**（§5.9 口径 2），
     装配树的隔板质量贡献与本账必须同源——单一实现，两处消费。
     """
     material = get_material(stage.geometry.fuel_tank.material)
@@ -434,17 +642,14 @@ def bulkhead_dry_mass_kg(stage: Stage, bulkhead_height_m: float) -> float:
 
 
 def dry_mass_geometric_kg(stage: Stage) -> float:
-    """几何解析干重（kg）= 两箱湿面积 × 面密度之和 + 共底隔板（开启时）。
+    """几何解析干重（kg，M6 前置专项①分部位物理模型）。
 
-    贮箱湿面积按**分区箱段高**计（与装配树同源）；共底开启时并入隔板干重
-    （§8.4 几何解析账的覆盖范围：贮箱与共底隔板）。
+    清算式：``m_dry = (两箱壁物理面密度账 + 共底隔板〔开启时〕 + 发动机推算)
+    / (1 − Σf_非贮箱)``；全部参数出处见模块常量参数表，GCAT σ 干重样本只作
+    对照（holdout），不进入本账标定回路（防循环验证红线）。贮箱湿面积按
+    **分区箱段高**计（与装配树同源）。
     """
-    total = sum(tank_dry_masses_kg(stage))
-    if stage.geometry.common_bulkhead:
-        heights = partition_heights(stage)
-        assert heights.bulkhead_m is not None
-        total += bulkhead_dry_mass_kg(stage, heights.bulkhead_m)
-    return total
+    return stage_dry_mass_breakdown_kg(stage).total_kg
 
 
 @dataclass(frozen=True, slots=True)
@@ -472,8 +677,9 @@ def cross_check(stage: Stage) -> CrossCheckOutcome:
 
     σ 推算干重以**几何解析推进剂质量**为基数（同一容积口径下比较结构效率），
     偏差 > 20% 意味着构型异常或外推（§8.4）——单来源不得作为结论。
-    两侧的贮箱几何均消费九段分区高度（M5 第二片起同源）；偏差的本底来自
-    面密度干重模型（湿面积 × 典型壁厚）与统计 σ 的来源差，与分区口径无关。
+    两侧的贮箱几何均消费九段分区高度（M5 第二片起同源）；几何侧干重为分部位
+    物理模型（M6 前置专项①，清算式见模块 docstring），残余偏差的本底是模型
+    颗粒度与统计 σ 的来源差，与分区口径无关。
     """
     m_prop = propellant_mass_kg(stage)
     sigma = stage.structure_coefficient
@@ -752,8 +958,18 @@ def regress_structure_coefficients(repository: CatalogRepository) -> SigmaRegres
 __all__ = [
     "CROSS_CHECK_THRESHOLD",
     "DEFAULT_FLATNESS_RATIO",
+    "ENGINE_THRUST_TO_WEIGHT",
+    "MASS_MODEL_VERSION",
     "MIN_BIN_SIZE",
+    "NON_TANK_FRACTION_TOTAL",
+    "NON_TANK_MASS_FRACTIONS",
+    "PRESSURE_SAFETY_FACTOR",
     "SIGMA_INTERVALS",
+    "SP8007_CLASSICAL_COEFF",
+    "SP8007_KNOCKDOWN_COEFF",
+    "SP8007_PHI_DIVISOR",
+    "TANK_ULLAGE_PRESSURE_PA",
+    "WELD_STIFFENER_FACTOR",
     "CrossCheckOutcome",
     "PartitionHeights",
     "Position",
@@ -762,7 +978,9 @@ __all__ = [
     "SigmaBinSummary",
     "SigmaRegressionReport",
     "SigmaSample",
+    "StageDryMassBreakdown",
     "TankGeometryEstimate",
+    "axial_buckling_thickness_m",
     "bulkhead_dry_mass_kg",
     "classify_propellant",
     "cross_check",
@@ -770,13 +988,16 @@ __all__ = [
     "dome_surface_area_m2",
     "dome_volume_m3",
     "dry_mass_geometric_kg",
+    "engine_dry_mass_kg",
     "partition_heights",
     "partition_reserved_m",
     "propellant_mass_kg",
     "regress_structure_coefficients",
     "resolve_position",
     "resolve_tank_geometry",
+    "stage_dry_mass_breakdown_kg",
     "summarize_sigma_bins",
+    "tank_areal_density_kg_m2",
     "tank_diameters_m",
     "tank_dry_masses_kg",
     "tank_roles",

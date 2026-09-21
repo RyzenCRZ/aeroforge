@@ -18,7 +18,8 @@
 
 数学结构：给定 ΔV 分配后，第 N..2 级的质量链**与 GLOW 无关**（由载荷逐级下推
 闭式解出）；唯一自由度是 GLOW——它同时决定芯一级质量（质量守恒倒推）与其**实算
-ΔV**（含 0 级段）。残差是 GLOW 的单调光滑函数，割线法收敛到机器精度地板。
+ΔV**（含 0 级段）。无助推器时残差是 GLOW 的单调光滑函数，割线法收敛到机器精度
+地板；含助推器时的两处非光滑机制与外层处置见「外层迭代稳健性」一节。
 
 ΔV 级间分配（Lagrange 初值）
 ---------------------------
@@ -46,6 +47,34 @@
   权威），缺失时用 :mod:`aeroforge.perf.mass` 的几何解析估算补齐（兑现 staging
   的 deferred 承诺，禁止编造）；干重一律按其 σ 派生（σ 是存储权威）。
 
+外层迭代稳健性（M6 前置专项②：M5 收官片登记的「2-循环不收敛」）
+----------------------------------------------------------------
+割线的收敛前提是迭代点不重访且残差沿路径光滑。含助推器构型有两处破坏前提的
+机制（只与外层求根有关，内层账与 ΔV 分配不受影响）：
+
+1. **可行下限处的夹持重访（失败区的真实根因）**：0 级段助推器是**定尺账**
+   （推进剂 / 干重来自显式箱长或几何解析，不随 GLOW 迭代），GLOW 可行下限 =
+   上面 stacks + 助推器账。当目标 ΔV 低于下限处的 ΣΔV（助推器 + 上面级已超
+   目标）时残差在 ``[下限, ∞)`` 上恒正、**无根**——割线外推越界被 safeguard
+   夹回下限，同点重复求值 → 残差完全相同 → 分母归零，4 次内停摆，形似
+   「两点振荡」。这是目标的物理不可行，不是慢收敛（实测：CZ-5 定尺助推器在
+   裸 LEO 锚定 9 650 m/s 下即落此区，残差(下限) ≈ +0.09·目标）。
+2. **0 级段封顶折点**：芯级跨段烧量封顶分支是 C0 折点（分段光滑），割线跨
+   折点可能出现 GLOW 往返（真两点循环）——可行域内有根时通常仍收敛（残差
+   轨迹符号交替、幅度递减），但停滞形态与 1 不可先验区分。
+
+处置（割线仍是主路径，收敛路径与修复前逐次一致，不加阻尼不换初值）：
+
+- 检测到停滞 / 重访（下一 GLOW 与当前或上一点重合、割线分母归零或非有限）
+  → 转 **bracketing 兜底**：历史样本夹回可行域，与下限 / 上界端点及对数网格
+  一起做符号变化搜索，命中即二分——二分对连续函数的符号变化括号保收敛，
+  不依赖单调性假设；
+- 全可行域无符号变化 → 按端点残差符号给**诚实诊断**：残差(下限) > 0 = 目标
+  低于构型可达下限（0 级段定尺账决定，调高目标或减小助推器）；残差恒负则
+  交由既有「超出可达上限」报错路径。
+
+收敛判据 1e-6 不放宽；迭代上限 200 覆盖割线 + 兜底全部内层求值。
+
 Isp 口径（QA-1 唯一权威）
 -------------------------
 各级 Isp 取 **DAG 已解析的值**（:func:`aeroforge.params.dag.vehicle_inputs`）：
@@ -60,6 +89,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import pairwise
 
 from pydantic import BaseModel, Field
 
@@ -86,6 +116,17 @@ _SECOND_POINT_FACTOR = 1.5
 
 #: GLOW 迭代的 safeguard 上界（防发散外溢；真解远小于该值）。
 _GLOW_MAX_FACTOR = 1e9
+
+#: 同点重访判定（相对 1e-12）：割线停滞（safeguard 夹回同点 / 两点循环）时新点
+#: 与已评估点重合到该量级。真实循环是确定性公式的精确重现（夹持产生逐位相等，
+#: a→b→a 往返由同一割线式复算、至多差末位 ulp）；而收敛中的步长在残差触及
+#: 1e-12 判据前不可能缩小到该量级（割线 ~1.9 阶：残差 ∝ 步长平方），不会误触发。
+_REVISIT_REL_EPS = 1e-12
+
+#: 兜底符号搜索的对数网格点数（端点之外的中间采样）：残差在封顶折点两侧分段
+#: 光滑、至多单谷，端点不括号时对数网格必能命中谷内符号变化。纯算法采样密度，
+#: 非物理系数、无外部来源。
+_BRACKET_GRID_POINTS = 48
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +181,7 @@ class ZeroStageSizing(BaseModel):
 class SolveReport(BaseModel):
     """§8.5 求解报告：迭代次数、残差、上限命中、σ 有效域。"""
 
-    iterations: int = Field(description="割线迭代次数（内层求值次数，≥ 1）")
+    iterations: int = Field(description="内层求值次数（割线主路径 + 停滞兜底，≥ 1）")
     residual_relative: float = Field(description="最终残差 |ΣΔV − 目标| / 目标")
     converged: bool = Field(description="是否满足 §8.5 收敛判据（1e-6）")
     hit_iteration_limit: bool = Field(description="是否命中 200 次迭代上限")
@@ -466,6 +507,133 @@ def _make_inner(
     return evaluate
 
 
+def _same_point(a: float, b: float) -> bool:
+    """两个 GLOW 是否为同一求值点（相对 1e-12，见 :data:`_REVISIT_REL_EPS`）。"""
+    return abs(a - b) <= _REVISIT_REL_EPS * max(abs(a), abs(b), 1.0)
+
+
+def _bracketing_fallback(
+    evaluate: Callable[[float], _InnerState],
+    samples: Sequence[tuple[float, float]],
+    *,
+    glow_floor_kg: float,
+    glow_cap_kg: float,
+    target_delta_v_m_s: float,
+    zero_stage: _ZeroStageInput | None,
+    iterations_used: int,
+    trail: list[float],
+) -> tuple[_InnerState, int, bool]:
+    """割线停滞（同点重访 / 两点循环 / 残差平台）后的 bracketing 兜底。
+
+    只在割线停滞时进入——收敛路径不经过本函数。残差在可行域
+    ``[下限·(1+1e-9), 上界]`` 上连续（0 级段封顶折点是 C0、仍连续），故对任意
+    含符号变化的括号二分**保收敛**，不依赖单调性假设（含助推器构型的残差在
+    封顶折点两侧分段光滑，割线历史样本已证明可能跨折点往返）。
+
+    求值经济性：割线历史点落在可行域内的直接复用其残差（不重算）；越界点
+    （外推被夹回前）夹回可行域后与下限 / 上界端点一起重建样本集；端点不括号
+    时补对数网格扫描（:data:`_BRACKET_GRID_POINTS`）。全可行域无符号变化 =
+    连续函数在连通域上无根，按端点残差符号给**诚实诊断**：
+
+    - 残差(下限) > 0：目标 ΔV 低于构型可达下限——0 级段助推器是定尺账（独立
+      于 GLOW 迭代），GLOW 压到下限（芯一级质量 → 0⁺）时 ΣΔV 已超目标。这正是
+      M5 收官片登记的「2-循环不收敛」根因：割线外推越界被 safeguard 夹回下限、
+      同点重访、分母归零、4 次内停摆——是目标的物理不可行，不是迭代不收敛；
+    - 残差恒负：目标超出可达上限——返回后交由既有通用报错（文案不重复）。
+
+    返回 ``(state, iterations, hit_limit)``：``state`` 取已见最小 |残差| 的求值
+    结果（未达判据时交由调用方收敛检查裁决）；``iterations`` 为含割线阶段与
+    本兜底的**全部**内层求值次数（报告口径）；``hit_limit`` 在 200 次预算耗尽
+    时置位。``trail`` 就地追加兜底阶段的逐次相对残差（诊断账）。
+    """
+    lower = glow_floor_kg * (1.0 + 1e-9)
+    iterations = 0
+    best_state: _InnerState | None = None
+
+    def probe(glow: float) -> _InnerState:
+        nonlocal iterations, best_state
+        state = evaluate(min(max(glow, lower), glow_cap_kg))
+        trail.append(state.residual_m_s / target_delta_v_m_s)
+        iterations += 1
+        if best_state is None or abs(state.residual_m_s) < abs(best_state.residual_m_s):
+            best_state = state
+        return state
+
+    # 样本集 = 割线历史点（域内直接复用）+ 可行域两端点；按 GLOW 排序找相邻符号变化
+    measured: list[tuple[float, float]] = [
+        (glow, residual) for glow, residual in samples if lower <= glow <= glow_cap_kg
+    ]
+    lo_state = probe(lower)
+    hi_state = probe(glow_cap_kg)
+    measured.extend(((lower, lo_state.residual_m_s), (glow_cap_kg, hi_state.residual_m_s)))
+    measured.sort(key=lambda item: item[0])
+
+    bracket: tuple[float, float, float, float] | None = None  # (g_a, r_a, g_b, r_b)
+    for (glow_a, residual_a), (glow_b, residual_b) in pairwise(measured):
+        if residual_a * residual_b < 0.0:
+            bracket = (glow_a, residual_a, glow_b, residual_b)
+            break
+
+    if bracket is None:
+        ratio = glow_cap_kg / lower
+        prev_glow, prev_residual = lower, lo_state.residual_m_s
+        for k in range(1, _BRACKET_GRID_POINTS):
+            glow = lower * ratio ** (k / _BRACKET_GRID_POINTS)
+            state = probe(glow)
+            if prev_residual * state.residual_m_s < 0.0:
+                bracket = (prev_glow, prev_residual, glow, state.residual_m_s)
+                break
+            prev_glow, prev_residual = glow, state.residual_m_s
+
+    if bracket is not None:
+        glow_a, residual_a, glow_b, residual_b = bracket
+        while iterations_used + iterations < MAX_ITERATIONS:
+            mid = 0.5 * (glow_a + glow_b)
+            if mid <= glow_a or mid >= glow_b:
+                break  # 已到浮点分辨率地板：区间不再收缩
+            state_mid = probe(mid)
+            residual_mid = state_mid.residual_m_s
+            if abs(residual_mid) <= _INTERNAL_TOLERANCE * target_delta_v_m_s:
+                return state_mid, iterations_used + iterations, False
+            if (residual_a < 0.0) == (residual_mid < 0.0):
+                glow_a, residual_a = mid, residual_mid
+            else:
+                glow_b, residual_b = mid, residual_mid
+        total = iterations_used + iterations
+        return best_state if best_state is not None else hi_state, total, (total >= MAX_ITERATIONS)
+
+    if lo_state.residual_m_s > 0.0:
+        if zero_stage is not None:
+            ledger_note = (
+                f"0 级段助推器为定尺账（推进剂 {zero_stage.booster_propellant_kg:.0f} kg + "
+                f"干重 {zero_stage.booster_dry_kg:.0f} kg，独立于 GLOW 迭代），GLOW 压到"
+                f"可行下限（芯一级质量 → 0⁺）时 ΣΔV 已达 "
+                f"{target_delta_v_m_s + lo_state.residual_m_s:.1f} m/s"
+            )
+        else:
+            ledger_note = (
+                f"GLOW 可行下限处 ΣΔV 已达 {target_delta_v_m_s + lo_state.residual_m_s:.1f} m/s"
+            )
+        raise SizingError(
+            f"目标 ΔV {target_delta_v_m_s:.1f} m/s 低于该构型的可达下限：{ledger_note}"
+            "——割线外推越界被 safeguard 夹回下限、同点重访使割线分母归零"
+            "（M5 收官片登记的「2-循环不收敛」形态）；该目标物理无解，不是迭代不收敛",
+            suggestion=("调高目标 ΔV（不低于下限处的 ΣΔV），或减小助推器侧级几何 / 数量后重新定尺"),
+            details={
+                "iterations": iterations_used + iterations,
+                "residual_relative": abs(lo_state.residual_m_s) / target_delta_v_m_s,
+                "residual_trail": trail[-10:],
+                "hit_iteration_limit": False,
+            },
+            # 与 SIZING_NO_CONVERGENCE 语义区分：此处是物理无解（残差恒正、无根），
+            # 不是数值方法失败——独立错误码让前端/调用方可按「修目标」而非「重试」处置
+            code="SIZING_INFEASIBLE_DV",
+        )
+    # 残差(下限) < 0 且全域无符号变化：目标超出可达上限——交由既有通用报错
+    total = iterations_used + iterations
+    return best_state if best_state is not None else hi_state, total, (total >= MAX_ITERATIONS)
+
+
 def _rough_glow_kg(
     payload_mass_kg: float,
     stages: Sequence[_StageInput],
@@ -595,19 +763,25 @@ def solve(
         target_delta_v_m_s=target_delta_v_m_s,
     )
 
-    # 外层：GLOW 割线迭代（初值 = 级质量粗估，第二点放大 1.5 倍取斜率）
+    # 外层：GLOW 割线迭代（初值 = 级质量粗估，第二点放大 1.5 倍取斜率）。
+    # 停滞（同点重访 / 两点循环 / 残差平台）时转 bracketing 兜底——见模块
+    # docstring「外层迭代稳健性」与 _bracketing_fallback；收敛路径不受影响。
     glow_0 = _rough_glow_kg(payload, stages, allocation, glow_extra_kg)
     glow_cap = glow_0 * _GLOW_MAX_FACTOR
     trail: list[float] = []
+    samples: list[tuple[float, float]] = []  # 全部 (GLOW, 残差)——兜底建括号时复用
 
     state = evaluate(glow_0)
     trail.append(state.residual_m_s / target_delta_v_m_s)
+    samples.append((glow_0, state.residual_m_s))
     prev_glow, prev_residual = glow_0, state.residual_m_s
     glow = glow_0 * _SECOND_POINT_FACTOR
     state = evaluate(glow)
     trail.append(state.residual_m_s / target_delta_v_m_s)
+    samples.append((glow, state.residual_m_s))
     iterations = 2
     hit_limit = False
+    stalled = False
 
     while abs(state.residual_m_s) > _INTERNAL_TOLERANCE * target_delta_v_m_s:
         if iterations >= MAX_ITERATIONS:
@@ -615,17 +789,38 @@ def solve(
             break
         denominator = state.residual_m_s - prev_residual
         if denominator == 0.0 or not math.isfinite(denominator):
-            break  # 割线停滞（残差平台 / 非有限值）——交由收敛判据裁决
+            stalled = True  # 残差平台（含 safeguard 夹回同点的重访）——转兜底
+            break
         next_glow = glow - state.residual_m_s * (glow - prev_glow) / denominator
         if not math.isfinite(next_glow):
+            stalled = True
             break
         # safeguard：夹在可行下限与防外溢上界之间（最坏情形不越界发散）
         next_glow = min(max(next_glow, glow_floor_kg * (1.0 + 1e-9)), glow_cap)
+        if _same_point(next_glow, glow) or _same_point(next_glow, prev_glow):
+            # 同点重访 = 两点循环（M5 收官片登记的「2-循环」形态）：继续割线
+            # 只会原地踏步——转 bracketing 兜底，不再空耗求值
+            stalled = True
+            break
         prev_glow, prev_residual = glow, state.residual_m_s
         glow = next_glow
         state = evaluate(glow)
         trail.append(state.residual_m_s / target_delta_v_m_s)
+        samples.append((glow, state.residual_m_s))
         iterations += 1
+
+    if stalled:
+        state, iterations, hit_limit_fallback = _bracketing_fallback(
+            evaluate,
+            samples,
+            glow_floor_kg=glow_floor_kg,
+            glow_cap_kg=glow_cap,
+            target_delta_v_m_s=target_delta_v_m_s,
+            zero_stage=zero_input,
+            iterations_used=iterations,
+            trail=trail,
+        )
+        hit_limit = hit_limit or hit_limit_fallback
 
     residual_relative = abs(state.residual_m_s) / target_delta_v_m_s
     converged = residual_relative < CONVERGENCE_TOLERANCE

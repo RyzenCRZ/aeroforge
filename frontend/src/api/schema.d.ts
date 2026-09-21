@@ -2878,7 +2878,7 @@ export interface components {
         SolveReport: {
             /**
              * Iterations
-             * @description 割线迭代次数（内层求值次数，≥ 1）
+             * @description 内层求值次数（割线主路径 + 停滞兜底，≥ 1）
              */
             iterations: number;
             /**

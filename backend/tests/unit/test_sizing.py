@@ -19,7 +19,7 @@ from __future__ import annotations
 import math
 import shutil
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -31,7 +31,10 @@ from aeroforge.errors import SizingError
 from aeroforge.params import staging
 from aeroforge.params.dag import G0
 from aeroforge.params.schema import Booster, Engine, Stage, Vehicle
+from aeroforge.params.templates import cz5_vehicle, falcon9_vehicle, falcon_heavy_vehicle
 from aeroforge.perf import mass as mass_module
+from aeroforge.perf.capacity import anchored_dv_km_s, vehicle_ledger
+from aeroforge.perf.losses import DEFAULT_LAUNCH_SITE
 from aeroforge.perf.mass import (
     MIN_BIN_SIZE,
     SigmaSample,
@@ -44,6 +47,9 @@ from aeroforge.perf.mass import (
 )
 from aeroforge.perf.solver import (
     CONVERGENCE_TOLERANCE,
+    _bracketing_fallback,
+    _InnerState,
+    _StageRow,
     lagrange_initial_allocation,
     solve,
 )
@@ -348,6 +354,113 @@ def test_allocation_sum_mismatch_rejected(two_stage_vehicle: Vehicle) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 外层迭代稳健性（M6 前置专项②：M5 收官片登记的「2-循环不收敛」）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("factory", "expect_zero_stage"),
+    [(falcon9_vehicle, False), (falcon_heavy_vehicle, True), (cz5_vehicle, True)],
+)
+def test_templates_converge_on_anchored_delta_v(
+    factory: Callable[[], Vehicle], expect_zero_stage: bool
+) -> None:
+    """三构型 × 锚定 ΔV（运力表同源需求链）全收敛——M6 前置专项②回归门禁。
+
+    修复前迭代次数（割线主路径，本专项不改变收敛路径）：F9 7 / FH 10 / CZ-5 10；
+    修复前后逐次一致（兜底只在割线停滞时进入，收敛路径不经过）。
+    """
+    vehicle = factory()
+    dv, _source, _assumption = anchored_dv_km_s(
+        vehicle, vehicle_ledger(vehicle), "LEO", DEFAULT_LAUNCH_SITE
+    )
+    result = solve(vehicle, dv * 1000.0)
+    assert result.report.converged
+    assert result.report.residual_relative < CONVERGENCE_TOLERANCE
+    assert result.report.iterations < 50  # 割线主路径量级（兜底网格扫描为停滞专属）
+    assert not result.report.hit_iteration_limit
+    assert result.achieved_delta_v_m_s == pytest.approx(dv * 1000.0, rel=_REL_TOL)
+    assert (result.zero_stage is not None) is expect_zero_stage
+
+
+def test_booster_config_below_feasibility_floor_raises_honest_error() -> None:
+    """0 级段定尺账下目标低于可达下限：诚实诊断而非通用「不收敛」。
+
+    CZ-5 助推器账（≈580 t 推进剂）不随 GLOW 迭代：目标 8 000 m/s 时 GLOW 压到
+    可行下限（芯一级质量 → 0⁺）ΣΔV 已超目标——残差在可行域恒正无根，割线
+    外推越界被 safeguard 夹回下限、同点重访（M5 收官片登记的「2-循环」形态，
+    修复前表现为 4 次求值后的误导性不收敛报错）。
+    """
+    with pytest.raises(SizingError) as excinfo:
+        solve(cz5_vehicle(), 8_000.0)
+    assert excinfo.value.code == "SIZING_INFEASIBLE_DV"
+    assert "低于" in excinfo.value.message and "可达下限" in excinfo.value.message
+    assert "0 级段助推器为定尺账" in excinfo.value.message
+    trail = excinfo.value.details["residual_trail"]
+    assert isinstance(trail, list) and trail
+    assert excinfo.value.details["iterations"] >= 1
+    assert excinfo.value.details["hit_iteration_limit"] is False  # 诊断非预算耗尽
+
+
+def _linear_inner(root_m_s: float, offset_m_s: float = 0.0) -> Callable[[float], _InnerState]:
+    """线性残差 ``r(GLOW) = GLOW − 根 + 偏移`` 的内层替身（白盒测试兜底机制）。"""
+
+    def evaluate(glow_kg: float) -> _InnerState:
+        return _InnerState(
+            glow_kg=glow_kg,
+            first=_StageRow(1, 0.0, 0.0, 0.0, 0.0),
+            zero_delta_v_m_s=0.0,
+            core_propellant_burned_kg=0.0,
+            core_burn_capped=False,
+            residual_m_s=glow_kg - root_m_s + offset_m_s,
+        )
+
+    return evaluate
+
+
+def test_bracketing_fallback_bisects_sign_change_to_machine_precision() -> None:
+    """兜底二分：给定含符号变化的样本（割线停滞场景），收敛到闭式根。
+
+    根 = 1234.5（线性残差闭式解）；二分对连续函数的符号变化括号保收敛，
+    到内部推进地板 1e-12·目标。
+    """
+    evaluate = _linear_inner(1234.5)
+    trail: list[float] = []
+    state, iterations, hit_limit = _bracketing_fallback(
+        evaluate,
+        [(500.0, -734.5), (600.0, -634.5)],  # 割线停滞时留下的历史样本（均负）
+        glow_floor_kg=100.0,
+        glow_cap_kg=1.0e9,
+        target_delta_v_m_s=1000.0,
+        zero_stage=None,
+        iterations_used=2,
+        trail=trail,
+    )
+    assert state.glow_kg == pytest.approx(1234.5, abs=1e-6)
+    assert abs(state.residual_m_s) <= 1e-12 * 1000.0 + 1e-9
+    assert iterations >= 1 and not hit_limit
+    assert trail  # 兜底阶段逐次相对残差入诊断账
+
+
+def test_bracketing_fallback_diagnoses_target_below_floor() -> None:
+    """兜底无符号变化（残差恒正）：诚实诊断「低于可达下限」而非通用不收敛。"""
+    evaluate = _linear_inner(50.0)  # 根在可行下限 100 之下 → 域内恒正、无根
+    with pytest.raises(SizingError) as excinfo:
+        _bracketing_fallback(
+            evaluate,
+            [(200.0, 150.0), (300.0, 250.0)],
+            glow_floor_kg=100.0,
+            glow_cap_kg=1.0e9,
+            target_delta_v_m_s=1000.0,
+            zero_stage=None,
+            iterations_used=2,
+            trail=[],
+        )
+    assert excinfo.value.code == "SIZING_INFEASIBLE_DV"
+    assert "低于" in excinfo.value.message and "可达下限" in excinfo.value.message
+
+
+# ---------------------------------------------------------------------------
 # 质量层：几何解析手算对拍（§8.4）
 # ---------------------------------------------------------------------------
 
@@ -424,12 +537,13 @@ def test_cross_check_threshold_warning(single_stage_vehicle: Vehicle) -> None:
     assert any("交叉校验" in w for w in result.warnings)
     assert result.stages[0].cross_check.exceeds_threshold
 
-    # 反例：σ 与几何口径一致（σ≈0.0068 → σ 推算干重 ≈ 几何干重）→ 无交叉校验警告
-    # （σ 值按 M5 第二片分区同源口径复核：两账同比例缩放，σ 值基本不变）
+    # 反例：σ 与几何口径一致（σ≈0.064 → σ 推算干重 ≈ 几何干重）→ 无交叉校验警告
+    # （σ 值随干重模型重标：M6 前置专项①分部位物理模型下夹具级几何干重 ≈ 2.63e4 kg，
+    # σ_exact = m_geo/(m_geo+m_prop) ≈ 0.0640）
     consistent = single_stage_vehicle.model_copy(
         update={
             "stages": (
-                single_stage_vehicle.stages[0].model_copy(update={"structure_coefficient": 0.0068}),
+                single_stage_vehicle.stages[0].model_copy(update={"structure_coefficient": 0.064}),
             )
         }
     )

@@ -33,12 +33,19 @@ profile 形态，节点名 ``seg-<i>``）并存：本模块是车辆形态构建
 
 质量贡献（§8.4 几何解析账，复用 :mod:`aeroforge.perf.mass`）
 -------------------------------------------------------------
-- 氧箱 / 燃料箱：``wetted_area × 面密度``（:func:`tank_dry_masses_kg`，与
-  :func:`dry_mass_geometric_kg` 同式、按箱分列）。
-- 共底隔板：隔板表面积 × 面密度（:func:`bulkhead_dry_mass_kg`，与 §8.4 账同源）。
-- 其余分区（裙 / 舱段 / 整流罩 / 适配器 / 发动机舱 / 尾翼 / 助推器）：
-  **0.0 + 留白注记**——§8.4 几何解析账只覆盖贮箱，不为无模型部件编造数字
-  （§1.4-4）；尾翼与助推器体积在 metrics 的 ``fins`` / ``boosters`` 块单独成账。
+- 氧箱 / 燃料箱：``wetted_area × 物理面密度``（:func:`tank_dry_masses_kg`，与
+  :func:`dry_mass_geometric_kg` 同源、按箱分列；M6 前置专项①起壁厚为承压/轴压
+  双路物理推导取大 × 焊缝加成）。
+- 共底隔板：隔板表面积 × 最小工艺面密度（:func:`bulkhead_dry_mass_kg` 口径，
+  与 §8.4 账同源）。
+- 非贮箱部位（M6 前置专项①填实）：推力结构 → ``thrust_structure`` 带；发动机
+  （循环 T/W 推算）+ 管路/增压 → ``engine_bay`` 带（级间段包容发动机时随
+  ``interstage`` 带）；裙段/级间段/舱段/航电等固定件按包络面积分摊到
+  ``forward_skirt`` / ``intertank`` / ``interstage`` / ``avionics``——各带质量
+  之和与 :func:`dry_mass_geometric_kg` 精确闭合（两账对拍）。
+- 整流罩 / 适配器 / 尾翼 / 助推器 / 喷管：**0.0 + 留白注记**——整流罩与适配器
+  是飞行器级部件（不入级干重），尾翼与助推器体积在 metrics 的 ``fins`` /
+  ``boosters`` 块单独成账，喷管随发动机账——不为无模型部件编造数字（§1.4-4）。
 
 约定与留白（显式声明，不静默）
 ------------------------------
@@ -89,14 +96,13 @@ from aeroforge.geometry.revolve import GLB_ROOT_NAME, build_solid
 from aeroforge.params.propellants import fuel_is_lh2
 from aeroforge.params.schema import Stage, Vehicle
 from aeroforge.perf.mass import (
-    bulkhead_dry_mass_kg,
     dome_height_m,
     dome_volume_m3,
     dry_mass_geometric_kg,
     partition_heights,
     resolve_tank_geometry,
+    stage_dry_mass_breakdown_kg,
     tank_diameters_m,
-    tank_dry_masses_kg,
     tank_roles,
 )
 
@@ -361,9 +367,39 @@ def plan_stage(stage: Stage) -> StageLayout:
             )
             raise AssemblyError(msg)
 
-    masses = dict(
-        zip(("oxidizer", "fuel"), tank_dry_masses_kg(stage, reserved_m=reserved), strict=True)
+    # 非贮箱部位填实（M6 前置专项①，分部位干重模型）：分数闭环的各部位按
+    # 分配比例落位——推力结构 → thrust_structure 带；发动机（循环 T/W 推算）
+    # + 管路/增压 → engine_bay 带（级间段包容发动机时随级间段带，§5.9 共性 2）；
+    # 裙段/级间段/舱段/航电等固定件按包络面积在既有带间分摊（薄壳结构质量随
+    # 面积走）。各带质量之和 == §8.4 几何解析干重（两账对拍闭合）。
+    breakdown = stage_dry_mass_breakdown_kg(stage, reserved_m=reserved)
+    masses = {"oxidizer": breakdown.tank_oxidizer_kg, "fuel": breakdown.tank_fuel_kg}
+
+    aft_kg = breakdown.engine_kg + breakdown.residual_plumbing_kg
+    engine_bay_carries_aft = heights.engine_bay_m > GEOM_TOL
+    interstage_carries_aft = (not engine_bay_carries_aft) and heights.interstage_m > GEOM_TOL
+    thrust_structure_mass = breakdown.residual_thrust_structure_kg + (
+        0.0 if engine_bay_carries_aft or interstage_carries_aft else aft_kg
     )
+
+    skirt_members: list[tuple[str, float]] = []
+    skirt_members.append(
+        (SECTION_FORWARD_SKIRT, math.pi * (diameter / 2.0) * dome_heights[upper_role])
+    )
+    if not geometry.common_bulkhead:
+        skirt_members.append((SECTION_INTERTANK, math.pi * (diameter / 2.0) * h_mid))
+    if heights.avionics_m > GEOM_TOL:
+        skirt_members.append((SECTION_AVIONICS, math.pi * (diameter / 2.0) * heights.avionics_m))
+    if heights.interstage_m > GEOM_TOL and not interstage_carries_aft:
+        skirt_members.append(
+            (SECTION_INTERSTAGE, math.pi * (diameter / 2.0) * heights.interstage_m)
+        )
+    skirt_area_total = sum(area for _, area in skirt_members)
+    skirt_share = {
+        section: breakdown.residual_skirts_misc_kg * area / skirt_area_total
+        for section, area in skirt_members
+    }
+
     saving_m = (
         dome_heights[upper_role] + dome_heights[lower_role] - h_bulkhead
         if h_bulkhead is not None
@@ -374,7 +410,10 @@ def plan_stage(stage: Stage) -> StageLayout:
     bands: list[Band] = []
     z = 0.0
     stage_prefix = f"stages[{stage.index - 1}]"
-    zero_mass_note = "§8.4 几何解析账只覆盖贮箱（与共底隔板）；本分区结构质量留白不编造"
+    part_note = (
+        "非贮箱部位质量（M6 前置专项①分部位干重模型：占级干重分数闭环，"
+        "参数表见 perf.mass；与 §8.4 几何解析账同源）"
+    )
 
     def _add(
         section: str,
@@ -415,28 +454,42 @@ def plan_stage(stage: Stage) -> StageLayout:
             if heights.engine_bay_m <= GEOM_TOL
             else ""
         )
+        if interstage_carries_aft:
+            interstage_note = (
+                "两级之间的级间段（不是同级两箱间的级间舱）；"
+                "发动机舱段被级间段包容——发动机 + 管路/增压质量落位于本带" + housed_note
+            )
+            interstage_mass = aft_kg
+        else:
+            interstage_note = (
+                "两级之间的级间段（不是同级两箱间的级间舱）；裙段/级间段/舱段类固定件按包络面积分摊"
+            )
+            interstage_mass = skirt_share[SECTION_INTERSTAGE]
         _add(
             SECTION_INTERSTAGE,
             heights.interstage_m,
             diameter / 2.0,
             diameter / 2.0,
-            0.0,
+            interstage_mass,
             stage.material,
             (f"{stage_prefix}.diameter_m", *interstage_source),
-            note="两级之间的级间段（不是同级两箱间的级间舱）；质量留白" + housed_note,
+            note=interstage_note,
         )
     # 发动机舱段：级间段让位包容后的余量（级间段完全包容发动机时为 0 高——
-    # 0 高分区不产带、不产节点，OI-33 演化口径）
+    # 0 高分区不产带、不产节点，OI-33 演化口径）；带质量 = 发动机（循环 T/W
+    # 惯例推算）+ 管路/增压分数份额
     if heights.engine_bay_m > GEOM_TOL:
         _add(
             SECTION_ENGINE_BAY,
             heights.engine_bay_m,
             diameter / 2.0,
             diameter / 2.0,
-            0.0,
+            aft_kg,
             stage.material,
             (
                 f"{stage_prefix}.engine_height_m",
+                f"{stage_prefix}.engine.thrust_vacuum_n",
+                f"{stage_prefix}.engine_count",
                 f"{stage_prefix}.diameter_m",
                 *(
                     (f"{stage_prefix}.interstage_height_m",)
@@ -444,17 +497,18 @@ def plan_stage(stage: Stage) -> StageLayout:
                     else ()
                 ),
             ),
-            note=zero_mass_note + "；喷管钟形外形见 s<级>-nozzle[-<k>] 节点（自推进参数派生）",
+            note=part_note + "；发动机按循环 T/W 惯例推算，管路/增压按分数份额；"
+            "喷管钟形外形见 s<级>-nozzle[-<k>] 节点（自推进参数派生）",
         )
     _add(
         SECTION_THRUST_STRUCTURE,
         dome_heights[lower_role],
         diameter / 2.0,
         diameter / 2.0,
-        0.0,
+        thrust_structure_mass,
         stage.material,
         (f"{stage_prefix}.flatness_ratio", f"{stage_prefix}.diameter_m"),
-        note=zero_mass_note,
+        note=part_note + "（推力结构/机架份额）",
     )
     # 下箱柱段（储箱排列决定角色——读字段，§5.9 非铁律）
     _add(
@@ -479,7 +533,7 @@ def plan_stage(stage: Stage) -> StageLayout:
             h_mid,
             diameter / 2.0,
             diameter / 2.0,
-            bulkhead_dry_mass_kg(stage, h_bulkhead),
+            breakdown.bulkhead_kg,
             _tank_material(stage, "fuel"),
             (
                 f"{stage_prefix}.flatness_ratio",
@@ -497,10 +551,10 @@ def plan_stage(stage: Stage) -> StageLayout:
             h_mid,
             diameter / 2.0,
             diameter / 2.0,
-            0.0,
+            skirt_share[SECTION_INTERTANK],
             stage.material,
             (f"{stage_prefix}.flatness_ratio", f"{stage_prefix}.diameter_m", *intertank_source),
-            note=zero_mass_note,
+            note=part_note + "（级间舱：裙段/舱段类固定件按包络面积分摊）",
         )
     # 上箱柱段
     _add(
@@ -522,23 +576,24 @@ def plan_stage(stage: Stage) -> StageLayout:
         dome_heights[upper_role],
         diameter / 2.0,
         diameter / 2.0,
-        0.0,
+        skirt_share[SECTION_FORWARD_SKIRT],
         stage.material,
         (f"{stage_prefix}.flatness_ratio", f"{stage_prefix}.diameter_m"),
-        note=zero_mass_note,
+        note=part_note + "（前裙：裙段/舱段类固定件按包络面积分摊）",
     )
     # avionics（第 3 分区，级顶）：显式值优先（M5 第二片 Schema 增补）；缺省 0 高
-    # （§5.9 允许）——0 高不产带、不产节点（部件缺失即无节点，OI-33 演化口径）
+    # （§5.9 允许）——0 高不产带、不产节点（部件缺失即无节点，OI-33 演化口径）；
+    # 显式存在时参与裙段/舱段类固定件的包络面积分摊
     if heights.avionics_m > GEOM_TOL:
         _add(
             SECTION_AVIONICS,
             heights.avionics_m,
             diameter / 2.0,
             diameter / 2.0,
-            0.0,
+            skirt_share[SECTION_AVIONICS],
             stage.material,
             (f"{stage_prefix}.avionics_height_m", f"{stage_prefix}.diameter_m"),
-            note=zero_mass_note,
+            note=part_note + "（仪器舱/舱段固定件按包络面积分摊）",
         )
 
     return StageLayout(
@@ -1229,8 +1284,9 @@ def build_assembly(vehicle: Vehicle) -> VehicleAssembly:
                 severity="pass",
                 detail=(
                     f"第 {stage.index} 级分区质量合计 {section_mass:.3f} kg 与 §8.4 几何解析账 "
-                    f"{account_mass:.3f} kg 同源闭合（两账消费同一份 §5.9 分区高度与隔板干重，"
-                    "M5 第二片 reserved 口径差复核的裁定；账覆盖贮箱与共底隔板）"
+                    f"{account_mass:.3f} kg 同源闭合（两账消费同一份 §5.9 分区高度与分部位干重"
+                    "分解〔M6 前置专项①：贮箱壁/隔板/发动机/非贮箱分数分摊〕，"
+                    "M5 第二片 reserved 口径差复核的裁定延续）"
                 ),
                 stage_index=stage.index,
                 value=section_mass,

@@ -2,10 +2,10 @@
 
 五项门禁逐条落点：
 1. **几何 vs 回归质量 <20%**：逐级几何解析干重 vs GCAT σ 推算干重（:func:`cross_check`
-   的固化）。⚠ 第二片留白的系统性来源差**当前全部越限**（面密度干重模型 ~2.5 t 量级
-   vs 真实结构 ~25 t）——按 §13.2 口径如实登记失败清单（``xfail(strict=True)``：
-   模型一旦改进使断言转绿，strict 标记即反过来失败，强制清账；不放宽断言、不消音，
-   主线裁决归质量模型细化片）。
+   的固化）。⚠ M6 前置专项①（分部位物理干重模型：承压/轴压双路壁厚取大 + 发动机
+   T/W 推算 + 非贮箱分数闭环）细化后 **9/11 级转绿（dev 0.05%–17.4%）**；余 2 级为
+   公开分项质量本底越模型颗粒度，按 §13.2 口径以 ``xfail(strict=True)`` 如实登记
+   （模型再改进使断言转绿，strict 标记即反过来失败，强制清账；不放宽断言、不消音）。
 2. **分区枚举一致性（无漏件无错序）**：assembly_tree 节点分区集合 == sections bands
    分区集合（逐级对比；falcon-9 + cz-5 + 合成两级）。对比域 = §5.9 的轴向分区
    （含级间段扩展枚举）——尾翼 / 助推器 / 喷管为**非轴向**扩展件，不在 band 域内。
@@ -71,22 +71,16 @@ def _all_template_stages() -> list[tuple[str, int, Stage]]:
     return items
 
 
-#: 已登记的越限级（§13.2 口径的失败清单）：面密度干重模型 vs 统计 σ 的系统性来源差
-#: （第二片留白：面密度模型 ~2.5 t 量级 vs 真实结构 ~25 t）——主线裁决归质量模型细化片。
-#: ⚠ strict xfail：模型改进使任一级转绿时，本清单必须同步收缩（否则该参数失败）。
+#: 已登记的越限级（§13.2 口径的失败清单）：M6 前置专项①质量模型细化后 9/11 级
+#: 转绿（dev 0.05%–17.4%），余 2 级越限为**公开分项质量本底越模型颗粒度**——
+#: cz-5 芯二级（公开干重 ≈1.3 t 低于两台 YF-75D 自重，σ=0.0535 本底失真）、
+#: saturn-v S-IVB（σ=0.1124：仪器舱/底推分离装置等支持系统占比远超其余各级，
+#: 超出「贮箱壁 + 发动机 + 分数闭环」的模型颗粒度）。⚠ strict xfail：模型再改进
+#: 使任一级转绿时，本清单必须同步收缩（否则该参数失败）。
 _REGISTERED_OVER_THRESHOLD = frozenset(
     {
-        ("falcon-9", 1),
-        ("falcon-9", 2),
-        ("cz-5", 1),
         ("cz-5", 2),
-        ("cz-5", -1),
-        ("saturn-v", 1),
-        ("saturn-v", 2),
         ("saturn-v", 3),
-        ("falcon-heavy", 1),
-        ("falcon-heavy", 2),
-        ("falcon-heavy", -1),
     }
 )
 
@@ -100,9 +94,9 @@ _REGISTERED_OVER_THRESHOLD = frozenset(
             marks=pytest.mark.xfail(
                 strict=True,
                 reason=(
-                    "登记（§13.2 口径失败清单）：面密度干重模型 vs 统计 σ 的系统性来源差"
-                    "（第二片留白：面密度模型 ~2.5 t 量级 vs 真实结构 ~25 t）——"
-                    "主线裁决归质量模型细化片；模型改进使断言转绿时本标记必须移除"
+                    "登记（§13.2 口径失败清单）：公开分项质量本底越模型颗粒度"
+                    "（cz-5 芯二级 σ 本底低于发动机自重；saturn-v S-IVB 支持系统占比"
+                    "远超模型颗粒度）——M6 前置专项①后余留越限，如实登记不放宽"
                 ),
             ),
         )
@@ -278,8 +272,11 @@ def test_m5_recovery_costs_itemized_and_summing() -> None:
     from aeroforge.perf.solver import solve
 
     vehicle = _recovered_f9()
-    dv, _source, _w = anchored_dv_km_s(vehicle, vehicle_ledger(vehicle), "LEO", DEFAULT_LAUNCH_SITE)
-    sizing = solve(vehicle, dv)
+    dv_km_s, _source, _w = anchored_dv_km_s(
+        vehicle, vehicle_ledger(vehicle), "LEO", DEFAULT_LAUNCH_SITE
+    )
+    # 与 _sequence_report 同口径：anchored_dv_km_s 返回 km/s，solve 吃 m/s
+    sizing = solve(vehicle, dv_km_s * 1000.0)
     report = apply_sequence(vehicle, sizing)
     costs = report.recovery
     assert costs is not None, "回收已启用：三项代价必须下发"
@@ -326,8 +323,12 @@ def _sequence_report(vehicle: Vehicle) -> Any:
     from aeroforge.perf.sequence import apply_sequence
     from aeroforge.perf.solver import solve
 
-    dv, _source, _w = anchored_dv_km_s(vehicle, vehicle_ledger(vehicle), "LEO", DEFAULT_LAUNCH_SITE)
-    sizing = solve(vehicle, dv)
+    dv_km_s, _source, _w = anchored_dv_km_s(
+        vehicle, vehicle_ledger(vehicle), "LEO", DEFAULT_LAUNCH_SITE
+    )
+    # anchored_dv_km_s 的口径是 km/s，solve 吃 m/s——单位换算在此显式发生
+    # （修正既有缺陷：裸传 km/s 值在纯串联构型下会退化为 ~10 m/s 的退化定尺）
+    sizing = solve(vehicle, dv_km_s * 1000.0)
     return apply_sequence(vehicle, sizing)
 
 
@@ -368,19 +369,13 @@ def test_m5_surviving_nodes_shrink_monotonically() -> None:
 def test_m5_surviving_nodes_boosters_leave_with_first_stage() -> None:
     """助推器节点随芯一级分离（分离时刻默认 = 芯一级关机，§6.1 Booster 层）。
 
-    ⚠ 用合成两级 + 助推器组（显式目标 ΔV 8 000 m/s）：既有求解器对「含助推器
-    构型 × 锚定 ΔV」的外层 GLOW 割线迭代存在 2-循环不收敛的既有局限
-    （M4 遗留、与本片无关——主线裁决归求解器收敛性专项），本测试只验证
-    节点账行为，不走锚定链。
+    走真实锚定 ΔV 链（与 :func:`_sequence_report` 同通路）：M6 前置专项②
+    修复求解器外层迭代稳健性后，M5 收官片「显式 ΔV 8 000 m/s 绕行」解除。
     """
     vehicle = _vehicle((_stage(1, length_m=24.0), _stage(2, length_m=9.0))).model_copy(
         update={"boosters": [Booster(stage=_stage(1, length_m=12.0), count=2)]}
     )
-    from aeroforge.perf.sequence import apply_sequence
-    from aeroforge.perf.solver import solve
-
-    sizing = solve(vehicle, 8_000.0)
-    report = apply_sequence(vehicle, sizing)
+    report = _sequence_report(vehicle)
     ignition = report.events[0]
     assert any(name.startswith("booster-") for name in ignition.surviving_nodes), (
         "点火时助推器节点在栈上"

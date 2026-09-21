@@ -32,6 +32,7 @@ from aeroforge.geometry.revolve import kernel_version
 from aeroforge.params.schema import Vehicle
 from aeroforge.params.schema import canonical_json as vehicle_canonical_json
 from aeroforge.paths import artifacts_root, ensure_dir
+from aeroforge.perf.mass import MASS_MODEL_VERSION
 
 # 产物逻辑名（对前端与 API 稳定；改文件名不得改变这些键）
 ARTIFACT_STEP = "model.step"
@@ -168,11 +169,18 @@ def compute_vehicle_key(vehicle: Vehicle) -> CacheKey:
     共底开关等几何语义字段），与剖面形态的键天然分离——两种形态同一输入各得其所，
     互不污染缓存。``profile_hash`` 字段此处承载 vehicle canonical 的 sha256
     （溯源口径一致，字段名沿用）。
+
+    ⚠ 质量模型版本（M6 前置专项①）作为独立分量参与本键：``metrics.json`` 的
+    ``assembly_tree`` 携带分部位干重账（贮箱壁/隔板/发动机/非贮箱分摊），该账
+    随 :data:`aeroforge.perf.mass.MASS_MODEL_VERSION` 演进而变——GLB 字节不变时
+    SPEC_VERSION 不递增（§9.2），但旧缓存命中旧质量账属陈旧产物，故以模型版本
+    常量使几何产物键失效。evaluate / MC 键不纳入：其数值链消费 σ 干重账与几何
+    推进剂账，两者均不随本模型变化。
     """
     vehicle_json = vehicle_canonical_json(vehicle)
     kernel = kernel_version()
     digest = hashlib.sha256(
-        "\x00".join((vehicle_json, kernel, SPEC_VERSION)).encode("utf-8")
+        "\x00".join((vehicle_json, kernel, MASS_MODEL_VERSION, SPEC_VERSION)).encode("utf-8")
     ).hexdigest()
     return CacheKey(
         key=digest,

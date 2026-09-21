@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { fetchSections, type SectionBand, type SectionsResponse } from '../api/sections'
+import { exportSvgPng } from '../lib/exportPng'
 import {
   buildSectionsLayout,
   clampZoom,
@@ -202,12 +203,24 @@ function PipeLine({ group }: { group: LayoutGroup }) {
 }
 
 /** 工程剖面图（视图组之一）：分区条带 + 液面 + 共底 + 管道 + 尺寸标注。 */
-function EngineeringProfile({ data }: { data: SectionsResponse }) {
+function EngineeringProfile({ data, baseName }: { data: SectionsResponse; baseName: string }) {
   const [zoom, setZoom] = useState(1)
+  const [pngFailed, setPngFailed] = useState(false)
+  const svgRef = useRef<SVGSVGElement>(null)
   const layout = buildSectionsLayout(data, PROFILE_FRAME)
 
   if (layout === null) {
     return <p className="profile2d__hint label">后端下发的总长或最大直径为零，无法绘制工程剖面图</p>
+  }
+
+  /** PNG 快照（OI-26）：尺寸标注随 SVG 一并栅格化（§11.12 规则 6）；失败可见、不静默。 */
+  const handleExportPng = (): void => {
+    const svg = svgRef.current
+    if (svg === null) return
+    setPngFailed(false)
+    void exportSvgPng(svg, baseName).catch(() => {
+      setPngFailed(true)
+    })
   }
 
   const { mapping, groups } = layout
@@ -254,10 +267,15 @@ function EngineeringProfile({ data }: { data: SectionsResponse }) {
           >
             复位
           </button>
+          <button type="button" className="profile2d__button" onClick={handleExportPng}>
+            导出 PNG
+          </button>
         </div>
       </div>
+      {pngFailed ? <p className="profile2d__png-failed label">PNG 导出失败，请重试</p> : null}
 
       <svg
+        ref={svgRef}
         data-testid="profile-svg"
         className="profile2d__svg"
         viewBox={viewBoxText(zoomViewBox(PROFILE_FRAME, zoom))}
@@ -402,8 +420,8 @@ export function Profile2D() {
 
       {data === null ? null : (
         <>
-          <Outline2D data={data} />
-          <EngineeringProfile data={data} />
+          <Outline2D data={data} baseName={vehicle.name} />
+          <EngineeringProfile data={data} baseName={vehicle.name} />
         </>
       )}
     </section>

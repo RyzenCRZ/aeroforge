@@ -20,7 +20,14 @@ import {
  */
 
 function state(patch: Partial<SceneViewState> = {}): SceneViewState {
-  return { hidden: new Set<number>(), selected: null, highlight: null, clipPlanes: [], ...patch }
+  return {
+    hidden: new Set<number>(),
+    selected: null,
+    highlight: null,
+    clipPlanes: [],
+    explode: null,
+    ...patch,
+  }
 }
 
 function meshesOf(root: THREE.Object3D): THREE.Mesh[] {

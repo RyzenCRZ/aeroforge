@@ -28,3 +28,59 @@
   max-width: 42em;
   color: var(--color-status-error);
 }
+
+/* ---- 视口角落工具条（爆炸视图 + PNG 导出，§11.4 / OI-19 M5 + OI-26） ------------ */
+
+.viewport__tools {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 20px);
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background-color: var(--color-bg-surface);
+  backdrop-filter: blur(12px);
+}
+
+.viewport__tool {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.viewport__tool input[type='range'] {
+  width: 110px;
+  accent-color: var(--color-accent);
+}
+
+.viewport__tool-button {
+  padding: 2px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.viewport__tool-button:hover:not(:disabled) {
+  border-color: var(--color-accent);
+}
+
+/* 爆炸态禁用导出（§11.4：视图状态不可导出）——置灰必须可感知 */
+.viewport__tool-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.viewport__tools-hint {
+  color: var(--color-status-warn);
+}

@@ -172,6 +172,29 @@ class PerfError(AeroForgeError):
     stage = "perf"
 
 
+class ExportError(AeroForgeError):
+    """导出域错误（§5.8）：格式能力缺失（内核无该 writer）、写出失败等。
+
+    阶段标签 ``export`` 定位到导出层；几何构建本身的问题仍以几何域错误
+    （:class:`GeometryError` / :class:`AssemblyError`）冒出，不在此冒名。
+    """
+
+    code = "EXPORT_FAILED"
+    stage = "export"
+
+
+class ExportValidationError(AeroForgeError):
+    """§5.8 规则 4 的拒绝：精确格式导出前 §5.7 验证未通过。
+
+    ``details.diagnostics`` 携带验证失败的诊断摘要（约束裁定 / 装配校验的
+    fail 项）；按规格**只允许导出网格格式并附警告**——本错误只针对被请求的
+    精确格式（STEP / IGES）。
+    """
+
+    code = "EXPORT_VALIDATION_FAILED"
+    stage = "export"
+
+
 def to_error_body(exc: BaseException) -> ErrorBody:
     """把任意异常收敛为 §10.3 响应体。"""
     if isinstance(exc, AeroForgeError):

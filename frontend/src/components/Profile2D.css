@@ -140,6 +140,14 @@
 
 /* ---- 提示与降级 -------------------------------------------------------- */
 
+/* PNG 导出失败提示（OI-26）：可见、可重试——不静默吞掉栅格化失败 */
+.profile2d__png-failed {
+  margin: 0;
+  color: var(--color-status-warn);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
 .profile2d__hint {
   margin: 6px 0 0;
   line-height: 1.6;

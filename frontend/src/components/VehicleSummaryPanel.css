@@ -1,0 +1,182 @@
+/* ============================================================================
+ * 右栏「整箭数据 + 轨道运力」面板（规格 §11.5 / FR-10 / FR-11，挂在 2D 视图组下方）。
+ *
+ * 颜色一律引用语义 token（§11.2 / tokens.css）；冻结标记的警示态用
+ * --color-status-warn（OI-04 规则 3：「输入已变更」升级为警示色）。
+ * ==========================================================================*/
+
+.vehicle-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.vehicle-summary__hint {
+  margin: 0;
+  line-height: 1.6;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* 失败降级提示行（2D 视图组同款「不可用」纪律：不白屏、不影响其它面板） */
+.vehicle-summary__fallback {
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--color-status-warn);
+  border-radius: 6px;
+  color: var(--color-status-warn);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.vehicle-summary__warnings {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.vehicle-summary__warning {
+  color: var(--color-status-warn);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* ---- FR-10 七字段：紧凑两列（字段名 / 数值） ------------------------------ */
+
+.vehicle-summary__fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 12px;
+  margin: 0;
+}
+
+.vehicle-summary__field {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 4px;
+}
+
+.vehicle-summary__field dd {
+  margin: 0;
+  white-space: nowrap;
+}
+
+/* ---- FR-11 轨道运力 ------------------------------------------------------ */
+
+.vehicle-summary__orbit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--color-border);
+  padding-top: 8px;
+}
+
+.vehicle-summary__orbit-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.vehicle-summary__orbit-head h3 {
+  margin: 0;
+}
+
+.vehicle-summary__auto {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vehicle-summary__auto input[type='checkbox'] {
+  accent-color: var(--color-accent);
+}
+
+/* 冻结标记（OI-04 规则 2/3）：常驻呈现，输入变更后升级为警示色 */
+.vehicle-summary__frozen {
+  margin: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.vehicle-summary__frozen--warn {
+  border-color: var(--color-status-warn);
+  color: var(--color-status-warn);
+}
+
+.vehicle-summary__target {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+}
+
+.vehicle-summary__target-value {
+  margin-left: auto;
+}
+
+.vehicle-summary__table {
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.vehicle-summary__table th,
+.vehicle-summary__table td {
+  padding: 2px 10px 2px 0;
+  text-align: left;
+  vertical-align: baseline;
+}
+
+.vehicle-summary__table tbody th {
+  font-weight: 500;
+}
+
+/* ---- 导出报告（FR-11 / §11.12 规则 2、4） -------------------------------- */
+
+.vehicle-summary__export {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.vehicle-summary__button {
+  padding: 4px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.vehicle-summary__button:hover:not(:disabled) {
+  border-color: var(--color-accent);
+}
+
+.vehicle-summary__button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.vehicle-summary__export-hint {
+  color: var(--color-text-secondary);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.vehicle-summary__error {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--color-status-error);
+  font-size: 11px;
+  line-height: 1.6;
+}

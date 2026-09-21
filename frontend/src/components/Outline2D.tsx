@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 
 import type { SectionsResponse } from '../api/sections'
+import { exportSvgPng } from '../lib/exportPng'
 import {
   buildSectionsLayout,
   clampZoom,
@@ -32,14 +33,28 @@ const OUTLINE_FRAME: Frame = {
 
 interface Outline2DProps {
   data: SectionsResponse
+  /** PNG 导出文件名的型号部分（OI-26：文件名含型号与时间戳）。 */
+  baseName: string
 }
 
-export function Outline2D({ data }: Outline2DProps) {
+export function Outline2D({ data, baseName }: Outline2DProps) {
   const [zoom, setZoom] = useState(1)
+  const [pngFailed, setPngFailed] = useState(false)
+  const svgRef = useRef<SVGSVGElement>(null)
   const layout = buildSectionsLayout(data, OUTLINE_FRAME)
 
   if (layout === null) {
     return <p className="profile2d__hint label">后端下发的总长或最大直径为零，无法绘制外观图</p>
+  }
+
+  /** PNG 快照（OI-26）：矢量重栅格化（非位图拉伸）；失败可见、不静默。 */
+  const handleExportPng = (): void => {
+    const svg = svgRef.current
+    if (svg === null) return
+    setPngFailed(false)
+    void exportSvgPng(svg, baseName).catch(() => {
+      setPngFailed(true)
+    })
   }
 
   const { mapping, groups, coreGroups } = layout
@@ -79,10 +94,15 @@ export function Outline2D({ data }: Outline2DProps) {
           >
             复位
           </button>
+          <button type="button" className="profile2d__button" onClick={handleExportPng}>
+            导出 PNG
+          </button>
         </div>
       </div>
+      {pngFailed ? <p className="profile2d__png-failed label">PNG 导出失败，请重试</p> : null}
 
       <svg
+        ref={svgRef}
         data-testid="outline-svg"
         className="profile2d__svg"
         viewBox={viewBoxText(zoomViewBox(OUTLINE_FRAME, zoom))}

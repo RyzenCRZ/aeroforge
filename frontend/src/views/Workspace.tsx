@@ -6,6 +6,7 @@ import { Profile2D } from '../components/Profile2D'
 import { SegmentPanel } from '../components/SegmentPanel'
 import { ThresholdPanel } from '../components/ThresholdPanel'
 import { VehiclePanel } from '../components/VehiclePanel'
+import { VehicleSummaryPanel } from '../components/VehicleSummaryPanel'
 import { Viewport } from '../r3f/Viewport'
 import { useModelStore } from '../store/model'
 import { useParamsStore } from '../store/params'
@@ -132,6 +133,8 @@ export function Workspace() {
       <aside className="workspace__pane surface">
         <MeridianEditor />
         <Profile2D />
+        {/* 整箭数据 + 轨道运力（§11.5 布局：右栏 2D 视图组下方，FR-10 / FR-11） */}
+        <VehicleSummaryPanel />
       </aside>
     </div>
   )

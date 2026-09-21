@@ -32,12 +32,13 @@ afterEach(() => {
 })
 
 describe('显隐 / 剖切的取值', () => {
-  it('默认不隐藏任何段、不剖切', () => {
+  it('默认不隐藏任何段、不剖切、不爆炸', () => {
     const state = useViewStore.getState()
     expect([...state.hiddenSegments]).toEqual([])
     expect(state.selectedSegment).toBeNull()
     expect(state.clip).toEqual(DEFAULT_CLIP)
     expect(state.clip.enabled).toBe(false)
+    expect(state.explodeFactor).toBe(0)
   })
 
   it('显隐按段下标增删，且每次都换新集合（否则 zustand 不会通知订阅者）', () => {
@@ -78,6 +79,59 @@ describe('显隐 / 剖切的取值', () => {
     expect([...state.hiddenSegments]).toEqual([])
     expect(state.selectedSegment).toBeNull()
     expect(state.clip).toEqual(DEFAULT_CLIP)
+  })
+})
+
+describe('爆炸视图（§11.4 / OI-19 M5：纯视图状态 + 与剖切显式互斥）', () => {
+  it('爆炸因子被夹在 0–1；resetExplode 归零；reset 一并清空', () => {
+    useViewStore.getState().setExplodeFactor(-3)
+    expect(useViewStore.getState().explodeFactor).toBe(0)
+    useViewStore.getState().setExplodeFactor(9)
+    expect(useViewStore.getState().explodeFactor).toBe(1)
+    useViewStore.getState().setExplodeFactor(0.5)
+    expect(useViewStore.getState().explodeFactor).toBe(0.5)
+
+    useViewStore.getState().resetExplode()
+    expect(useViewStore.getState().explodeFactor).toBe(0)
+
+    useViewStore.getState().setExplodeFactor(0.7)
+    useViewStore.getState().reset()
+    expect(useViewStore.getState().explodeFactor).toBe(0)
+  })
+
+  it('互斥①：爆炸激活即关剖切（两个轴向视图状态不得并存，§11.4）', () => {
+    useViewStore.getState().setClipEnabled(true)
+    useViewStore.getState().setClipPosition(0.4)
+    useViewStore.getState().setExplodeFactor(0.5)
+
+    expect(useViewStore.getState().explodeFactor).toBe(0.5)
+    expect(useViewStore.getState().clip.enabled).toBe(false)
+  })
+
+  it('互斥②：开剖切即复位爆炸；爆炸为 0 时开剖切不受影响', () => {
+    useViewStore.getState().setExplodeFactor(0.8)
+    useViewStore.getState().setClipEnabled(true)
+    expect(useViewStore.getState().clip.enabled).toBe(true)
+    expect(useViewStore.getState().explodeFactor).toBe(0)
+
+    useViewStore.getState().setClipEnabled(false)
+    useViewStore.getState().setClipEnabled(true)
+    expect(useViewStore.getState().explodeFactor).toBe(0)
+    expect(useViewStore.getState().clip.enabled).toBe(true)
+  })
+
+  it('爆炸的全部操作零后端请求，且 store/params 逐字段不变（§13.6）', () => {
+    const transport = spyOnTransport()
+    const profileBefore = useParamsStore.getState().profile
+
+    useViewStore.getState().setExplodeFactor(0.3)
+    useViewStore.getState().setExplodeFactor(1)
+    useViewStore.getState().setExplodeFactor(0)
+    useViewStore.getState().resetExplode()
+
+    expect(transport.requests()).toBe(0)
+    expect(useParamsStore.getState().profile).toBe(profileBefore)
+    expect(useParamsStore.getState().profile).toEqual(profileBefore)
   })
 })
 

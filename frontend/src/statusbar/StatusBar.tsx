@@ -36,6 +36,7 @@ export const JOB_STAGE_TEXT: Record<JobStage, string> = {
   solid: '生成实体',
   mesh: '生成网格',
   step: '导出 STEP',
+  export: '导出产物',
   sampling: 'MC 采样中',
   evaluating: 'MC 求值中',
   summarizing: 'MC 统计汇总',

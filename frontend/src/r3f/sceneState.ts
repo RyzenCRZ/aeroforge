@@ -1,12 +1,13 @@
 import * as THREE from 'three'
 
 import type { ClipAxis } from '../store/view'
+import { applyExplodeView, type ExplodeViewState } from './explode'
 
 /**
- * 视口视图状态在 three 场景上的施加器（规格 §11.4 分级显隐 / 剖切）。
+ * 视口视图状态在 three 场景上的施加器（规格 §11.4 分级显隐 / 剖切 / 爆炸视图）。
  *
  * **两通道走同一条施加路径**（`applySceneViewState`）——这是"两通道同粒度"的落地方式：
- * 若示意通道按 React 声明式、权威通道按遍历改，两边的显隐/高亮/裁剪就会各自演化，
+ * 若示意通道按 React 声明式、权威通道按遍历改，两边的显隐/高亮/裁剪/爆炸就会各自演化，
  * 最终出现"隐藏只在一侧生效"这类分叉。
  *
  * 三条硬约束（OI-33，每条都对应一种静默失效）：
@@ -14,6 +15,9 @@ import type { ClipAxis } from '../store/view'
  * 1. **节点名必须存在**——按名找不到节点即**不隐藏**（表现为"点了没反应"，全程零报错）；
  * 2. **根节点（`vehicle`）不持 mesh**——分段体已完全覆盖它，叠加渲染会把几何画厚一层；
  * 3. **退化段不产出节点**——对不存在的段做显隐与高亮都是**无操作**，且不得报错。
+ *
+ * 爆炸视图（OI-19 的 M5 部分）也走本路径：位移是**视图偏移**（只改节点 `position`，
+ * 施加逻辑见 `explode.ts`），与显隐/剖切同受"纯视图状态"红线约束（§11.4）。
  *
  * 本文件只读写 three 对象：不含任何几何推导，不读时间，也不触发后端请求
  * （ADR-011 / §11.6「视图存储的任何变化不得触发后端请求」）。
@@ -94,6 +98,11 @@ export interface SceneViewState {
   highlight: THREE.Material | null
   /** 剖切平面（§11.4 剖切）；空数组 = 不剖切 */
   clipPlanes: readonly THREE.Plane[]
+  /**
+   * 爆炸视图（§11.4 / OI-19 M5）；`null` = 不施加（如尚无后端报告）。
+   * 位移是视图偏移、不可导出（§11.4 共同红线）。
+   */
+  explode: ExplodeViewState | null
 }
 
 /**
@@ -124,6 +133,9 @@ export function applySceneViewState(root: THREE.Object3D, state: SceneViewState)
         : original
     syncClippingPlanes(object.material, state.clipPlanes)
   })
+  // 爆炸视图（§11.4 / OI-19 M5）：按装配树分区枚举沿世界 Y 轴分离——视图偏移，
+  // 不改几何、不写回参数（`factor = 0` 即还原常态位置）
+  if (state.explode !== null) applyExplodeView(root, state.explode)
   return nodes
 }
 

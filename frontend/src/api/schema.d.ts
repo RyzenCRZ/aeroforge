@@ -556,6 +556,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Export Formats
+         * @description 多格式导出（异步）：STEP/IGES/STL/GLB + 参数/质量/性能报告（§5.8）。
+         *
+         *     产物落位：几何格式 → ``artifacts/<构建键>/export/``；报告类 →
+         *     ``artifacts/report-<hash>/export/``（不新建几何缓存键——导出是构建产物的
+         *     衍生，§9.2）。文件名 ``export.step`` / ``export.stl`` / ``export.mass.csv``…
+         *     沿用 artifacts 白名单通道取回。
+         */
+        post: operations["export_formats_api_export_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/vehicle/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Vehicle Summary
+         * @description 整箭数据面板（FR-10 / FR-11）：质量 / 几何 / 运力一次下发，全部后端算出。
+         *
+         *     校验失败走既有错误体系：参数硬约束 → 422 ``PARAMS_CONSTRAINT_VIOLATION``
+         *     （与 evaluate 同判据）；布局不可行（plan_stage 纯数值复核）→ 422
+         *     ``GEOMETRY_INVALID``（与 sections 同判据）。
+         */
+        post: operations["vehicle_summary_api_vehicle_summary_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/health": {
         parameters: {
             query?: never;
@@ -1298,6 +1347,42 @@ export interface components {
             suggestion: string;
         };
         /**
+         * ExportRequest
+         * @description ``POST /api/export`` 的请求体（§5.8 表的格式枚举 + 飞行器参数）。
+         */
+        ExportRequest: {
+            /** @description 飞行器参数（与 /api/geometry/build 车辆形态同构） */
+            vehicle: components["schemas"]["Vehicle"];
+            /**
+             * Formats
+             * @description 导出格式：step / iges（精确 BREP，受 §5.8 规则 4 验证门禁）；stl / glb（网格近似，验证未通过时附警告导出）；params_json / mass_csv / perf_json（报告类，不走 OCCT）
+             */
+            formats: ("step" | "iges" | "stl" | "glb" | "params_json" | "mass_csv" | "perf_json")[];
+        };
+        /**
+         * ExportResponse
+         * @description ``POST /api/export`` 的响应体（异步受理；作业完成经 /api/jobs/{id} 取回）。
+         */
+        ExportResponse: {
+            /**
+             * Job Id
+             * @description 导出作业 id（GET /api/jobs/{id} / WS 订阅进度）
+             */
+            job_id: string;
+            /**
+             * Formats
+             * @description 本次受理的格式清单（去重保序）；产物经 /api/artifacts/{key}/{file} 取回
+             */
+            formats: ("step" | "iges" | "stl" | "glb" | "params_json" | "mass_csv" | "perf_json")[];
+            /**
+             * Files
+             * @description 格式 → 产物文件名映射（/api/artifacts/{key}/{file} 的 file 段）。命名单一事实源在后端（cache.store 的 ARTIFACT_EXPORT_* 常量），前端按此映射下载，禁止自行拼接（ADR-011 同族纪律）
+             */
+            files: {
+                [key: string]: string;
+            };
+        };
+        /**
          * Geometry
          * @description 构型（§6.1 Geometry 层），**每级一个**。
          *
@@ -1445,10 +1530,11 @@ export interface components {
          *
          *     几何链 ``meridian → solid → mesh → step → done``；MC 计算链
          *     ``sampling → evaluating → summarizing → done``（M4 第四片补入，前端按字符串
-         *     消费、新增枚举值为增量变更）。
+         *     消费、新增枚举值为增量变更）；导出链 ``solid → export → done``（M5 第三片，
+         *     §5.8——报告类导出无几何构建，直接 ``export``）。
          * @enum {string}
          */
-        JobStage: "queued" | "meridian" | "solid" | "mesh" | "step" | "sampling" | "evaluating" | "summarizing" | "done";
+        JobStage: "queued" | "meridian" | "solid" | "mesh" | "step" | "export" | "sampling" | "evaluating" | "summarizing" | "done";
         /**
          * JobStatus
          * @description §9.3 的作业生命周期状态。
@@ -1850,6 +1936,34 @@ export interface components {
             derived: boolean;
         };
         /**
+         * OrbitCapacitySummary
+         * @description 轨道运力摘要（FR-11：当前目标轨道点值 + 四轨道表）。
+         */
+        OrbitCapacitySummary: {
+            /**
+             * Target Orbit
+             * @description 当前 Mission 的目标轨道类型（§6.1 OrbitType）
+             */
+            target_orbit: string;
+            /**
+             * Target Payload Kg
+             * @description 当前目标轨道的运力点值（kg）；四轨道表（LEO/SSO/GTO/GEO）覆盖内取表行，表外轨道（TLI/TMI/escape/custom）为 null——随 M6 轨道层交付
+             */
+            target_payload_kg: number | null;
+            /**
+             * Target Attainable
+             * @description 当前目标轨道是否可达（表外轨道为 null）；不可达时点值记 0
+             */
+            target_attainable: boolean | null;
+            /**
+             * Payload By Orbit
+             * @description 四轨道点值运力表（与 /api/perf/evaluate 的 point.payload_by_orbit 同源同值）
+             */
+            payload_by_orbit: {
+                [key: string]: components["schemas"]["OrbitPayload"];
+            };
+        };
+        /**
          * OrbitPayload
          * @description 运力表中一个目标轨道的点值（OI-38 / §8.8 ``payload_by_orbit`` 行）。
          */
@@ -1921,7 +2035,7 @@ export interface components {
         };
         /**
          * PerfEvaluateResponse
-         * @description ``POST /api/perf/evaluate`` 的响应体（阶段①：点值 + MC 作业挂点）。
+         * @description 点值评估响应体（阶段①：点值 + MC 作业挂点）。
          */
         PerfEvaluateResponse: {
             point: components["schemas"]["PointEvaluation"];
@@ -3527,6 +3641,76 @@ export interface components {
             hits: components["schemas"]["VehicleSearchHitOut"][];
         };
         /**
+         * VehicleSummaryRequest
+         * @description ``POST /api/vehicle/summary`` 的请求体。
+         */
+        VehicleSummaryRequest: {
+            /** @description 飞行器参数（面板质量 / 几何 / 运力的唯一输入） */
+            vehicle: components["schemas"]["Vehicle"];
+            /** @description 运力摘要的轨道上下文覆写（试算不同目标轨道而不改车辆参数）；省略 = 使用 vehicle.mission（质量与几何量不受本字段影响） */
+            mission?: components["schemas"]["Mission"] | null;
+        };
+        /**
+         * VehicleSummaryResponse
+         * @description 整箭数据面板响应体（数值字段一律带单位后缀 _kg / _m / _t，FR-10）。
+         */
+        VehicleSummaryResponse: {
+            /**
+             * Total Mass Kg
+             * @description 总质量 / GLOW（kg = 载荷 + 全部级 + 助推器）
+             */
+            total_mass_kg: number;
+            /**
+             * Total Mass T
+             * @description 总质量（t；kg→t 换算由后端完成，前端零换算）
+             */
+            total_mass_t: number;
+            /**
+             * Propellant Mass Kg
+             * @description 推进剂总质量（kg，含助推器推进剂）
+             */
+            propellant_mass_kg: number;
+            /**
+             * Dry Mass Kg
+             * @description 干重（kg，含助推器干重——0 级段账）
+             */
+            dry_mass_kg: number;
+            /**
+             * Total Height M
+             * @description 总高（m，含整流罩 / 适配器；不含助推器）
+             */
+            total_height_m: number;
+            /**
+             * Body Max Diameter M
+             * @description 箭体最大直径（m，含助推器包络若有；整流罩直径单列不并入）
+             */
+            body_max_diameter_m: number;
+            /**
+             * Booster Envelope Diameter M
+             * @description 助推器包络直径（m = 芯级全剖面最大半径〔含整流罩〕+ 助推器直径 + 间隙的包络）；无助推器为 null
+             */
+            booster_envelope_diameter_m?: number | null;
+            /**
+             * Fairing Diameter M
+             * @description 整流罩直径（m；无整流罩为 null）
+             */
+            fairing_diameter_m: number | null;
+            /** @description 轨道运力摘要（FR-11） */
+            capacity: components["schemas"]["OrbitCapacitySummary"];
+            /**
+             * Warnings
+             * @description 面板相关警告（发射场缺省 / 目标轨道表外等）
+             */
+            warnings: string[];
+            /**
+             * Provenance
+             * @description 口径与来源声明（§1.4-4 溯源红线）
+             */
+            provenance: {
+                [key: string]: string;
+            };
+        };
+        /**
          * VonKarmanSegment
          * @description 冯·卡门头锥段（§5.3 曲线族，M5）：跨声速最优头锥（LDHV）。
          *
@@ -4338,6 +4522,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["McResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_formats_api_export_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    vehicle_summary_api_vehicle_summary_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VehicleSummaryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VehicleSummaryResponse"];
                 };
             };
             /** @description Validation Error */

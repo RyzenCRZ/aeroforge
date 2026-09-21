@@ -61,6 +61,7 @@ from aeroforge.errors import AeroForgeError, ErrorBody, to_error_body
 from aeroforge.geometry.analytic import analyze
 from aeroforge.geometry.assembly import build_assembly
 from aeroforge.geometry.bundle import BoosterSummary, booster_assembly, build_bundle
+from aeroforge.geometry.exportmod import run_export
 from aeroforge.geometry.meridian import MeridianProfile, resolve
 from aeroforge.geometry.revolve import (
     LOD1_ANGULAR,
@@ -93,7 +94,8 @@ class JobStage(StrEnum):
 
     几何链 ``meridian → solid → mesh → step → done``；MC 计算链
     ``sampling → evaluating → summarizing → done``（M4 第四片补入，前端按字符串
-    消费、新增枚举值为增量变更）。
+    消费、新增枚举值为增量变更）；导出链 ``solid → export → done``（M5 第三片，
+    §5.8——报告类导出无几何构建，直接 ``export``）。
     """
 
     QUEUED = "queued"
@@ -101,6 +103,7 @@ class JobStage(StrEnum):
     SOLID = "solid"
     MESH = "mesh"
     STEP = "step"
+    EXPORT = "export"
     SAMPLING = "sampling"
     EVALUATING = "evaluating"
     SUMMARIZING = "summarizing"
@@ -114,6 +117,7 @@ _STAGE_PROGRESS: dict[JobStage, float] = {
     JobStage.SOLID: 0.4,
     JobStage.MESH: 0.7,
     JobStage.STEP: 0.9,
+    JobStage.EXPORT: 0.9,
     JobStage.SAMPLING: 0.05,
     JobStage.EVALUATING: 0.1,
     JobStage.SUMMARIZING: 0.95,
@@ -246,6 +250,31 @@ class JobBoard:
 # ---------------------------------------------------------------------------
 
 
+class _GeometryWork:
+    """几何线程的一个工作项（构建 / 导出共用队列，§9.1 硬规则 3：OCCT 串行）。
+
+    三种形态互斥：剖面构建（``profile``）· 车辆构建（``vehicle``）· 多格式
+    导出（``vehicle`` + ``export_formats``，§5.8 / M5 第三片）。
+    """
+
+    __slots__ = ("boosters", "export_formats", "job_id", "profile", "vehicle")
+
+    def __init__(
+        self,
+        job_id: str,
+        *,
+        profile: MeridianProfile | None = None,
+        boosters: BoosterSummary | None = None,
+        vehicle: Vehicle | None = None,
+        export_formats: tuple[str, ...] | None = None,
+    ) -> None:
+        self.job_id = job_id
+        self.profile = profile
+        self.boosters = boosters
+        self.vehicle = vehicle
+        self.export_formats = export_formats
+
+
 class GeometryJobRunner:
     """单 worker 几何作业执行器（OCCT 专用线程，硬规则 3）。"""
 
@@ -258,9 +287,7 @@ class GeometryJobRunner:
     ) -> None:
         self.store = store or ArtifactStore()
         self.board = board if board is not None else JobBoard()
-        self._queue: queue.Queue[
-            tuple[str, MeridianProfile | None, BoosterSummary | None, Vehicle | None] | None
-        ] = queue.Queue(maxsize=queue_size)
+        self._queue: queue.Queue[_GeometryWork | None] = queue.Queue(maxsize=queue_size)
         self._stop_lock = threading.Lock()
         self._stopped = False
         self._thread = threading.Thread(target=self._worker, name="aeroforge-geometry", daemon=True)
@@ -282,7 +309,7 @@ class GeometryJobRunner:
         ⚠ 本方法**不做几何计算**：只有键计算（JSON + sha256，微秒级）与入队。
         """
         record = self.board.create()
-        self._queue.put((record.job_id, profile, boosters, None))
+        self._queue.put(_GeometryWork(record.job_id, profile=profile, boosters=boosters))
         return record
 
     def submit_vehicle(self, vehicle: Vehicle) -> JobRecord:
@@ -292,7 +319,17 @@ class GeometryJobRunner:
         :func:`aeroforge.cache.store.compute_vehicle_key`（vehicle canonical）。
         """
         record = self.board.create()
-        self._queue.put((record.job_id, None, None, vehicle))
+        self._queue.put(_GeometryWork(record.job_id, vehicle=vehicle))
+        return record
+
+    def submit_export(self, vehicle: Vehicle, formats: tuple[str, ...]) -> JobRecord:
+        """入队一个多格式导出作业（§5.8 / M5 第三片）并立即返回 ``queued`` 快照。
+
+        导出挂几何线程（OCCT 专用单线程——硬规则 3 的导出侧兑现）；验证门禁
+        与产物落位见 :func:`aeroforge.geometry.exportmod.run_export`。
+        """
+        record = self.board.create()
+        self._queue.put(_GeometryWork(record.job_id, vehicle=vehicle, export_formats=formats))
         return record
 
     def get(self, job_id: str) -> JobRecord | None:
@@ -324,15 +361,17 @@ class GeometryJobRunner:
             item = self._queue.get()
             if item is None:
                 return
-            job_id, profile, boosters, vehicle = item
             try:
-                if vehicle is not None:
-                    self._run_vehicle(job_id, vehicle)
+                if item.export_formats is not None:
+                    assert item.vehicle is not None
+                    self._run_export(item.job_id, item.vehicle, item.export_formats)
+                elif item.vehicle is not None:
+                    self._run_vehicle(item.job_id, item.vehicle)
                 else:
-                    assert profile is not None
-                    self._run(job_id, profile, boosters)
+                    assert item.profile is not None
+                    self._run(item.job_id, item.profile, item.boosters)
             except BaseException as exc:
-                self._settle_failure(job_id, exc)
+                self._settle_failure(item.job_id, exc)
 
     def _stage(
         self, job_id: str, stage: JobStage, started: float, timings: dict[str, float]
@@ -536,6 +575,52 @@ class GeometryJobRunner:
             stage=JobStage.DONE,
             progress=1.0,
             result_key=cache_key.key,
+            metrics=metrics,
+            finished_at=_now(),
+            timings_ms=timings,
+        )
+
+    def _run_export(self, job_id: str, vehicle: Vehicle, formats: tuple[str, ...]) -> None:
+        """多格式导出作业（§5.8 / M5 第三片）：验证门禁 → 逐格式写出 → 产物登记。
+
+        metrics = :class:`~aeroforge.geometry.exportmod.ExportResult`（files /
+        warnings / diagnostics / keys / provenance）；规则 4 拒绝经
+        :class:`~aeroforge.errors.ExportValidationError` 收敛为作业失败
+        （``EXPORT_VALIDATION_FAILED`` → 422，diagnostics 摘要在错误详情）。
+        """
+        started = time.perf_counter()
+        timings: dict[str, float] = {}
+        self.board.update(job_id, status=JobStatus.RUNNING, started_at=_now())
+        self._raise_if_cancelled(job_id)
+
+        # ── 阶段 1：装配 + §5.7 校验（含几何格式时；报告类纯数值） ──
+        self._stage(job_id, JobStage.SOLID, started, timings)
+
+        # ── 阶段 2：逐格式写出（exportmod 内含规则 4 门禁与产物登记） ──
+        self._stage(job_id, JobStage.EXPORT, started, timings)
+        result = run_export(vehicle, formats, self.store)
+
+        # result_key：几何格式在场取构建键（与 build 车辆形态同键——导出是衍生），
+        # 纯报告请求取 report- 键
+        result_key = (
+            result.keys["geometry"]
+            if any(
+                item.format not in ("params_json", "mass_csv", "perf_json") for item in result.files
+            )
+            else result.keys["report"]
+        )
+        metrics: dict[str, Any] = {
+            "form": "export",
+            **result.model_dump(mode="json"),
+        }
+
+        timings[JobStage.DONE.value] = round((time.perf_counter() - started) * 1000.0, 2)
+        self.board.update(
+            job_id,
+            status=JobStatus.SUCCEEDED,
+            stage=JobStage.DONE,
+            progress=1.0,
+            result_key=result_key,
             metrics=metrics,
             finished_at=_now(),
             timings_ms=timings,

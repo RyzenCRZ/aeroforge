@@ -720,7 +720,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9a-f]{64}$",
+              "pattern": "^(report-)?[0-9a-f]{64}$",
               "description": "内容寻址缓存键",
               "title": "Key"
             },
@@ -773,7 +773,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9a-f]{64}$",
+              "pattern": "^(report-)?[0-9a-f]{64}$",
               "description": "内容寻址缓存键",
               "title": "Key"
             },
@@ -987,6 +987,90 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/McResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/export": {
+      "post": {
+        "tags": [
+          "export"
+        ],
+        "summary": "Export Formats",
+        "description": "多格式导出（异步）：STEP/IGES/STL/GLB + 参数/质量/性能报告（§5.8）。\n\n产物落位：几何格式 → ``artifacts/<构建键>/export/``；报告类 →\n``artifacts/report-<hash>/export/``（不新建几何缓存键——导出是构建产物的\n衍生，§9.2）。文件名 ``export.step`` / ``export.stl`` / ``export.mass.csv``…\n沿用 artifacts 白名单通道取回。",
+        "operationId": "export_formats_api_export_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vehicle/summary": {
+      "post": {
+        "tags": [
+          "vehicle"
+        ],
+        "summary": "Vehicle Summary",
+        "description": "整箭数据面板（FR-10 / FR-11）：质量 / 几何 / 运力一次下发，全部后端算出。\n\n校验失败走既有错误体系：参数硬约束 → 422 ``PARAMS_CONSTRAINT_VIOLATION``\n（与 evaluate 同判据）；布局不可行（plan_stage 纯数值复核）→ 422\n``GEOMETRY_INVALID``（与 sections 同判据）。",
+        "operationId": "vehicle_summary_api_vehicle_summary_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VehicleSummaryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VehicleSummaryResponse"
                 }
               }
             }
@@ -2137,6 +2221,93 @@
         "title": "ErrorBody",
         "description": "§10.3 规定的错误响应体。"
       },
+      "ExportRequest": {
+        "properties": {
+          "vehicle": {
+            "$ref": "#/components/schemas/Vehicle",
+            "description": "飞行器参数（与 /api/geometry/build 车辆形态同构）"
+          },
+          "formats": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "step",
+                "iges",
+                "stl",
+                "glb",
+                "params_json",
+                "mass_csv",
+                "perf_json"
+              ]
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Formats",
+            "description": "导出格式：step / iges（精确 BREP，受 §5.8 规则 4 验证门禁）；stl / glb（网格近似，验证未通过时附警告导出）；params_json / mass_csv / perf_json（报告类，不走 OCCT）"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "vehicle",
+          "formats"
+        ],
+        "title": "ExportRequest",
+        "description": "``POST /api/export`` 的请求体（§5.8 表的格式枚举 + 飞行器参数）。"
+      },
+      "ExportResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id",
+            "description": "导出作业 id（GET /api/jobs/{id} / WS 订阅进度）"
+          },
+          "formats": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "step",
+                "iges",
+                "stl",
+                "glb",
+                "params_json",
+                "mass_csv",
+                "perf_json"
+              ]
+            },
+            "type": "array",
+            "title": "Formats",
+            "description": "本次受理的格式清单（去重保序）；产物经 /api/artifacts/{key}/{file} 取回"
+          },
+          "files": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "enum": [
+                "step",
+                "iges",
+                "stl",
+                "glb",
+                "params_json",
+                "mass_csv",
+                "perf_json"
+              ]
+            },
+            "type": "object",
+            "title": "Files",
+            "description": "格式 → 产物文件名映射（/api/artifacts/{key}/{file} 的 file 段）。命名单一事实源在后端（cache.store 的 ARTIFACT_EXPORT_* 常量），前端按此映射下载，禁止自行拼接（ADR-011 同族纪律）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "formats",
+          "files"
+        ],
+        "title": "ExportResponse",
+        "description": "``POST /api/export`` 的响应体（异步受理；作业完成经 /api/jobs/{id} 取回）。"
+      },
       "Geometry": {
         "properties": {
           "common_bulkhead": {
@@ -2464,13 +2635,14 @@
           "solid",
           "mesh",
           "step",
+          "export",
           "sampling",
           "evaluating",
           "summarizing",
           "done"
         ],
         "title": "JobStage",
-        "description": "§9.3 的进度阶段。\n\n几何链 ``meridian → solid → mesh → step → done``；MC 计算链\n``sampling → evaluating → summarizing → done``（M4 第四片补入，前端按字符串\n消费、新增枚举值为增量变更）。"
+        "description": "§9.3 的进度阶段。\n\n几何链 ``meridian → solid → mesh → step → done``；MC 计算链\n``sampling → evaluating → summarizing → done``（M4 第四片补入，前端按字符串\n消费、新增枚举值为增量变更）；导出链 ``solid → export → done``（M5 第三片，\n§5.8——报告类导出无几何构建，直接 ``export``）。"
       },
       "JobStatus": {
         "type": "string",
@@ -3187,6 +3359,56 @@
         "title": "MotorParseResult",
         "description": "发动机解析结果（``.eng`` / ``.rse`` 同构）。字段名带 SI 单位后缀。"
       },
+      "OrbitCapacitySummary": {
+        "properties": {
+          "target_orbit": {
+            "type": "string",
+            "title": "Target Orbit",
+            "description": "当前 Mission 的目标轨道类型（§6.1 OrbitType）"
+          },
+          "target_payload_kg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Payload Kg",
+            "description": "当前目标轨道的运力点值（kg）；四轨道表（LEO/SSO/GTO/GEO）覆盖内取表行，表外轨道（TLI/TMI/escape/custom）为 null——随 M6 轨道层交付"
+          },
+          "target_attainable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Attainable",
+            "description": "当前目标轨道是否可达（表外轨道为 null）；不可达时点值记 0"
+          },
+          "payload_by_orbit": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/OrbitPayload"
+            },
+            "type": "object",
+            "title": "Payload By Orbit",
+            "description": "四轨道点值运力表（与 /api/perf/evaluate 的 point.payload_by_orbit 同源同值）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "target_orbit",
+          "target_payload_kg",
+          "target_attainable",
+          "payload_by_orbit"
+        ],
+        "title": "OrbitCapacitySummary",
+        "description": "轨道运力摘要（FR-11：当前目标轨道点值 + 四轨道表）。"
+      },
       "OrbitPayload": {
         "properties": {
           "payload_kg": {
@@ -3334,7 +3556,7 @@
           "cache_hit"
         ],
         "title": "PerfEvaluateResponse",
-        "description": "``POST /api/perf/evaluate`` 的响应体（阶段①：点值 + MC 作业挂点）。"
+        "description": "点值评估响应体（阶段①：点值 + MC 作业挂点）。"
       },
       "PointEvaluation": {
         "properties": {
@@ -6082,6 +6304,125 @@
         ],
         "title": "VehicleSearchResponse",
         "description": "``GET /api/catalog/vehicles/search`` 的响应体。"
+      },
+      "VehicleSummaryRequest": {
+        "properties": {
+          "vehicle": {
+            "$ref": "#/components/schemas/Vehicle",
+            "description": "飞行器参数（面板质量 / 几何 / 运力的唯一输入）"
+          },
+          "mission": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Mission"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "运力摘要的轨道上下文覆写（试算不同目标轨道而不改车辆参数）；省略 = 使用 vehicle.mission（质量与几何量不受本字段影响）"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "vehicle"
+        ],
+        "title": "VehicleSummaryRequest",
+        "description": "``POST /api/vehicle/summary`` 的请求体。"
+      },
+      "VehicleSummaryResponse": {
+        "properties": {
+          "total_mass_kg": {
+            "type": "number",
+            "title": "Total Mass Kg",
+            "description": "总质量 / GLOW（kg = 载荷 + 全部级 + 助推器）"
+          },
+          "total_mass_t": {
+            "type": "number",
+            "title": "Total Mass T",
+            "description": "总质量（t；kg→t 换算由后端完成，前端零换算）"
+          },
+          "propellant_mass_kg": {
+            "type": "number",
+            "title": "Propellant Mass Kg",
+            "description": "推进剂总质量（kg，含助推器推进剂）"
+          },
+          "dry_mass_kg": {
+            "type": "number",
+            "title": "Dry Mass Kg",
+            "description": "干重（kg，含助推器干重——0 级段账）"
+          },
+          "total_height_m": {
+            "type": "number",
+            "title": "Total Height M",
+            "description": "总高（m，含整流罩 / 适配器；不含助推器）"
+          },
+          "body_max_diameter_m": {
+            "type": "number",
+            "title": "Body Max Diameter M",
+            "description": "箭体最大直径（m，含助推器包络若有；整流罩直径单列不并入）"
+          },
+          "booster_envelope_diameter_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Booster Envelope Diameter M",
+            "description": "助推器包络直径（m = 芯级全剖面最大半径〔含整流罩〕+ 助推器直径 + 间隙的包络）；无助推器为 null"
+          },
+          "fairing_diameter_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fairing Diameter M",
+            "description": "整流罩直径（m；无整流罩为 null）"
+          },
+          "capacity": {
+            "$ref": "#/components/schemas/OrbitCapacitySummary",
+            "description": "轨道运力摘要（FR-11）"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "description": "面板相关警告（发射场缺省 / 目标轨道表外等）"
+          },
+          "provenance": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Provenance",
+            "description": "口径与来源声明（§1.4-4 溯源红线）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total_mass_kg",
+          "total_mass_t",
+          "propellant_mass_kg",
+          "dry_mass_kg",
+          "total_height_m",
+          "body_max_diameter_m",
+          "fairing_diameter_m",
+          "capacity",
+          "warnings",
+          "provenance"
+        ],
+        "title": "VehicleSummaryResponse",
+        "description": "整箭数据面板响应体（数值字段一律带单位后缀 _kg / _m / _t，FR-10）。"
       },
       "VonKarmanSegment": {
         "properties": {

@@ -570,6 +570,20 @@ def fairing_adapter_heights(vehicle: Vehicle) -> tuple[float, float] | None:
     return adapter_height, fairing_height
 
 
+def vehicle_core_height_m(vehicle: Vehicle) -> float:
+    """芯级整箭总高（m，含顶级整流罩 / 适配器；**不含助推器**）。
+
+    与 sections 端点 ``dimensions.total_length_m``、装配树 ``total_length``
+    同口径同源（Σ 级装配高 + 适配器 + 整流罩）——整箭数据面板（FR-10）与
+    sections 共用同一份高度事实（M5 第三片抽出，单一实现）。
+    """
+    total = sum(plan_stage(stage).height for stage in sorted(vehicle.stages, key=lambda s: s.index))
+    top = fairing_adapter_heights(vehicle)
+    if top is not None:
+        total += top[0] + top[1]
+    return total
+
+
 def build_stage_solids(
     stage: Stage, layout: StageLayout, z_offset: float
 ) -> list[tuple[str, bd.Solid]]:
@@ -1094,4 +1108,5 @@ __all__ = [
     "fairing_adapter_heights",
     "plan_stage",
     "section_node_name",
+    "vehicle_core_height_m",
 ]

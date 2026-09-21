@@ -22,8 +22,9 @@ from aeroforge.errors import ArtifactNotFoundError
 
 router = APIRouter(tags=["artifacts"])
 
-#: 缓存键形状（sha256 十六进制）。限定形状即可排除 ``..`` 等穿越尝试。
-_KEY_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+#: 缓存键形状：sha256 十六进制（构建产物），或带语义前缀的同长摘要（§5.8 报告类
+#: ``report-``——几何 kernel 版本不参与报告键）。限定形状即可排除 ``..`` 等穿越尝试。
+_KEY_PATTERN = re.compile(r"^(report-)?[0-9a-f]{64}$")
 
 ArtifactKey = Annotated[str, Path(description="内容寻址缓存键", pattern=_KEY_PATTERN.pattern)]
 

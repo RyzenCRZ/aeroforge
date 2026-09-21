@@ -42,6 +42,20 @@ ARTIFACT_PROVENANCE = "provenance.json"
 ARTIFACT_EVALUATE = "evaluate.json"
 ARTIFACT_MC = "mc.json"
 
+# 多格式导出产物（§5.8，M5 第三片）：几何格式落在构建键的 export/ 子目录，
+# 报告类落在 report-<hash> 键的 export/ 子目录——同一逻辑名在两种键下都经
+# ``GET /api/artifacts/{key}/{file}`` 取回（子目录解析见 :func:`_artifact_dir`）。
+ARTIFACT_EXPORT_STEP = "export.step"
+ARTIFACT_EXPORT_IGES = "export.iges"
+ARTIFACT_EXPORT_STL = "export.stl"
+ARTIFACT_EXPORT_GLB = "export.glb"
+ARTIFACT_EXPORT_PARAMS = "export.params.json"
+ARTIFACT_EXPORT_MASS = "export.mass.csv"
+ARTIFACT_EXPORT_PERF = "export.perf.json"
+
+#: 导出产物的统一子目录名（``artifacts/<key>/export/``）。
+EXPORT_SUBDIR = "export"
+
 #: 允许经 ``GET /api/artifacts/{key}/{file}`` 取出的文件名白名单。
 #: 显式列举而非拼接，避免路径穿越与意外暴露临时文件。
 ALLOWED_ARTIFACTS: frozenset[str] = frozenset(
@@ -53,6 +67,13 @@ ALLOWED_ARTIFACTS: frozenset[str] = frozenset(
         ARTIFACT_PROVENANCE,
         ARTIFACT_EVALUATE,
         ARTIFACT_MC,
+        ARTIFACT_EXPORT_STEP,
+        ARTIFACT_EXPORT_IGES,
+        ARTIFACT_EXPORT_STL,
+        ARTIFACT_EXPORT_GLB,
+        ARTIFACT_EXPORT_PARAMS,
+        ARTIFACT_EXPORT_MASS,
+        ARTIFACT_EXPORT_PERF,
     }
 )
 
@@ -65,7 +86,27 @@ ARTIFACT_MEDIA_TYPES: dict[str, str] = {
     ARTIFACT_PROVENANCE: "application/json",
     ARTIFACT_EVALUATE: "application/json",
     ARTIFACT_MC: "application/json",
+    ARTIFACT_EXPORT_STEP: "application/step",
+    ARTIFACT_EXPORT_IGES: "model/iges",
+    ARTIFACT_EXPORT_STL: "model/stl",
+    ARTIFACT_EXPORT_GLB: "model/gltf-binary",
+    ARTIFACT_EXPORT_PARAMS: "application/json",
+    ARTIFACT_EXPORT_MASS: "text/csv",
+    ARTIFACT_EXPORT_PERF: "application/json",
 }
+
+#: 导出产物名集合（落在 ``export/`` 子目录；其余白名单产物在键目录根）。
+EXPORT_ARTIFACTS: frozenset[str] = frozenset(
+    {
+        ARTIFACT_EXPORT_STEP,
+        ARTIFACT_EXPORT_IGES,
+        ARTIFACT_EXPORT_STL,
+        ARTIFACT_EXPORT_GLB,
+        ARTIFACT_EXPORT_PARAMS,
+        ARTIFACT_EXPORT_MASS,
+        ARTIFACT_EXPORT_PERF,
+    }
+)
 
 
 class CacheKey(BaseModel):
@@ -172,6 +213,20 @@ def mc_cache_key(vehicle: Vehicle, samples: int, seed: int) -> str:
         ).encode("utf-8")
     ).hexdigest()
     return f"perf-mc-{digest}"
+
+
+def report_cache_key(vehicle: Vehicle) -> str:
+    """报告类导出（§5.8：参数 JSON / 质量预算 CSV / 性能 JSON）的缓存键。
+
+    与 :func:`evaluate_cache_key` 同构（canonical + SPEC_VERSION，不含几何
+    kernel 版本——报告不走 OCCT，几何语义未变时不得因无关版本递增而失效）；
+    ``report-`` 前缀把报告产物与几何构建键（sha256 裸十六进制）区分开。
+    报告是**参数的衍生**：同参数 ⟹ 同报告键 ⟹ 同一份产物目录（覆盖写）。
+    """
+    digest = hashlib.sha256(
+        "\x00".join((vehicle_canonical_json(vehicle), SPEC_VERSION)).encode("utf-8")
+    ).hexdigest()
+    return f"report-{digest}"
 
 
 class StagedArtifacts:
@@ -308,11 +363,38 @@ class ArtifactStore:
             return None
 
     def file_path(self, key: str, logical_name: str) -> Path | None:
-        """取产物文件的绝对路径；不在白名单或文件缺失时返回 ``None``。"""
+        """取产物文件的绝对路径；不在白名单或文件缺失时返回 ``None``。
+
+        导出产物（§5.8）解析到 ``artifacts/<key>/export/<name>``——导出是构建
+        产物的衍生，与既有构建产物同键共存但不混放（其余产物在键目录根）。
+        """
         if logical_name not in ALLOWED_ARTIFACTS:
             return None
-        path = self.dir_for(key) / logical_name
+        directory = self.dir_for(key)
+        if logical_name in EXPORT_ARTIFACTS:
+            directory = directory / EXPORT_SUBDIR
+        path = directory / logical_name
         return path if path.is_file() else None
+
+    def export_dir(self, key: str) -> Path:
+        """导出产物目录（``artifacts/<key>/export/``），不存在则创建。
+
+        OCCT 导出接口只接受路径，几何 writer 直接写入该目录下的 ``.part``
+        临时文件再原子改名（经 :meth:`register_export`，同 ``.part`` + 改名纪律）。
+        """
+        return ensure_dir(self.dir_for(key) / EXPORT_SUBDIR)
+
+    def register_export(self, key: str, logical_name: str, source: Path) -> Path:
+        """把 writer 已写好的 ``.part`` 文件原子改名为最终导出产物，返回目标路径。
+
+        改名撞车（并发导出同一键）时丢弃本次——两份产物等价（内容寻址键相同）。
+        """
+        target = self.export_dir(key) / logical_name
+        try:
+            source.replace(target)
+        except OSError:
+            source.unlink(missing_ok=True)  # Windows 并发改名撞车：另一写入者已完成
+        return target
 
     def stage(self, key: str) -> StagedArtifacts:
         return StagedArtifacts(self, key)

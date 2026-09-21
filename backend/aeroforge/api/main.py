@@ -23,6 +23,7 @@ from aeroforge import __version__
 from aeroforge.api import (
     artifacts,
     catalog,
+    export,
     geometry,
     importers,
     jobs,
@@ -30,6 +31,7 @@ from aeroforge.api import (
     perf,
     sizing,
     uncertainty,
+    vehicle,
 )
 from aeroforge.api.deps import get_compute_runner, get_runner, reset_singletons
 from aeroforge.errors import AeroForgeError, ErrorBody, to_error_body
@@ -52,6 +54,8 @@ _STATUS_BY_CODE: dict[str, int] = {
     "SIZING_SOLVE_FAILED": 422,
     "SIZING_NO_CONVERGENCE": 422,
     "PERF_EVALUATE_FAILED": 422,
+    "EXPORT_FAILED": 422,
+    "EXPORT_VALIDATION_FAILED": 422,
 }
 
 _STATUS_CODES: dict[int, str] = {
@@ -97,6 +101,8 @@ app.include_router(importers.router)
 app.include_router(sizing.router)
 app.include_router(perf.router)
 app.include_router(uncertainty.router)
+app.include_router(export.router)
+app.include_router(vehicle.router)
 
 
 def _error_response(status_code: int, body: ErrorBody) -> JSONResponse:

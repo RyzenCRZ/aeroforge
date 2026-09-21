@@ -32,6 +32,11 @@ interface ViewState {
   /** 组件树 ↔ 视口**共用**的选中段（双向联动：任一处的选择都写这里）。 */
   selectedSegment: number | null
   clip: ClipState
+  /**
+   * 爆炸因子（§11.4 / OI-19 M5）：0 = 常态。施加逻辑见 `r3f/explode.ts`
+   * （位移是视图偏移，非几何变更；不可导出）。
+   */
+  explodeFactor: number
   setLightIntensity: (value: number) => void
   toggleGrid: () => void
   toggleAutoRotate: () => void
@@ -43,6 +48,8 @@ interface ViewState {
   setClipEnabled: (enabled: boolean) => void
   setClipAxis: (axis: ClipAxis) => void
   setClipPosition: (position: number) => void
+  setExplodeFactor: (value: number) => void
+  resetExplode: () => void
   reset: () => void
 }
 
@@ -66,6 +73,7 @@ export const useViewStore = create<ViewState>((set) => ({
   hiddenSegments: NO_HIDDEN,
   selectedSegment: null,
   clip: DEFAULT_CLIP,
+  explodeFactor: 0,
 
   setLightIntensity: (value) =>
     set({ lightIntensity: Math.min(LIGHT_INTENSITY_MAX, Math.max(LIGHT_INTENSITY_MIN, value)) }),
@@ -95,10 +103,31 @@ export const useViewStore = create<ViewState>((set) => ({
 
   selectSegment: (index) => set({ selectedSegment: index }),
 
-  setClipEnabled: (enabled) => set((state) => ({ clip: { ...state.clip, enabled } })),
+  setClipEnabled: (enabled) =>
+    set((state) => {
+      // 互斥的另一侧（§11.4）：开剖切即复位爆炸——两个轴向视图状态不得并存
+      if (enabled && state.explodeFactor > 0) {
+        return { clip: { ...state.clip, enabled }, explodeFactor: 0 }
+      }
+      return { clip: { ...state.clip, enabled } }
+    }),
+
   setClipAxis: (axis) => set((state) => ({ clip: { ...state.clip, axis } })),
+
   setClipPosition: (position) =>
     set((state) => ({ clip: { ...state.clip, position: Math.min(1, Math.max(0, position)) } })),
+
+  setExplodeFactor: (value) =>
+    set((state) => {
+      const factor = Math.min(1, Math.max(0, value))
+      // 互斥（§11.4）：爆炸激活即关剖切——UI 侧另行给出冲突提示（视口工具条）
+      if (factor > 0 && state.clip.enabled) {
+        return { explodeFactor: factor, clip: { ...state.clip, enabled: false } }
+      }
+      return { explodeFactor: factor }
+    }),
+
+  resetExplode: () => set({ explodeFactor: 0 }),
 
   reset: () =>
     set({
@@ -109,5 +138,6 @@ export const useViewStore = create<ViewState>((set) => ({
       hiddenSegments: NO_HIDDEN,
       selectedSegment: null,
       clip: DEFAULT_CLIP,
+      explodeFactor: 0,
     }),
 }))

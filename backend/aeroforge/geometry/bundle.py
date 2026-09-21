@@ -1,4 +1,4 @@
-"""简化捆绑几何（规格 §1.7.6 OI-36 ④：M4 = 周向均布侧级圆柱体）。
+"""捆绑几何（规格 §1.7.6 OI-36：M4 = 周向均布；M5 = 完整布局）。
 
 场景图契约（沿用 OI-33 的具名节点机制）
 ----------------------------------------
@@ -6,14 +6,23 @@
 ``booster-<k>``（``k`` 为 0 基，0..count-1）。助推器节点缺名同样等于
 "前端找不到节点 = 静默失效"，故必须逐枚机检。
 
-M4 简化口径（§8.5 / OI-36 ④）
-------------------------------
+M4 简化口径（§8.5 / OI-36 ④，缺省路径——字节不变的现状）
+--------------------------------------------------------
 - 每枚助推器取**轴向基线 = 0** 起算的圆柱体（长度 = 侧级 ``length_m``）；
 - 径向位置 = 芯级**全剖面最大半径** + 助推器半径 + 0.1 m 间隙——取全剖面最大
   而非底段半径，保证助推器沿全长（含整流罩段）都不与芯级相交；
 - 周向按 ``2πk / count`` 均布；
 - 无助推器时 :func:`build_bundle` **原样委托** :func:`aeroforge.geometry.revolve.build_segments`
   ——既有输入的产物字节路径一个字节都不动（§9.2 缓存纪律）。
+
+M5 完整布局（OI-36 的 M5 部分）
+------------------------------
+- ``radial_offset_m``：助推器**轴线**距芯级轴线的径向距离（用户权威；缺省 None =
+  M4 贴接现状）；须 ≥ 芯级最大半径（硬校验在约束引擎，几何层对间隙 ≥ 0 复核）；
+- ``angles_deg``：自定义角位（°，自 +X 逆时针；缺省 None = 周向均布）；个数必须
+  等于 ``count``；相邻助推器表面间隙 < 0.05 m（工程惯例最小间隙）→ ValueError
+  （约束引擎为 warning 级、几何层兜底报错——两层都留痕）；
+- 参数缺省时与 M4 路径**逐字节一致**（canonical 回归测试钉死，§9.2）。
 
 量测口径（"看到的"与"算的"一致性，P1 / ADR-012）
 ------------------------------------------------
@@ -40,16 +49,22 @@ from aeroforge.geometry.revolve import (
 #: 助推器与芯级之间的径向间隙（m）。工程惯例值：并联构型的结构间隙下限。
 BOOSTER_GAP_M = 0.1
 
+#: 相邻助推器表面最小间隙（m）。工程惯例值：并联构型的安装 / 分离安全间隙；
+#: 违反在约束引擎为 warning 级、几何层兜底报错。
+BOOSTER_BOOSTER_MIN_GAP_M = 0.05
+
 #: 捆绑 GLB 的助推器节点名前缀：``booster-<k>``，``<k>`` 为 0 基枚举下标。
 #: ⚠ 前端按名找节点（同 ``seg-<i>`` 口径），改名即关掉助推器显隐。
 GLB_BOOSTER_PREFIX = "booster-"
 
 
 class BoosterSummary(BaseModel):
-    """构建入参里的助推器摘要（M4 简化：单一构型的周向均布组）。
+    """构建入参里的助推器摘要（M4 简化 + M5 完整布局字段）。
 
     这是**几何域的入参**，不是 :class:`aeroforge.params.schema.Booster` 的搬运：
-    从参数层助推器取 ``count`` / 侧级 ``diameter_m`` / 侧级 ``length_m`` 折算而成。
+    从参数层助推器取 ``count`` / 侧级 ``diameter_m`` / 侧级 ``length_m`` 折算而成；
+    M5 增补 ``radial_offset_m`` / ``angles_deg``（缺省 None = M4 周向均布现状，
+    canonical 字节稳定，§9.2）。
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -57,6 +72,16 @@ class BoosterSummary(BaseModel):
     count: int = Field(ge=1, description="助推器数量（周向均布的枚数）")
     diameter_m: float = Field(gt=0.0, description="单枚助推器直径（m）")
     length_m: float = Field(gt=0.0, description="单枚助推器长度（m；轴向基线 = 0 起算）")
+    radial_offset_m: float | None = Field(
+        default=None,
+        gt=0.0,
+        description=(
+            "助推器轴线距芯级轴线的径向距离（m）；None = 贴接（芯级半径+助推器半径+间隙）"
+        ),
+    )
+    angles_deg: tuple[float, ...] | None = Field(
+        default=None, description="自定义角位（°，自 +X 逆时针）；None = 周向均布 2πk/count"
+    )
 
 
 def booster_label(index: int) -> str:
@@ -70,6 +95,53 @@ def booster_axis_radius(core_max_radius_m: float, booster_diameter_m: float) -> 
         msg = "芯级最大半径为 0（剖面全退化），无法布置助推器"
         raise ValueError(msg)
     return core_max_radius_m + booster_diameter_m / 2.0 + BOOSTER_GAP_M
+
+
+def _booster_placements(
+    core_max_radius_m: float, boosters: BoosterSummary
+) -> list[tuple[float, float]]:
+    """逐枚助推器的 (径向距离, 角度弧度)——M4 均布 / M5 完整布局的单一实现。"""
+    booster_radius = boosters.diameter_m / 2.0
+    if boosters.radial_offset_m is not None:
+        axis_radius = boosters.radial_offset_m
+        # 硬校验（与约束引擎同判据）：不得与芯级干涉（径向间隙 ≥ 0）
+        if axis_radius < core_max_radius_m + booster_radius - GEOM_TOL:
+            msg = (
+                f"助推器径向偏移 {axis_radius:.3f} m 使其与芯级干涉（芯级最大半径 "
+                f"{core_max_radius_m:.3f} m + 助推器半径 {booster_radius:.3f} m）——"
+                "径向间隙必须 ≥ 0（radial_offset_m ≥ 芯级最大半径 + 助推器半径）"
+            )
+            raise ValueError(msg)
+    else:
+        axis_radius = booster_axis_radius(core_max_radius_m, boosters.diameter_m)
+
+    if boosters.angles_deg is not None:
+        if len(boosters.angles_deg) != boosters.count:
+            msg = (
+                f"自定义角位个数 {len(boosters.angles_deg)} ≠ 助推器数量 {boosters.count}"
+                "（angles_deg 与 count 必须一一对应）"
+            )
+            raise ValueError(msg)
+        angles = [math.radians(a % 360.0) for a in boosters.angles_deg]
+        # 兜底校验（约束引擎为 warning 级）：相邻助推器表面间隙 ≥ 工程惯例最小值
+        sorted_angles = sorted(angles)
+        for index in range(len(sorted_angles)):
+            if len(sorted_angles) < 2:
+                break
+            step = sorted_angles[(index + 1) % len(sorted_angles)] - sorted_angles[index]
+            if step <= 0.0:
+                step += 2.0 * math.pi
+            surface_gap = 2.0 * axis_radius * math.sin(step / 2.0) - boosters.diameter_m
+            if surface_gap < BOOSTER_BOOSTER_MIN_GAP_M - GEOM_TOL:
+                msg = (
+                    f"相邻助推器表面间隙 {surface_gap:.4f} m 小于工程惯例最小值 "
+                    f"{BOOSTER_BOOSTER_MIN_GAP_M} m（角位布置过密）——请增大角位间隔"
+                    "或减小径向偏移"
+                )
+                raise ValueError(msg)
+    else:
+        angles = [2.0 * math.pi * k / boosters.count for k in range(boosters.count)]
+    return [(axis_radius, angle) for angle in angles]
 
 
 def booster_cylinders(profile: MeridianProfile, boosters: BoosterSummary) -> list[bd.Solid]:
@@ -88,12 +160,12 @@ def booster_cylinders_for_radius(
 
     车辆形态构建没有母线剖面，芯级最大半径来自装配布局（整流罩 / 各级直径的最大
     半径）——与 :func:`booster_cylinders` 共用同一份径向定位公式与节点名约定。
+    M5 完整布局（``radial_offset_m`` / ``angles_deg`` 显式给出时）生效；
+    二者缺省时与 M4 周向均布路径**逐字节一致**（§9.2 canonical 纪律）。
     """
-    axis_radius = booster_axis_radius(core_max_radius_m, boosters.diameter_m)
     radius = boosters.diameter_m / 2.0
     solids: list[bd.Solid] = []
-    for index in range(boosters.count):
-        angle = 2.0 * math.pi * index / boosters.count
+    for index, (axis_radius, angle) in enumerate(_booster_placements(core_max_radius_m, boosters)):
         solid = bd.Solid.make_cylinder(
             radius,
             boosters.length_m,

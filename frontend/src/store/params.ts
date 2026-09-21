@@ -23,11 +23,21 @@ export const DEFAULT_PROFILE: MeridianProfile = {
   ],
 }
 
-/** 可编辑的段字段（`type` 参与判别式，故单独列出以避免 Partial 联合类型的赋值问题）。 */
+/**
+ * 可编辑的段字段（`type` 参与判别式，故单独列出以避免 Partial 联合类型的赋值问题）。
+ *
+ * M5 六曲线族的族特定参数（抛物线系数 / 幂律指数 / 钟形喉部与长度比 / 样条控制点）
+ * 同样经 patch 写入——字段名与后端 Schema 逐字一致（§18.2），校验由后端判定。
+ */
 export interface SegmentPatch {
   type?: SegmentType
   length?: number
   end_radius?: number
+  coefficient?: number
+  exponent?: number
+  throat_radius?: number
+  length_ratio?: number
+  control_points?: [number, number][]
 }
 
 /**
@@ -157,9 +167,20 @@ export const useParamsStore = create<ParamsState>((set) => ({
     set((state) => ({
       profile: {
         ...state.profile,
-        segments: state.profile.segments.map((segment, position) =>
-          position === index ? mergeSegment(segment, patch) : segment,
-        ),
+        segments: state.profile.segments.map((segment, position) => {
+          if (position !== index) return segment
+          if (patch.type !== undefined && patch.type !== segment.type) {
+            // 类型变更：**保留公共字段**（length / end_radius，即 z 起止与两端半径），
+            // 族特定参数一律不残留（旧族的 coefficient 等跟过去会违反后端 extra="forbid"）；
+            // 新族参数取「追加该族」的同一套默认值重建——不另造第二套数字。
+            const previous = state.profile.segments[position - 1]
+            const startRadius =
+              previous === undefined ? state.profile.base_radius : previous.end_radius
+            const rebuilt = defaultSegment(patch.type, startRadius)
+            return { ...rebuilt, length: segment.length, end_radius: segment.end_radius }
+          }
+          return mergeSegment(segment, patch)
+        }),
       },
     })),
 

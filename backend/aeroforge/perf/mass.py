@@ -175,17 +175,47 @@ class PartitionHeights:
     avionics_m: float
     """仪器舱高（m）：``Stage.avionics_height_m`` 显式值，缺省 0（§5.9 允许 0 高）。"""
 
+    interstage_m: float
+    """级间段高（m，§5.9 共性 2：**两级之间**的分离舱段，位于本级底端之下）：
+    ``Stage.interstage_height_m`` 显式值，缺省 0（不切出，现状字节不变）。"""
+
+    engine_bay_m: float
+    """发动机舱段高（m）：``max(0, 发动机高 − 级间段高)``。
+
+    物理口径：本级发动机（喷管）**伸入级间段**（如 F9 二级 MVac 伸入级间段 6.6 m）
+    ——级间段与发动机的轴向占位重叠，发动机舱段只承载级间段之外的余量；
+    级间段完全包容发动机时本值为 0（0 高分区不产带、不产节点，OI-33 演化口径）。
+    """
+
+    interstage_net_m: float
+    """级间段占位中**发动机包容不了**的净余量（m）= ``max(0, 级间段 − 发动机高)``。
+
+    从**贮箱可用高**中扣除（与裙段同口径）：级间段总占位 = ``min(级间段, 发动机高)``
+    （发动机舱段让位包容）+ 本值（贮箱让位）。装配树与 §8.4 几何解析账共同消费
+    同一份划分（M5 第四片两账同源纪律）。
+    """
+
     intertank_source: Literal["user", "derived"]
     """第 6 分区（级间舱）高度来源：用户显式（``Stage.intertank_height_m``）/ 派生。"""
 
+    interstage_source: Literal["user", "none"]
+    """级间段高度来源：用户显式（``Stage.interstage_height_m``）/ 未给出（不切出）。"""
+
     @property
     def reserved_m(self) -> float:
-        """分区轴向预留（m）：下箱底封头 + 第 6 分区 + 上箱顶封头 + 仪器舱。
+        """分区轴向预留（m）：下箱底封头 + 第 6 分区 + 上箱顶封头 + 仪器舱
+        + 级间段净占位（发动机包容不了的余量）。
 
         这是「级长 − 发动机高度」里**不属于两箱柱段**的部分；分区恰好铺满级长的
         关键扣减（:func:`resolve_tank_geometry` 缺省消费它）。
         """
-        return self.dome_lower_m + self.h_mid_m + self.dome_upper_m + self.avionics_m
+        return (
+            self.dome_lower_m
+            + self.h_mid_m
+            + self.dome_upper_m
+            + self.avionics_m
+            + self.interstage_net_m
+        )
 
 
 def tank_roles(stage: Stage) -> tuple[str, str]:
@@ -208,13 +238,17 @@ def tank_diameters_m(stage: Stage) -> dict[str, float]:
 
 
 def partition_heights(stage: Stage) -> PartitionHeights:
-    """推导一级的九段分区高度事实（封头矢高 / 第 6 分区 / 仪器舱）。
+    """推导一级的九段分区高度事实（封头矢高 / 第 6 分区 / 仪器舱 / 级间段）。
 
     - 封头矢高：``h = 扁度系数 × 直径 / 2``（OI-37，级层 flatness，None 兜底 0.5）。
     - 第 6 分区：共底 = 隔板段（按**级径**反算，共底物理上要求两箱同径）；
       非共底 = 级间舱——``Stage.intertank_height_m`` 显式值优先，缺省按派生规则
       （两箱相邻封头矢高和，容纳两只相邻封头）。
     - 仪器舱：``Stage.avionics_height_m`` 显式值，缺省 0 高（§5.9 允许）。
+    - 级间段（M5 第四片，§5.9 共性 2）：``Stage.interstage_height_m`` 显式值，
+      缺省不切出（0）。本级发动机伸入级间段时发动机舱段让位包容（
+      ``engine_bay_m = max(0, 发动机高 − 级间段)``），净余量从贮箱可用高扣除
+      （``interstage_net_m``，与裙段同口径）。
     """
     upper_role, lower_role = tank_roles(stage)
     diameters = tank_diameters_m(stage)
@@ -232,6 +266,12 @@ def partition_heights(stage: Stage) -> PartitionHeights:
     else:
         h_mid = dome_upper + dome_lower
 
+    # 级间段（两级之间的分离舱段）：发动机伸入级间段时发动机舱段让位（物理事实：
+    # 如 F9 二级 MVac 喷管伸入级间段），净余量由贮箱可用高承担
+    interstage = stage.interstage_height_m or 0.0
+    engine_bay = max(0.0, stage.engine_height_m - interstage)
+    interstage_net = max(0.0, interstage - stage.engine_height_m)
+
     return PartitionHeights(
         lower_role=lower_role,
         upper_role=upper_role,
@@ -242,7 +282,11 @@ def partition_heights(stage: Stage) -> PartitionHeights:
         h_mid_m=h_mid,
         bulkhead_m=bulkhead,
         avionics_m=stage.avionics_height_m or 0.0,
+        interstage_m=interstage,
+        engine_bay_m=engine_bay,
+        interstage_net_m=interstage_net,
         intertank_source=intertank_source,
+        interstage_source="user" if stage.interstage_height_m is not None else "none",
     )
 
 
@@ -278,7 +322,7 @@ def resolve_tank_geometry(
     发动机高度 − ``reserved_m``）。
 
     ``reserved_m``（M5 第二片裁定，§5.9）：从可用长度中扣除的**分区轴向预留**
-    （下箱底封头 + 第 6 分区 + 上箱顶封头 + 仪器舱）。缺省 ``None`` ⇒ 取
+    （下箱底封头 + 第 6 分区 + 上箱顶封头 + 仪器舱 + 级间段净占位）。缺省 ``None`` ⇒ 取
     :func:`partition_reserved_m`——装配树九段分区与 §8.4 几何解析账消费**同一份
     分区高度**（箱段高是几何事实，两账同源，不另立第二套箱体解析）；
     显式传 ``0.0`` 退回旧「级长 − 发动机高全算贮箱」口径（仅限对照）。

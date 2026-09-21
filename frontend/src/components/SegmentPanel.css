@@ -155,3 +155,37 @@
   color: var(--color-status-warn);
   font-size: 12px;
 }
+
+/* 样条控制点表（M5）：每行 = 半径 r + 轴向 z + 删除；列头即占位说明，行内不再重复标 */
+.segment-panel__spline {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.segment-panel__spline > .label {
+  line-height: 1.5;
+}
+
+.segment-panel__spline-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.segment-panel__spline-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.segment-panel__spline-row .segment-panel__button {
+  flex: 0 0 auto;
+}

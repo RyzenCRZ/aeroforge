@@ -18,10 +18,13 @@
 
 from __future__ import annotations
 
+import math
+
+from aeroforge.geometry.bundle import BOOSTER_BOOSTER_MIN_GAP_M, BOOSTER_GAP_M
 from aeroforge.params.materials import material_ids
 from aeroforge.params.propellants import fuel_is_lh2
 from aeroforge.params.report import Diagnostic
-from aeroforge.params.schema import Stage, Vehicle
+from aeroforge.params.schema import Booster, Stage, Vehicle
 
 #: 需要高度才成立的目标轨道（§8.6 的轨道需求表）。
 _ALTITUDE_ORBITS = frozenset({"LEO", "SSO", "GEO"})
@@ -299,6 +302,113 @@ def _check_stage(stage: Stage, *, prefix: str) -> list[Diagnostic]:
     return items
 
 
+def _core_max_radius_m(vehicle: Vehicle) -> float:
+    """芯级最大半径（m）：各级直径与整流罩直径取最大（与装配布局同口径的近似）。"""
+    radii = [stage.diameter_m / 2.0 for stage in vehicle.stages]
+    if vehicle.fairing_diameter_m is not None:
+        radii.append(vehicle.fairing_diameter_m / 2.0)
+    return max(radii, default=0.0)
+
+
+def _check_booster_layout(
+    vehicle: Vehicle, position: int, booster: Booster, prefix: str
+) -> list[Diagnostic]:
+    """完整捆绑布局（OI-36 的 M5 部分）：径向偏移 / 自定义角位的领域校验。
+
+    - 角位个数必须等于 count（硬）——布置与数量一一对应，缺失即静默错位；
+    - ``radial_offset_m`` ≥ 芯级最大半径（硬，任务口径）且助推器与芯级径向
+      间隙 ≥ 0（硬：``offset ≥ 芯级最大半径 + 助推器半径``——覆盖前者）；
+    - 相邻助推器表面间隙 < 0.05 m（工程惯例最小值）→ **warning**（不中止）。
+    """
+    items: list[Diagnostic] = []
+    if booster.angles_deg is not None and len(booster.angles_deg) != booster.count:
+        items.append(
+            _hard(
+                "HARD_BOOSTER_INVALID",
+                f"{prefix}.angles_deg",
+                f"自定义角位个数 {len(booster.angles_deg)} ≠ 助推器数量 {booster.count}"
+                "（布置与数量必须一一对应）",
+                f"给出恰好 {booster.count} 个角位（°，自 +X 逆时针），或省略该字段改用周向均布",
+            )
+        )
+    core_radius = _core_max_radius_m(vehicle)
+    booster_radius = booster.stage.diameter_m / 2.0
+    if booster.radial_offset_m is not None:
+        offset = booster.radial_offset_m
+        if offset < core_radius:
+            items.append(
+                _hard(
+                    "HARD_BOOSTER_INVALID",
+                    f"{prefix}.radial_offset_m",
+                    f"助推器径向偏移 {offset:.3f} m 小于芯级最大半径 {core_radius:.3f} m",
+                    f"radial_offset_m ≥ 芯级最大半径 {core_radius:.3f} m（硬校验）",
+                )
+            )
+        elif offset < core_radius + booster_radius:
+            items.append(
+                _hard(
+                    "HARD_BOOSTER_INVALID",
+                    f"{prefix}.radial_offset_m",
+                    f"助推器径向偏移 {offset:.3f} m 使其与芯级干涉（芯级最大半径 "
+                    f"{core_radius:.3f} m + 助推器半径 {booster_radius:.3f} m）",
+                    "径向间隙必须 ≥ 0：radial_offset_m ≥ 芯级最大半径 + 助推器半径",
+                )
+            )
+        # 相邻助推器间隙（warning 级，工程惯例 0.05 m；几何层有同判据的兜底报错）
+        axis_radius = offset
+        surface_gap = math.inf
+        if booster.angles_deg is not None and len(booster.angles_deg) >= 2:
+            angles = sorted(math.radians(a % 360.0) for a in booster.angles_deg)
+            gaps = [
+                (
+                    angles[(i + 1) % len(angles)] - angles[i]
+                    if i + 1 < len(angles)
+                    else 2.0 * math.pi - (angles[i] - angles[0])
+                )
+                for i in range(len(angles))
+            ]
+            surface_gap = 2.0 * axis_radius * math.sin(min(gaps) / 2.0) - booster.stage.diameter_m
+        elif booster.count >= 2:
+            step = 2.0 * math.pi / booster.count
+            surface_gap = 2.0 * axis_radius * math.sin(step / 2.0) - booster.stage.diameter_m
+        if surface_gap < BOOSTER_BOOSTER_MIN_GAP_M:
+            items.append(
+                _warn(
+                    "ENGINEER_BOOSTER_CLEARANCE",
+                    f"{prefix}.angles_deg" if booster.angles_deg is not None else f"{prefix}.count",
+                    f"相邻助推器表面间隙 {surface_gap:.4f} m 小于工程惯例最小值 "
+                    f"{BOOSTER_BOOSTER_MIN_GAP_M} m（并联构型的安装 / 分离安全间隙）",
+                    "增大角位间隔、减小助推器直径或增大径向偏移",
+                )
+            )
+    elif booster.angles_deg is not None:
+        # 角位给了但径向偏移缺省：布置圆取「芯级最大半径 + 助推器半径 + 0.1 m 间隙」
+        # （与几何层 booster_axis_radius 同式）——间隙校验在此口径下复核
+        axis_radius = core_radius + booster_radius + BOOSTER_GAP_M
+        if booster.count >= 2 and len(booster.angles_deg) == booster.count:
+            angles = sorted(math.radians(a % 360.0) for a in booster.angles_deg)
+            gaps = [
+                (
+                    angles[(i + 1) % len(angles)] - angles[i]
+                    if i + 1 < len(angles)
+                    else 2.0 * math.pi - (angles[i] - angles[0])
+                )
+                for i in range(len(angles))
+            ]
+            surface_gap = 2.0 * axis_radius * math.sin(min(gaps) / 2.0) - booster.stage.diameter_m
+            if surface_gap < BOOSTER_BOOSTER_MIN_GAP_M:
+                items.append(
+                    _warn(
+                        "ENGINEER_BOOSTER_CLEARANCE",
+                        f"{prefix}.angles_deg",
+                        f"相邻助推器表面间隙 {surface_gap:.4f} m 小于工程惯例最小值 "
+                        f"{BOOSTER_BOOSTER_MIN_GAP_M} m（并联构型的安装 / 分离安全间隙）",
+                        "增大角位间隔、减小助推器直径或显式给出 radial_offset_m",
+                    )
+                )
+    return items
+
+
 def _check_boosters(vehicle: Vehicle) -> list[Diagnostic]:
     """并联助推器（OI-36）的结构防御 + 侧级逐项校验（§8.5 的 0 级段前提）。
 
@@ -308,7 +418,8 @@ def _check_boosters(vehicle: Vehicle) -> list[Diagnostic]:
     一层仍然会响，而不是信任所有调用方都过了校验。
 
     侧级（``booster.stage``）复用 :func:`_check_stage` 逐项校验，field_path 前缀
-    映射为 ``boosters[<i>].stage.…``，与 pydantic 的 ``loc`` 同构。
+    映射为 ``boosters[<i>].stage.…``，与 pydantic 的 ``loc`` 同构。完整布局
+    （M5）：径向偏移 / 自定义角位的领域校验见 :func:`_check_booster_layout`。
     """
     if not vehicle.boosters:
         return []
@@ -336,6 +447,7 @@ def _check_boosters(vehicle: Vehicle) -> list[Diagnostic]:
                 )
             )
         items += _check_stage(booster.stage, prefix=f"{prefix}.stage")
+        items += _check_booster_layout(vehicle, position, booster, prefix)
     return items
 
 

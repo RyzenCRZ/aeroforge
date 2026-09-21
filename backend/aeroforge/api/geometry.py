@@ -32,6 +32,7 @@ from aeroforge.geometry.assembly import (
     SECTION_FAIRING,
     SECTION_FORWARD_SKIRT,
     SECTION_FUEL_TANK,
+    SECTION_INTERSTAGE,
     SECTION_INTERTANK,
     SECTION_OX_TANK,
     SECTION_THRUST_STRUCTURE,
@@ -41,9 +42,15 @@ from aeroforge.geometry.assembly import (
 )
 from aeroforge.geometry.bundle import BoosterSummary
 from aeroforge.geometry.meridian import (
+    LineSegment,
     MeridianProfile,
     canonical_json,
     parse_profile,
+)
+from aeroforge.geometry.smoothing import (
+    SMOOTHING_CHORD_TOLERANCE_M,
+    SmoothingReport,
+    smooth_profile,
 )
 from aeroforge.geometry.validate import ValidationReport, validate_meridian
 from aeroforge.params.propellants import fuel_is_lh2, properties
@@ -350,6 +357,7 @@ _BAND_LABELS_ZH: dict[str, str] = {
     SECTION_FUEL_TANK: "燃料箱",
     SECTION_THRUST_STRUCTURE: "推力结构",
     SECTION_ENGINE_BAY: "发动机舱",
+    SECTION_INTERSTAGE: "级间段",
 }
 
 #: 装配树分区枚举 → sections 契约的 section 名（契约定死：共底隔板段 = common_bulkhead）。
@@ -442,8 +450,9 @@ def vehicle_sections(request: SectionsRequest) -> SectionsResponse:
             ),
             "液面高度": ("液面 = 该箱加注比例 × 箱段柱高（2D 显示口径；内核按 build123d 对拍）"),
             "级间段": (
-                "两级之间的级间段（interstage）不单独切分：Schema 无高度输入，"
-                "级长全部预算按九段分摊（§5.9 共性 2 / 装配树留白 2）"
+                "两级之间的级间段（interstage）由 Stage.interstage_height_m 显式输入；"
+                "缺省不切出（None = 现状不切出，GLB 字节不变，§9.2）；显式 > 0 时切出"
+                "独立 band，位于本级发动机舱段之下、下级前裙之上（§5.9 共性 2）"
             ),
             "共底缩减量": (
                 "saving = 两箱相邻封头矢高和 − 隔板矢高（公式反算，不得手填，§5.9 口径 2）；"
@@ -573,6 +582,12 @@ def vehicle_sections(request: SectionsRequest) -> SectionsResponse:
                             key=f"{prefix}_intertank_height", text=f"{item.length_m:.2f} m"
                         )
                     )
+                elif item.section == SECTION_INTERSTAGE:
+                    labels.append(
+                        DimensionLabel(
+                            key=f"{prefix}_interstage_height", text=f"{item.length_m:.2f} m"
+                        )
+                    )
                 elif item.section == "common_bulkhead":
                     labels.append(
                         DimensionLabel(
@@ -599,3 +614,159 @@ def vehicle_sections(request: SectionsRequest) -> SectionsResponse:
                 "分区必须恰好铺满级长且封头不干涉（§5.9 / §5.5）；请调整级长、扁度或发动机高度"
             ),
         ) from exc
+
+
+# ---------------------------------------------------------------------------
+# POST /api/geometry/smoothing —— 曲面光顺与曲率分析（§5.4，M5 第四片）
+# ---------------------------------------------------------------------------
+
+
+class SmoothingRequest(BaseModel):
+    """``POST /api/geometry/smoothing`` 的请求体（§5.4 / §10.1）。
+
+    分析对象的解析优先级：``profile_id``（母线存档）> ``vehicle.profile``
+    （整箭母线）> 由 ``stage_index`` 指定级的**外模线合成**（plan_stage 分区带
+    折线——纯直线段链，曲率分析给出设计折点账）。``vehicle`` 恒填（合成路径
+    与溯源都要它）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    vehicle: Vehicle = Field(description="飞行器参数（合成路径与溯源用）")
+    stage_index: int | None = Field(
+        default=None,
+        ge=1,
+        description="级号（自 1 起）：无 profile_id / vehicle.profile 时按该级分区合成外模线",
+    )
+    profile_id: str | None = Field(
+        default=None,
+        description="母线存档标识（data/contours/<id>.json，POST /api/geometry/contour 写入）",
+    )
+    apply: bool = Field(
+        default=False,
+        description=(
+            "false = 只分析；true = 回写参数并返回新母线定义（**不自动重建 GLB**——"
+            "前端收到回写定义后走正常参数更新流，单一更新通路，ADR-011）"
+        ),
+    )
+    tension: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="张力系数（0 = 畅 / 最大光顺，1 = 刚 / 最小改动；§5.4 张力样条）",
+    )
+
+
+class SmoothingResponse(BaseModel):
+    """``POST /api/geometry/smoothing`` 的响应体（§5.4 五步表的下发形态）。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    source: str = Field(description="分析对象来源：profile_id / vehicle_profile / stage_synth")
+    report: SmoothingReport = Field(
+        description="曲率梳 / 连续性 / 极值 / 超差段 / 偏差 / 警告（§5.4 报告行）"
+    )
+    profile: MeridianProfile | None = Field(
+        default=None,
+        description="回写后的母线定义（仅 apply=true 且实际回写时非 null；单一更新通路）",
+    )
+    provenance: dict[str, str] = Field(description="判据与口径声明（G2 容差 / 弦高容差 / 铁律）")
+
+
+@router.post("/api/geometry/smoothing", response_model=SmoothingResponse)
+def geometry_smoothing(request: SmoothingRequest) -> SmoothingResponse:
+    """曲面光顺与曲率分析（§5.4，纯 Python 无 OCCT，毫秒级）。
+
+    G2 判定与光顺只对**样条 / 幂律 / 切线卵形**等连续段有意义；锥段直线连接处
+    的 G1 断点属设计意图（报告如实标「设计折点」，不算缺陷）。光顺是**参数回写**
+    而非烘焙网格（§5.4 铁律）——响应带回写后的母线定义，GLB 重建由前端走正常
+    参数更新流触发。
+    """
+    vehicle = request.vehicle
+    provenance: dict[str, str] = {
+        "G2 判据": (
+            "连接点两侧曲率差 ≤ max(绝对 0.02 1/m，相对 10%) 视为曲率连续（工程惯例值）；"
+            "G1 门限 0.5°（与生成期门禁同源）；两侧均为直线段 → 设计折点，不算缺陷"
+        ),
+        "弦高容差": (
+            f"光顺前后最大偏差 ≤ {SMOOTHING_CHORD_TOLERANCE_M * 1000.0:.1f} mm"
+            "（§5.4 报告行判据；超限按比例钳回）"
+        ),
+        "光顺铁律": (
+            "光顺只回写母线段定义（样条段替换原段，返回新母线 JSON），"
+            "禁止对网格做拉普拉斯/平滑（§5.4）——GLB 由前端走正常参数更新流重建"
+        ),
+        "张力样条": (
+            "在 r(z) 参数曲线上迭代最小化 ∫(dκ/ds)²ds 的工程近似"
+            "（小斜率下 κ≈r''，拉普拉斯型更新 = ∫(r'')² 离散形态）；"
+            f"张力系数 {request.tension:.2f}（0=畅 / 1=刚）"
+        ),
+    }
+
+    profile: MeridianProfile | None = None
+    source = "stage_synth"
+    if request.profile_id is not None:
+        contour_id = request.profile_id
+        path = contours_root() / _path_for(contour_id)
+        if not path.is_file():
+            raise GeometryError(
+                f"母线 {contour_id!r} 不存在",
+                code="CONTOUR_NOT_FOUND",
+                suggestion="先用 POST /api/geometry/contour 保存，或确认标识拼写",
+                details={"id": contour_id},
+            )
+        profile = parse_profile(path.read_text(encoding="utf-8"))
+        source = "profile_id"
+        provenance["profile_source"] = f"母线存档 {contour_id}"
+    elif vehicle.profile is not None:
+        profile = vehicle.profile
+        source = "vehicle_profile"
+        if request.stage_index is not None:
+            provenance["stage_index"] = (
+                "vehicle.profile 已给出：整箭母线整体分析（剖面段与级号的映射不存在，"
+                "stage_index 忽略——如需按级分析请用母线存档或留空走合成路径）"
+            )
+        provenance["profile_source"] = "Vehicle.profile（整箭母线）"
+    else:
+        if request.stage_index is None:
+            raise GeometryError(
+                "未指定分析对象：profile_id 与 vehicle.profile 均缺省时，stage_index 必填",
+                suggestion=(
+                    "给出 stage_index（自 1 起）以按该级分区合成外模线，"
+                    "或提供 profile_id / vehicle.profile"
+                ),
+            )
+        stage = next((item for item in vehicle.stages if item.index == request.stage_index), None)
+        if stage is None:
+            raise GeometryError(
+                f"stage_index={request.stage_index} 不存在（该飞行器共 {len(vehicle.stages)} 级）",
+                suggestion="级号自 1 起且不超过级数",
+            )
+        layout = plan_stage(stage)
+        if not layout.bands:
+            raise GeometryError(
+                f"第 {stage.index} 级无可合成剖面的分区（全部 0 高）",
+                suggestion="检查级长与发动机高度",
+            )
+        profile = MeridianProfile(
+            name=f"s{stage.index}-oml",
+            base_radius=layout.bands[0].radius_start,
+            segments=tuple(
+                LineSegment(length=band.length, end_radius=band.radius_end)
+                for band in layout.bands
+                if band.length > 1e-12
+            ),
+        )
+        source = "stage_synth"
+        provenance["profile_source"] = (
+            f"第 {stage.index} 级分区带合成外模线（纯直线段链；曲率分析给出设计折点账）"
+        )
+
+    assert profile is not None
+    report, rewritten = smooth_profile(profile, tension=request.tension, apply=request.apply)
+    return SmoothingResponse(
+        source=source,
+        report=report,
+        profile=rewritten if request.apply and report.smoothing_applied else None,
+        provenance=provenance,
+    )

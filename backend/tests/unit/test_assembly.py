@@ -84,6 +84,7 @@ def _stage(
     propellant: str = "LOX/RP-1",
     avionics_height_m: float | None = None,
     intertank_height_m: float | None = None,
+    interstage_height_m: float | None = None,
 ) -> Stage:
     geometry_kwargs: dict[str, Any] = {
         "common_bulkhead": common_bulkhead,
@@ -113,6 +114,7 @@ def _stage(
         flatness_ratio=flatness_ratio,
         avionics_height_m=avionics_height_m,
         intertank_height_m=intertank_height_m,
+        interstage_height_m=interstage_height_m,
         geometry=Geometry(**geometry_kwargs),
     )
 
@@ -147,7 +149,12 @@ def _vehicle(stages: tuple[Stage, ...], *, fairing_diameter_m: float | None = 4.
 
 
 def test_falcon9_tree_node_names_are_stable() -> None:
-    """falcon-9 的装配树（报告样例）：两级 × 七分区 + 顶级 adapter/fairing。"""
+    """falcon-9 的装配树：两级 × 七分区 + 顶级 adapter/fairing + 喷管 + 级间段。
+
+    M5 第四片口径：二级级间段 6.6 m 切出（``s2-interstage``，发动机舱段被级间段
+    包容——``s2-engine-bay`` 消失）；喷管钟形自推进参数派生（一级 9 管
+    ``s1-nozzle-<k>`` 周向布置、二级单管 ``s2-nozzle``）。
+    """
     assembly = build_assembly(falcon9_vehicle())
     expected = {
         "s1-engine-bay",
@@ -156,7 +163,7 @@ def test_falcon9_tree_node_names_are_stable() -> None:
         "s1-intertank",
         "s1-ox-tank",
         "s1-forward-skirt",
-        "s2-engine-bay",
+        "s2-interstage",
         "s2-thrust-structure",
         "s2-fuel-tank",
         "s2-intertank",
@@ -164,6 +171,8 @@ def test_falcon9_tree_node_names_are_stable() -> None:
         "s2-forward-skirt",
         "s2-adapter",
         "s2-fairing",
+        *(f"s1-nozzle-{k}" for k in range(9)),
+        "s2-nozzle",
     }
     assert set(assembly.nodes) == expected, (
         f"falcon-9 树与期望不符：多出 {set(assembly.nodes) - expected}，"
@@ -176,6 +185,19 @@ def test_falcon9_tree_node_names_are_stable() -> None:
     assert assembly.nodes["s2-adapter"].z_start_m > assembly.nodes["s2-forward-skirt"].z_start_m
     # 氧箱在上（F9 默认排列）：s?-ox-tank 的 z 大于同级 fuel-tank
     assert assembly.nodes["s1-ox-tank"].z_start_m > assembly.nodes["s1-fuel-tank"].z_start_m
+    # 级间段位于二级布局最底部（顶接 s2 发动机占位下缘、底接 s1 前裙上缘）
+    interstage = assembly.nodes["s2-interstage"]
+    assert interstage.length_m == pytest.approx(6.6, rel=1e-12)
+    assert interstage.section == "interstage"
+    assert interstage.z_start_m == pytest.approx(42.6, rel=1e-9)
+    assert "s2-engine-bay" not in assembly.nodes, "级间段包容发动机时发动机舱段为 0 高"
+    # 喷管节点：metadata 带派生来源；一级 9 管周向、二级单管轴心
+    nozzle = assembly.nodes["s2-nozzle"]
+    assert nozzle.section == "nozzle"
+    assert any("thrust_vacuum_n" in f for f in nozzle.source_fields)
+    assert "C_F=1.65" in (nozzle.note or "")
+    s1_nozzle0 = next(child for child in assembly.root.children if child.label == "s1-nozzle-0")
+    assert s1_nozzle0.center().X > 0.0, "多管发动机周向布置（首管自 +X 起）"
 
 
 def test_no_fairing_yields_no_fairing_nodes() -> None:
@@ -278,6 +300,72 @@ def test_explicit_intertank_below_dome_sum_raises() -> None:
         plan_stage(_stage(1, intertank_height_m=0.5))
 
 
+# ---------------------------------------------------------------------------
+# 级间段（§5.9 共性 2，M5 第四片）：Schema + 切出 + canonical 纪律
+# ---------------------------------------------------------------------------
+
+
+def test_interstage_band_cut_at_stage_bottom() -> None:
+    """显式级间段：band 位于本级布局最底部（顶接发动机舱段下缘、底接下级前裙）。"""
+    stage = _stage(2, length_m=19.2, interstage_height_m=6.6)
+    layout = plan_stage(stage)
+    interstage = [band for band in layout.bands if band.section == "interstage"]
+    assert len(interstage) == 1
+    assert interstage[0].length == pytest.approx(6.6, rel=1e-12)
+    assert interstage[0].z_start == pytest.approx(0.0, abs=1e-12), "级间段在本级最底部"
+    # 各分区高度和仍 = length_m（从 19.2 内划出，非加高）
+    assert sum(band.length for band in layout.bands) == pytest.approx(stage.length_m, rel=1e-9)
+    # 发动机舱段被级间段包容（4.5 < 6.6 → engine_bay 0 高不产带）
+    assert all(band.section != "engine_bay" for band in layout.bands)
+
+
+def test_interstage_partially_houses_engine() -> None:
+    """级间段小于发动机高：发动机舱段保留余量，贮箱只让出净差值。"""
+    stage = _stage(1, length_m=20.0, interstage_height_m=1.0)
+    layout = plan_stage(stage)
+    engine_bay = [band for band in layout.bands if band.section == "engine_bay"]
+    assert len(engine_bay) == 1
+    assert engine_bay[0].length == pytest.approx(stage.engine_height_m - 1.0, rel=1e-12)
+    assert sum(band.length for band in layout.bands) == pytest.approx(stage.length_m, rel=1e-9)
+
+
+def test_interstage_none_keeps_status_quo() -> None:
+    """None = 不切出（现状）：无级间段 band，分区与既有口径一致。"""
+    stage = _stage(1)
+    layout = plan_stage(stage)
+    assert all(band.section != "interstage" for band in layout.bands)
+    engine_bay = [band for band in layout.bands if band.section == "engine_bay"]
+    assert engine_bay[0].length == pytest.approx(stage.engine_height_m, rel=1e-12)
+
+
+def test_interstage_none_canonical_bytes_unchanged() -> None:
+    """§9.2 canonical 纪律：缺省 interstage_height_m 不进既有输入的字节。"""
+    stage = _stage(1)
+    payload = stage.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
+    assert "interstage_height_m" not in payload
+    explicit = _stage(1, interstage_height_m=6.6).model_dump(
+        mode="json", exclude_none=True, exclude_defaults=True
+    )
+    assert "interstage_height_m" in explicit
+
+
+def test_interstage_node_in_assembly_tree() -> None:
+    """装配树：显式级间段产出独立节点 s<级>-interstage（发动机舱段被包容）。"""
+    stage = _stage(2, length_m=19.2, interstage_height_m=6.6)
+    assembly = build_assembly(_vehicle((_stage(1), stage), fairing_diameter_m=None))
+    assert "s2-interstage" in assembly.nodes
+    node = assembly.nodes["s2-interstage"]
+    assert node.stage_index == 2
+    assert node.length_m == pytest.approx(6.6, rel=1e-12)
+    assert "s2-engine-bay" not in assembly.nodes
+    # 纯数值枚举与内核路径一致（意图断言在 build_assembly 内部已强制，这里再显式核对）
+    from aeroforge.geometry.assembly import vehicle_node_index
+
+    assert "s2-interstage" in vehicle_node_index(
+        _vehicle((_stage(1), stage), fairing_diameter_m=None)
+    )
+
+
 def test_explicit_fairing_height_overrides_convention_constant() -> None:
     """整流罩高：Vehicle.fairing_height_m 显式值优先；None 保持惯例常量（现状值）。"""
     default = build_assembly(_vehicle((_stage(1),)))
@@ -317,8 +405,15 @@ def _common_bulkhead_vehicle(**stage_kwargs: Any) -> Vehicle:
 
 def test_common_bulkhead_four_checks_and_saving() -> None:
     assembly = build_assembly(_common_bulkhead_vehicle(flatness_ratio=0.6))
-    assert "s1-bulkhead" in assembly.nodes
+    # M5 第四片：隔板从内嵌曲面升级为独立薄壳节点（名与 sections 的 common_bulkhead 对齐）
+    assert "s1-common-bulkhead" in assembly.nodes
     assert "s1-intertank" not in assembly.nodes, "共底开启时第 6 分区应为隔板段而非级间舱"
+    bulkhead_solid = next(
+        child for child in assembly.root.children if child.label == "s1-common-bulkhead"
+    )
+    # 薄壳体积远小于实心穹顶（壳厚 = 两侧壁厚和的工程近似）
+    full_dome = 2.0 / 3.0 * math.pi * (3.7 / 2.0) ** 2 * (0.6 * 3.7 / 2.0)
+    assert 0.0 < bulkhead_solid.volume < full_dome * 0.2
     by_name = {check.check: check for check in assembly.checks}
     g1 = by_name["共底校验 1：隔板-柱段 G1"]
     assert g1.severity == "pass" and g1.value == pytest.approx(0.0, abs=1e-9)
@@ -402,9 +497,9 @@ def test_flatness_priority_and_hand_computed_dome_height() -> None:
     )
     # 手算对拍：f=0.6、D=3.7 ⇒ h = 0.6 × 3.7 / 2 = 1.11 m
     assert explicit.nodes["s1-forward-skirt"].length_m == pytest.approx(1.11, rel=1e-12)
-    # 共底矢高同源：h_b = f × D / 2
+    # 共底矢高同源：h_b = f × D / 2（节点名 M5 第四片对齐 sections：common-bulkhead）
     assembly = build_assembly(_common_bulkhead_vehicle(flatness_ratio=0.6))
-    assert assembly.nodes["s1-bulkhead"].length_m == pytest.approx(1.11, rel=1e-12)
+    assert assembly.nodes["s1-common-bulkhead"].length_m == pytest.approx(1.11, rel=1e-12)
 
 
 # ---------------------------------------------------------------------------
@@ -542,7 +637,7 @@ def test_vehicle_build_api_metrics_and_cache_hit(client: TestClient) -> None:
     assert metrics["common_bulkhead_saving_m"] == {}
     assert metrics["fins"]["count"] == 4
     assert metrics["fins"]["total_volume_m3"] > 0.0
-    assert metrics["spec_version"] == "0.7.0"
+    assert metrics["spec_version"] == "0.7.1"
 
     second = client.post("/api/geometry/build", json=payload)
     assert second.status_code == 200

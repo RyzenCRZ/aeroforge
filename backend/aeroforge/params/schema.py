@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -389,6 +389,21 @@ class Stage(ParamsModel):
         default=None,
         ge=0.0,
     )
+    # §5.9 共性 2 的留白清偿（M5 第四片）：级间段（两级之间的分离舱段）高度。
+    # canonical 纪律（§9.2）：缺省 None 不进既有输入的字节——不切出即现状，GLB 字节不变。
+    # ⚠ 与 intertank_height_m 语义互斥（§5.9 共性 2）：级间舱 = **同级内**两箱之间的
+    # 承载舱段；级间段 = **两级之间**的分离舱段。级间段的长度预算**计入本级
+    # length_m**（如 F9 二级 19.2 m 已含级间段 6.6 m），从本级分区账中划出、
+    # 不加高整箭；本级发动机（喷管）伸入级间段时发动机舱段被级间段包容（装配口径
+    # 见 aeroforge.geometry.assembly）。
+    interstage_height_m: float | None = si_field(
+        "length",
+        "级间段高（§5.9 共性 2：**两级之间**的分离舱段，位于本级的底端之下、下级顶端"
+        "之上——即本级与其**下级**之间的分离段；不是同级两箱间的级间舱）。"
+        "长度预算计入本级 length_m，从本级分区账中划出；省略 = 不切出（现状）",
+        default=None,
+        ge=0.0,
+    )
     burn_time_s: float | None = Field(
         default=None, gt=0.0, description="工作时间（s）；省略时由后端按 m_prop/ṁ 派生"
     )
@@ -431,6 +446,25 @@ class Booster(ParamsModel):
     count: int = Field(default=2, ge=1, le=12, description="并联数量（OI-36；1 = 单侧助推器）")
     layout: BoosterLayout = Field(
         default="radial_even", description="捆绑布局（M4 仅周向均布；M5 扩完整布局）"
+    )
+    # 完整捆绑布局（OI-36 的 M5 部分）：径向偏移与自定义角位。二者缺省 None =
+    # M4 周向均布现状（芯级最大半径 + 助推器半径 + 0.1 m 间隙、2πk/count 均布），
+    # canonical 字节稳定（§9.2：缺省字段不进既有输入的序列化）。
+    radial_offset_m: float | None = si_field(
+        "length",
+        "助推器轴线距芯级轴线的径向距离（m；省略 = 周向均布贴接现状："
+        "芯级最大半径 + 助推器半径 + 0.1 m 工程间隙）。不得小于芯级半径（硬校验），"
+        "且须保证助推器与芯级径向间隙 ≥ 0（硬校验）",
+        default=None,
+        gt=0.0,
+    )
+    angles_deg: tuple[Annotated[float, Field(ge=0.0, lt=360.0)], ...] | None = Field(
+        default=None,
+        description=(
+            "自定义角位（°，自 +X 轴逆时针；省略 = 周向均布 2πk/count）。"
+            "个数必须等于 count（约束引擎判定）；相邻助推器间隙 < 0.05 m 时警告"
+            "（工程惯例最小间隙）"
+        ),
     )
     separation_s: float | None = Field(
         default=None,

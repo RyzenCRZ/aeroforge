@@ -195,6 +195,54 @@ const MISSION_FIELDS: readonly FieldSpec[] = [
   { path: 'mission.inclination_deg', label: '轨道倾角', quantity: null, siUnit: '°', kind: 'number', step: 0.5 },
 ]
 
+/**
+ * 回收方案字段（§6.1 Recovery 层 / §8.9 三项代价挂点，M5 最小编辑）。
+ *
+ * 「是否回收」用独立复选框（启用时才创建 `recovery` 对象，不在载荷里预置任何数值）；
+ * 其余字段全部可省略（清空 = 写回 null，后端按默认/未配置处理，不造值）。
+ * 回收级号 `stage_indices` 本片不做逐级编辑（最小可用口径），经参数 JSON 导入可改。
+ */
+const RECOVERY_FIELDS: readonly FieldSpec[] = [
+  {
+    path: 'method',
+    label: '回收方式（parachute 伞降 / propulsive 动力反推）',
+    quantity: null,
+    siUnit: '',
+    kind: 'select',
+    options: ['parachute', 'propulsive'],
+  },
+  {
+    path: 'landing_propellant_margin_fraction',
+    label: '着陆推进剂余量（占该级满装量）',
+    quantity: null,
+    siUnit: '',
+    kind: 'number',
+    step: 0.01,
+    placeholder: '空 = 未填写',
+    optional: true,
+  },
+  {
+    path: 'system_mass_kg',
+    label: '回收系统质量（本体外挂设备）',
+    quantity: 'mass',
+    siUnit: 'kg',
+    kind: 'number',
+    step: 10,
+    placeholder: '空 = 未填写',
+    optional: true,
+  },
+  {
+    path: 'reinforcement_mass_kg',
+    label: '增强结构与热防护质量',
+    quantity: 'mass',
+    siUnit: 'kg',
+    kind: 'number',
+    step: 10,
+    placeholder: '空 = 未填写',
+    optional: true,
+  },
+]
+
 /** 名称匹配的防抖间隔（OI-34）：与诊断防抖分开计——匹配查询更廉价，但也不逐字符发。 */
 export const NAME_MATCH_DEBOUNCE_MS = 300
 
@@ -875,6 +923,51 @@ export function VehiclePanel() {
               新增助推器组
             </button>
           </p>
+        </div>
+
+        {/*
+         * 回收方案（§6.1 Recovery 层 / §8.9）：QA-4 挂点的最小编辑。启用复选框控制
+         * `recovery` 对象的创建（未启用时载荷中不含该层）；启用后右栏「回收质量代价」
+         * 面板按后端 `POST /api/sizing/sequence` 的响应呈现三项代价分解。
+         */}
+        <div className="vehicle-panel__group">
+          <h3 className="label">回收（recovery）</h3>
+          <label className="vehicle-panel__field">
+            <span className="vehicle-panel__label label">启用回收（§8.9 三项代价挂点）</span>
+            <input
+              type="checkbox"
+              data-field-path="recovery.enabled"
+              checked={vehicle.recovery?.enabled === true}
+              onChange={(event) => {
+                if (event.target.checked) {
+                  if (vehicle.recovery == null) {
+                    // 首次启用：只建结构（enabled + 空级号清单），不预置任何数值
+                    commitField('recovery', { enabled: true, stage_indices: [], method: null })
+                  } else {
+                    commitField('recovery.enabled', true)
+                  }
+                } else {
+                  commitField('recovery.enabled', false)
+                }
+              }}
+            />
+          </label>
+          {vehicle.recovery?.enabled === true ? (
+            <>
+              <p className="vehicle-panel__hint">
+                回收级号（stage_indices）当前为{' '}
+                {(vehicle.recovery.stage_indices ?? []).length > 0
+                  ? vehicle.recovery.stage_indices.join('、')
+                  : '空'}
+                ，可经参数 JSON 导入指定。
+              </p>
+              {renderFields(RECOVERY_FIELDS, 'recovery.')}
+            </>
+          ) : (
+            <p className="vehicle-panel__hint">
+              未启用回收：右栏「回收质量代价」面板显示「无代价」。启用后可配置回收方式与三项代价参数。
+            </p>
+          )}
         </div>
 
         <div className="vehicle-panel__group">

@@ -18,6 +18,7 @@ from aeroforge.geometry.bundle import (
     BOOSTER_GAP_M,
     BoosterSummary,
     booster_axis_radius,
+    booster_cylinders_for_radius,
     booster_label,
     build_bundle,
 )
@@ -170,3 +171,59 @@ def test_cache_key_is_booster_sensitive_and_byte_stable_without() -> None:
     other = compute_key(_CORE, boosters=BoosterSummary(count=4, diameter_m=1.0, length_m=3.0))
     assert boosted.key != plain.key, "带助推器与不带助推器不得共享缓存键"
     assert other.key != boosted.key, "不同捆绑构型不得共享缓存键"
+
+
+# ---------------------------------------------------------------------------
+# M5 完整捆绑布局（OI-36 的 M5 部分）：径向偏移 + 自定义角位
+# ---------------------------------------------------------------------------
+
+
+def test_radial_offset_moves_booster_axis() -> None:
+    """radial_offset_m 显式生效：助推器轴线落在给定径向距离上。"""
+    offset = 4.0
+    summary = BoosterSummary(
+        count=2, diameter_m=1.0, length_m=2.0, radial_offset_m=offset, angles_deg=(0.0, 180.0)
+    )
+    solids = booster_cylinders_for_radius(1.5, summary)
+    assert len(solids) == 2
+    for index, solid in enumerate(solids):
+        angle = math.radians([0.0, 180.0][index])
+        center = solid.center()
+        assert pytest.approx(offset * math.cos(angle), rel=1e-9) == center.X
+        assert pytest.approx(offset * math.sin(angle), rel=1e-9) == center.Y
+
+
+def test_default_layout_matches_m4_even_distribution() -> None:
+    """缺省（None/None）路径与 M4 周向均布逐位一致：轴线半径与角度与旧公式相同。"""
+    summary = BoosterSummary(count=3, diameter_m=1.0, length_m=2.0)
+    solids = booster_cylinders_for_radius(1.5, summary)
+    axis = booster_axis_radius(1.5, 1.0)
+    for index, solid in enumerate(solids):
+        angle = 2.0 * math.pi * index / 3
+        center = solid.center()
+        assert pytest.approx(axis * math.cos(angle), rel=1e-9) == center.X
+        assert pytest.approx(axis * math.sin(angle), rel=1e-9) == center.Y
+
+
+def test_interference_radial_offset_rejected() -> None:
+    """硬校验：径向偏移使助推器与芯级干涉（间隙 < 0）→ ValueError。"""
+    summary = BoosterSummary(count=2, diameter_m=1.0, length_m=2.0, radial_offset_m=1.8)
+    with pytest.raises(ValueError, match="干涉"):
+        booster_cylinders_for_radius(1.5, summary)
+
+
+def test_angle_count_must_match() -> None:
+    """硬校验：自定义角位个数 ≠ count → ValueError（布置与数量一一对应）。"""
+    summary = BoosterSummary(count=3, diameter_m=1.0, length_m=2.0, angles_deg=(0.0, 120.0))
+    with pytest.raises(ValueError, match="个数"):
+        booster_cylinders_for_radius(1.5, summary)
+
+
+def test_overcrowded_angles_rejected() -> None:
+    """兜底校验（约束引擎为 warning 级）：相邻助推器表面间隙 < 0.05 m → ValueError。"""
+    # 轴线半径 2.0、直径 1.0：相邻 10° 的弦间距 2×2×sin(5°) − 1 ≈ −0.65 m（重叠）
+    summary = BoosterSummary(
+        count=2, diameter_m=1.0, length_m=2.0, radial_offset_m=2.0, angles_deg=(0.0, 10.0)
+    )
+    with pytest.raises(ValueError, match="间隙"):
+        booster_cylinders_for_radius(1.5, summary)

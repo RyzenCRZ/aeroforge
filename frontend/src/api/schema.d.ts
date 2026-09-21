@@ -120,6 +120,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/geometry/smoothing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Geometry Smoothing
+         * @description 曲面光顺与曲率分析（§5.4，纯 Python 无 OCCT，毫秒级）。
+         *
+         *     G2 判定与光顺只对**样条 / 幂律 / 切线卵形**等连续段有意义；锥段直线连接处
+         *     的 G1 断点属设计意图（报告如实标「设计折点」，不算缺陷）。光顺是**参数回写**
+         *     而非烘焙网格（§5.4 铁律）——响应带回写后的母线定义，GLB 重建由前端走正常
+         *     参数更新流触发。
+         */
+        post: operations["geometry_smoothing_api_geometry_smoothing_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/params/diagnose": {
         parameters: {
             query?: never;
@@ -761,6 +786,16 @@ export interface components {
              */
             layout: "radial_even";
             /**
+             * Radial Offset M
+             * @description 助推器轴线距芯级轴线的径向距离（m；省略 = 周向均布贴接现状：芯级最大半径 + 助推器半径 + 0.1 m 工程间隙）。不得小于芯级半径（硬校验），且须保证助推器与芯级径向间隙 ≥ 0（硬校验）
+             */
+            radial_offset_m?: number | null;
+            /**
+             * Angles Deg
+             * @description 自定义角位（°，自 +X 轴逆时针；省略 = 周向均布 2πk/count）。个数必须等于 count（约束引擎判定）；相邻助推器间隙 < 0.05 m 时警告（工程惯例最小间隙）
+             */
+            angles_deg?: number[] | null;
+            /**
              * Separation S
              * @description 分离时刻（s，相对起飞）；省略 = 芯一级关机时刻（§6.1 Booster 层）
              */
@@ -768,10 +803,12 @@ export interface components {
         };
         /**
          * BoosterSummary
-         * @description 构建入参里的助推器摘要（M4 简化：单一构型的周向均布组）。
+         * @description 构建入参里的助推器摘要（M4 简化 + M5 完整布局字段）。
          *
          *     这是**几何域的入参**，不是 :class:`aeroforge.params.schema.Booster` 的搬运：
-         *     从参数层助推器取 ``count`` / 侧级 ``diameter_m`` / 侧级 ``length_m`` 折算而成。
+         *     从参数层助推器取 ``count`` / 侧级 ``diameter_m`` / 侧级 ``length_m`` 折算而成；
+         *     M5 增补 ``radial_offset_m`` / ``angles_deg``（缺省 None = M4 周向均布现状，
+         *     canonical 字节稳定，§9.2）。
          */
         BoosterSummary: {
             /**
@@ -789,6 +826,16 @@ export interface components {
              * @description 单枚助推器长度（m；轴向基线 = 0 起算）
              */
             length_m: number;
+            /**
+             * Radial Offset M
+             * @description 助推器轴线距芯级轴线的径向距离（m）；None = 贴接（芯级半径+助推器半径+间隙）
+             */
+            radial_offset_m?: number | null;
+            /**
+             * Angles Deg
+             * @description 自定义角位（°，自 +X 逆时针）；None = 周向均布 2πk/count
+             */
+            angles_deg?: number[] | null;
         };
         /**
          * BuildResponse
@@ -854,6 +901,45 @@ export interface components {
              * @description 相对误差
              */
             relative_error?: number | null;
+        };
+        /**
+         * ContinuityLevel
+         * @description 一个段间连接点的连续性判定（§5.4 连续性行）。
+         */
+        ContinuityLevel: {
+            /**
+             * Segment Pair
+             * @description 相邻两段的 0 基下标 [i, i+1]
+             */
+            segment_pair: [
+                number,
+                number
+            ];
+            /**
+             * Level
+             * @description 连续性等级：G0 / G1 / G2
+             */
+            level: string;
+            /**
+             * Tangent Angle Deg
+             * @description 切向夹角（°；G1 判据）
+             */
+            tangent_angle_deg: number;
+            /**
+             * Curvature Jump
+             * @description 两侧曲率差 |κ⁻ − κ⁺|（1/m；G2 判据）
+             */
+            curvature_jump: number;
+            /**
+             * Design Kink
+             * @description 设计折点（两侧均为直线段，锥台对接柱段等）——不算缺陷
+             */
+            design_kink: boolean;
+            /**
+             * On Axis
+             * @description 轴处连接（r ≈ 0，回转面退化为单点，不在 G1 门禁内）
+             */
+            on_axis: boolean;
         };
         /**
          * ContourResponse
@@ -2498,6 +2584,12 @@ export interface components {
              * @description 质量突变（kg；负 = 质量离开该账）
              */
             mass_delta_kg: number;
+            /**
+             * Surviving Nodes
+             * @description 该事件后**存留的装配节点名**（自装配树的级序 / 分区元数据推导，§8.9 OI-36 的 M5 部分）：分离 / 抛罩事件只删节点、不增；boosters 随芯一级分离（分离时刻默认 = 芯一级关机，§6.1 Booster 层）
+             * @default []
+             */
+            surviving_nodes: string[];
         };
         /**
          * SequenceReport
@@ -2651,6 +2743,112 @@ export interface components {
              * @description 用户显式的逐级 ΔV（m/s，自下而上、逐芯级；求和须等于目标总 ΔV；省略 = Lagrange √Isp 加权初值分配，§8.5）
              */
             stage_delta_v_m_s?: number[] | null;
+        };
+        /**
+         * SmoothingReport
+         * @description 曲率分析 + 光顺的报告载荷（§5.4 报告行）。
+         */
+        SmoothingReport: {
+            /**
+             * Curvature Comb
+             * @description 曲率梳：(z, r, κ) 采样点列（m, m, 1/m，带符号）
+             */
+            curvature_comb: [
+                number,
+                number,
+                number
+            ][];
+            /**
+             * Continuity
+             * @description 段间连续性判定
+             */
+            continuity: components["schemas"]["ContinuityLevel"][];
+            /**
+             * Extremes
+             * @description 曲率极值：(段下标, z, κ)——段内 |κ| 最大的采样点
+             */
+            extremes: [
+                number,
+                number,
+                number
+            ][];
+            /**
+             * Offending Segments
+             * @description 超差段（κ 符号突变 / 尖峰）的 0 基下标
+             */
+            offending_segments: number[];
+            /**
+             * Max Deviation Mm
+             * @description 光顺前后最大偏差（mm；未回写 = 0）
+             */
+            max_deviation_mm: number;
+            /**
+             * Smoothing Applied
+             * @description 是否实际回写了母线段
+             */
+            smoothing_applied: boolean;
+            /**
+             * Warnings
+             * @description 回退 / 门限 / 设计折点等注记
+             */
+            warnings: string[];
+        };
+        /**
+         * SmoothingRequest
+         * @description ``POST /api/geometry/smoothing`` 的请求体（§5.4 / §10.1）。
+         *
+         *     分析对象的解析优先级：``profile_id``（母线存档）> ``vehicle.profile``
+         *     （整箭母线）> 由 ``stage_index`` 指定级的**外模线合成**（plan_stage 分区带
+         *     折线——纯直线段链，曲率分析给出设计折点账）。``vehicle`` 恒填（合成路径
+         *     与溯源都要它）。
+         */
+        SmoothingRequest: {
+            /** @description 飞行器参数（合成路径与溯源用） */
+            vehicle: components["schemas"]["Vehicle"];
+            /**
+             * Stage Index
+             * @description 级号（自 1 起）：无 profile_id / vehicle.profile 时按该级分区合成外模线
+             */
+            stage_index?: number | null;
+            /**
+             * Profile Id
+             * @description 母线存档标识（data/contours/<id>.json，POST /api/geometry/contour 写入）
+             */
+            profile_id?: string | null;
+            /**
+             * Apply
+             * @description false = 只分析；true = 回写参数并返回新母线定义（**不自动重建 GLB**——前端收到回写定义后走正常参数更新流，单一更新通路，ADR-011）
+             * @default false
+             */
+            apply: boolean;
+            /**
+             * Tension
+             * @description 张力系数（0 = 畅 / 最大光顺，1 = 刚 / 最小改动；§5.4 张力样条）
+             * @default 0.5
+             */
+            tension: number;
+        };
+        /**
+         * SmoothingResponse
+         * @description ``POST /api/geometry/smoothing`` 的响应体（§5.4 五步表的下发形态）。
+         */
+        SmoothingResponse: {
+            /**
+             * Source
+             * @description 分析对象来源：profile_id / vehicle_profile / stage_synth
+             */
+            source: string;
+            /** @description 曲率梳 / 连续性 / 极值 / 超差段 / 偏差 / 警告（§5.4 报告行） */
+            report: components["schemas"]["SmoothingReport"];
+            /** @description 回写后的母线定义（仅 apply=true 且实际回写时非 null；单一更新通路） */
+            profile?: components["schemas"]["MeridianProfile"] | null;
+            /**
+             * Provenance
+             * @description 判据与口径声明（G2 容差 / 弦高容差 / 铁律）
+             */
+            provenance: {
+                [key: string]: string;
+            };
         };
         /**
          * SnapshotOut
@@ -2849,6 +3047,11 @@ export interface components {
              * @description 级间舱高（§5.9 分区第 6 段，**同级内两箱之间**的承载舱段，不是两级之间的级间段；省略 = 按派生规则：两箱相邻封头矢高和。共底开启时本字段不生效，第 6 分区为隔板段）
              */
             intertank_height_m?: number | null;
+            /**
+             * Interstage Height M
+             * @description 级间段高（§5.9 共性 2：**两级之间**的分离舱段，位于本级的底端之下、下级顶端之上——即本级与其**下级**之间的分离段；不是同级两箱间的级间舱）。长度预算计入本级 length_m，从本级分区账中划出；省略 = 不切出（现状）
+             */
+            interstage_height_m?: number | null;
             /**
              * Burn Time S
              * @description 工作时间（s）；省略时由后端按 m_prop/ṁ 派生
@@ -3948,6 +4151,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SectionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    geometry_smoothing_api_geometry_smoothing_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SmoothingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SmoothingResponse"];
                 };
             };
             /** @description Validation Error */

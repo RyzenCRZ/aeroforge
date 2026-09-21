@@ -45,15 +45,22 @@ profile 形态，节点名 ``seg-<i>``）并存：本模块是车辆形态构建
 1. ``avionics`` 仪器舱高：``Stage.avionics_height_m`` 显式值优先（M5 第二片
    Schema 增补）；缺省 0 高（§5.9 允许）——0 高分区不产出 GLB 节点（部件缺失
    即无节点，OI-33 演化口径）。
-2. 级间段（interstage，级间分离舱段）**不单独切出**——Schema 只有
-   ``interstage_type``（类型）而无高度输入，``length_m``（含级间段）的全部预算
-   按 9 段分摊。⚠ 级间段（两级之间）与级间舱（intertank，同级两箱之间）是两个
-   部件（§5.9 共性 2）；级间舱高已由 ``Stage.intertank_height_m`` 显式可输入
-   （缺省按派生规则），共底开启时第 6 分区为隔板段、该字段不生效。
-3. ``engine_bay`` 的节点 mesh 为柱段（外模线）；喷管钟形外形需要从推进参数
-   派生喉部半径，归后续片（钟形曲线族已可在母线通路手工构建）。
-4. 共底隔板面**已建几何并过四校验**，但本片不作为独立 GLB 节点下发（外模线
-   连续性优先；内部结构可见化随剖切/内部视图后续片）。
+2. 级间段（interstage，级间分离舱段，§5.9 共性 2）：``Stage.interstage_height_m``
+   显式值 > 0 时切出独立 band / 节点 ``s<级>-interstage``——位于本级布局的**最
+   底部**（顶接本级发动机舱段下缘、底接下级前裙上缘；剖面图中在上级 engine_bay
+   之下、下级 forward_skirt 之上）。⚠ 级间段（两级之间）与级间舱（intertank，
+   同级两箱之间）是两个部件；级间舱高由 ``Stage.intertank_height_m`` 显式可输入。
+   级间段的长度预算**计入本级 length_m**（如 F9 二级 19.2 m 含级间段 6.6 m，
+   从 19.2 内划出、非加高）；本级发动机伸入级间段时发动机舱段让位包容（净余量
+   从贮箱可用高扣除，两账同源，见 :mod:`aeroforge.perf.mass`）。
+3. ``engine_bay`` 的节点 mesh 为柱段（外模线）；**喷管钟形外形**自推进参数派生
+   （M5 第四片）：喉部半径 ``rt = √(F_vac/(Pc·π·Cf))``（Cf = 1.65 工程惯例）、
+   出口半径 ``Re = rt·√ε``（工作点口径）、钟长 = 80% Rao（放不下时按可用发动机
+   占高收长度比），多管发动机周向布置，独立具名节点 ``s<级>-nozzle[-<k>]``。
+4. 共底隔板（M5 第四片）：从内嵌曲面升级为**独立薄壳节点**
+   ``s<级>-common-bulkhead``（与 sections 的 ``common_bulkhead`` band 名对齐），
+   壳厚 = 两侧壁厚和（工程近似：半轴各内缩同厚），metadata 标注 saving 与隔热
+   标志。
 5. 整流罩高：``Vehicle.fairing_height_m`` 显式值优先（M5 第二片 Schema 增补）；
    缺省为工程惯例常量（见 :data:`_FAIRING_*`，现状值保持不变）。适配器高度
    仍为惯例常量（无 Schema 输入）。
@@ -71,6 +78,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from aeroforge.geometry.bundle import BoosterSummary, booster_cylinders_for_radius
 from aeroforge.geometry.meridian import (
     GEOM_TOL,
+    BellNozzleSegment,
     EllipseSegment,
     LineSegment,
     MeridianProfile,
@@ -107,9 +115,12 @@ SECTION_BULKHEAD = "bulkhead"
 SECTION_FUEL_TANK = "fuel_tank"
 SECTION_THRUST_STRUCTURE = "thrust_structure"
 SECTION_ENGINE_BAY = "engine_bay"
+#: 级间段（§5.9 共性 2 的扩展分区，M5 第四片）：**两级之间**的分离舱段，
+#: 不属于 §5.9 的 9 段（那是单级内的分区）——作为第 10 个枚举追加在末位。
+SECTION_INTERSTAGE = "interstage"
 
 #: §5.9 的轴向固定次序（自上而下；第 5/7 段的上下次序由 ``tank_arrangement`` 决定，
-#: 实现读字段而非按序号硬编码）。
+#: 实现读字段而非按序号硬编码）。级间段是级**外**的扩展分区，追加在末位。
 SECTION_ORDER: tuple[str, ...] = (
     SECTION_FAIRING,
     SECTION_ADAPTER,
@@ -120,9 +131,11 @@ SECTION_ORDER: tuple[str, ...] = (
     SECTION_FUEL_TANK,
     SECTION_THRUST_STRUCTURE,
     SECTION_ENGINE_BAY,
+    SECTION_INTERSTAGE,
 )
 
 #: 分区枚举 → GLB 节点名后缀（连字符形态，与前端按名寻址兼容）。
+#: 共底隔板节点名与 sections 的 ``common_bulkhead`` band 名对齐（M5 第四片）。
 _SECTION_NODE_SUFFIX: dict[str, str] = {
     SECTION_FAIRING: "fairing",
     SECTION_ADAPTER: "adapter",
@@ -130,10 +143,11 @@ _SECTION_NODE_SUFFIX: dict[str, str] = {
     SECTION_FORWARD_SKIRT: "forward-skirt",
     SECTION_OX_TANK: "ox-tank",
     SECTION_INTERTANK: "intertank",
-    SECTION_BULKHEAD: "bulkhead",
+    SECTION_BULKHEAD: "common-bulkhead",
     SECTION_FUEL_TANK: "fuel-tank",
     SECTION_THRUST_STRUCTURE: "thrust-structure",
     SECTION_ENGINE_BAY: "engine-bay",
+    SECTION_INTERSTAGE: "interstage",
 }
 
 #: 角色（oxidizer / fuel）→ 分区枚举。
@@ -388,16 +402,50 @@ def plan_stage(stage: Stage) -> StageLayout:
         )
         z += length
 
-    _add(
-        SECTION_ENGINE_BAY,
-        engine_height,
-        diameter / 2.0,
-        diameter / 2.0,
-        0.0,
-        stage.material,
-        (f"{stage_prefix}.engine_height_m", f"{stage_prefix}.diameter_m"),
-        note=zero_mass_note + "；喷管外形（钟形）归后续片",
-    )
+    # 级间段（§5.9 共性 2，M5 第四片）：位于本级布局的**最底部**——顶接本级
+    # 发动机舱段下缘、底接下级前裙上缘（剖面图中在上级 engine_bay 之下、
+    # 下级 forward_skirt 之上）。长度预算计入本级 length_m（从分区账划出，非加高）；
+    # 未声明（None / 0）不产带、不产节点——现状字节不变（§9.2）
+    if heights.interstage_m > GEOM_TOL:
+        interstage_source = (
+            (f"{stage_prefix}.interstage_height_m",) if heights.interstage_source == "user" else ()
+        )
+        housed_note = (
+            "；本级发动机（喷管）伸入本段——发动机舱段已让位包容"
+            if heights.engine_bay_m <= GEOM_TOL
+            else ""
+        )
+        _add(
+            SECTION_INTERSTAGE,
+            heights.interstage_m,
+            diameter / 2.0,
+            diameter / 2.0,
+            0.0,
+            stage.material,
+            (f"{stage_prefix}.diameter_m", *interstage_source),
+            note="两级之间的级间段（不是同级两箱间的级间舱）；质量留白" + housed_note,
+        )
+    # 发动机舱段：级间段让位包容后的余量（级间段完全包容发动机时为 0 高——
+    # 0 高分区不产带、不产节点，OI-33 演化口径）
+    if heights.engine_bay_m > GEOM_TOL:
+        _add(
+            SECTION_ENGINE_BAY,
+            heights.engine_bay_m,
+            diameter / 2.0,
+            diameter / 2.0,
+            0.0,
+            stage.material,
+            (
+                f"{stage_prefix}.engine_height_m",
+                f"{stage_prefix}.diameter_m",
+                *(
+                    (f"{stage_prefix}.interstage_height_m",)
+                    if heights.interstage_m > GEOM_TOL
+                    else ()
+                ),
+            ),
+            note=zero_mass_note + "；喷管钟形外形见 s<级>-nozzle[-<k>] 节点（自推进参数派生）",
+        )
     _add(
         SECTION_THRUST_STRUCTURE,
         dome_heights[lower_role],
@@ -438,7 +486,7 @@ def plan_stage(stage: Stage) -> StageLayout:
                 f"{stage_prefix}.diameter_m",
                 f"{stage_prefix}.geometry.common_bulkhead_type",
             ),
-            note="隔板面已过四校验（本片不作为独立 GLB 节点，见模块留白第 4 条）",
+            note="独立薄壳节点 s<级>-common-bulkhead（壳厚 = 两侧壁厚和；隔板面已过四校验）",
         )
     else:
         intertank_source = (
@@ -532,6 +580,207 @@ def _cone_solid(
     return solid
 
 
+def _dome_solid(radius: float, height: float, label: str) -> bd.Solid:
+    """半椭球穹顶实体（底面在 z=0、顶点在 z=height）：与共底四校验的 cap 同构。"""
+    profile = MeridianProfile(
+        name=label,
+        base_radius=radius,
+        segments=(EllipseSegment(length=height, end_radius=0.0),),
+    )
+    solid = build_solid(profile)
+    solid.label = label
+    return solid
+
+
+def build_bulkhead_shell(stage: Stage, layout: StageLayout, z_offset: float) -> bd.Solid:
+    """共底隔板独立薄壳（M5 第四片，交付 6）：``s<级>-common-bulkhead``。
+
+    壳厚 = **两侧壁厚和**（氧化剂箱 + 燃料箱壁厚，§5.9 共性 3 的隔热夹层口径以
+    壁厚和作工程近似）；几何 = 外半椭球穹顶 − 半轴各内缩同厚的内穹顶（近似等距
+    壳：顶点处为竖直厚度 t、底缘处为径向厚度 t，其余部位介于两者之间——注记随
+    节点下发，不做 OCCT 偏置的精确等距）。隔板面本身已过 §5.5 四校验。
+    """
+    radius = stage.diameter_m / 2.0
+    height = layout.h_mid
+    thickness = (
+        stage.geometry.oxidizer_tank.wall_thickness_m + stage.geometry.fuel_tank.wall_thickness_m
+    )
+    outer = _dome_solid(radius, height, "bulkhead-outer")
+    inner = _dome_solid(
+        max(radius - thickness, GEOM_TOL * 10.0),
+        max(height - thickness, GEOM_TOL * 10.0),
+        "bulkhead-inner",
+    )
+    shell = outer.cut(inner)
+    shell = shell.moved(bd.Location((0.0, 0.0, z_offset)))
+    shell.label = section_node_name(stage.index, SECTION_BULKHEAD)
+    return shell
+
+
+# ---------------------------------------------------------------------------
+# 喷管钟形派生（交付 5，§5.3 钟形曲线族 + §6.1 Engine 推进参数）
+# ---------------------------------------------------------------------------
+
+#: 喷管推力系数 C_F（**工程惯例值，非权威来源**）：喉部面积由
+#: ``A_t = F_vac / (Pc·C_F)`` 反推。真实 C_F 依膨胀比 / 环境压在 1.5–2.0 间，
+#: 取 1.65 为海平面~真空的中间惯例值；派生结果在节点 metadata 注明该惯例。
+NOZZLE_THRUST_COEFFICIENT = 1.65
+
+#: 钟长比缺省口径（Rao 常用值）：钟长 = 80% L₁₅°。
+NOZZLE_BELL_LENGTH_RATIO = 0.8
+
+#: 钟长比下限：可用占高不足 15% 钟长时放弃派生（型面退化为近直锥，无可视价值）。
+NOZZLE_BELL_MIN_RATIO = 0.15
+
+
+@dataclass(frozen=True, slots=True)
+class NozzleGeometry:
+    """自推进参数派生的单个喷管钟形（纯数值，无 OCCT）。"""
+
+    throat_radius_m: float
+    exit_radius_m: float
+    length_m: float
+    length_ratio: float
+    """实际采用的钟长比（80% Rao 放不下时按可用发动机占高收敛）。"""
+
+    clamped: bool
+    """钟长比是否因可用占高不足而收敛（true = 非 80% Rao，注记随节点下发）。"""
+
+    placement_radius_m: float
+    """发动机布置圆半径（m）：单管 = 0（轴心）；多管 = 出口半径 / sin(π/n)
+    （钟间相切），超出箭体半径时收敛到 ``R_级 − R_出口``（钟间轻微重叠，注记）。"""
+
+
+def derive_nozzle_geometry(stage: Stage, stage_radius_m: float) -> NozzleGeometry | None:
+    """从推进参数派生喷管钟形（交付 5）。
+
+    - 喉部半径 ``rt = √(F_vac / (Pc·π·C_F))``，C_F = 1.65（工程惯例，见
+      :data:`NOZZLE_THRUST_COEFFICIENT`；真空推力只配室压的工作点口径）；
+    - 出口半径 ``Re = rt·√ε``（ε 取 ``Engine.expansion_ratio``，工作点口径）；
+    - 钟长 = 80% Rao（复用 :mod:`aeroforge.geometry.meridian` 的钟形曲线族；
+      可用占高 = 发动机高度 ``engine_height_m``，放不下时收敛长度比并注记）。
+
+    参数缺失 / 派生退化（喉部非正、出口不大于喉部、钟长比越下限）→ 返回 ``None``
+    （不生成节点 + 留白注记，不编造，§1.4-4）。
+    """
+    engine = stage.engine
+    thrust_vac = engine.thrust_vacuum_n
+    chamber_pressure = engine.chamber_pressure_pa
+    expansion = engine.expansion_ratio
+    # Schema 已保证三者恒有且为正（gt=0 / gt=1.0）——此处防御性留白而非编造
+    if thrust_vac <= 0.0 or chamber_pressure <= 0.0 or expansion <= 1.0:
+        return None
+    throat = math.sqrt(thrust_vac / (chamber_pressure * math.pi * NOZZLE_THRUST_COEFFICIENT))
+    exit_radius = throat * math.sqrt(expansion)
+    if exit_radius <= throat + GEOM_TOL:
+        return None
+    length_15deg = (exit_radius - throat) / math.tan(math.radians(15.0))
+    available = stage.engine_height_m
+    ratio = min(NOZZLE_BELL_LENGTH_RATIO, available / length_15deg)
+    if ratio < NOZZLE_BELL_MIN_RATIO:
+        return None
+    length = ratio * length_15deg
+    count = stage.engine_count
+    if count <= 1:
+        placement = 0.0
+    else:
+        tangent_circle = exit_radius / math.sin(math.pi / count)  # 钟间相切的布置圆
+        placement = min(tangent_circle, max(stage_radius_m - exit_radius, 0.0))
+    return NozzleGeometry(
+        throat_radius_m=throat,
+        exit_radius_m=exit_radius,
+        length_m=length,
+        length_ratio=ratio,
+        clamped=ratio < NOZZLE_BELL_LENGTH_RATIO - 1e-12,
+        placement_radius_m=placement,
+    )
+
+
+def _nozzle_profile(nozzle: NozzleGeometry) -> MeridianProfile:
+    """喷管钟形的母线剖面：出口（底）→ 喉部（顶），复用钟形曲线族。"""
+    return MeridianProfile(
+        name="nozzle",
+        base_radius=nozzle.exit_radius_m,
+        segments=(
+            BellNozzleSegment(
+                length=nozzle.length_m,
+                end_radius=nozzle.throat_radius_m,
+                throat_radius=nozzle.throat_radius_m,
+                length_ratio=nozzle.length_ratio,
+            ),
+        ),
+    )
+
+
+def build_nozzle_solids(
+    stage: Stage, stage_z_bottom: float, stage_radius_m: float
+) -> list[tuple[str, bd.Solid]]:
+    """一级的喷管实体（具名 ``s<级>-nozzle`` / ``s<级>-nozzle-<k>``，交付 5）。
+
+    多管发动机（``engine_count > 1``）按 :func:`derive_nozzle_geometry` 的布置圆
+    周向均布（与 M4 助推器同惯例：自 +X 轴起 2πk/n）；单管置于轴心。派生退化
+    （参数缺失 / 占高不足）→ 空列表（留白注记由调用方下发给装配树）。
+    """
+    nozzle = derive_nozzle_geometry(stage, stage_radius_m)
+    if nozzle is None:
+        return []
+    solid_template = build_solid(_nozzle_profile(nozzle))
+    count = stage.engine_count
+    solids: list[tuple[str, bd.Solid]] = []
+    for index in range(count):
+        angle = 2.0 * math.pi * index / count
+        center = (
+            nozzle.placement_radius_m * math.cos(angle),
+            nozzle.placement_radius_m * math.sin(angle),
+            stage_z_bottom,
+        )
+        placed = solid_template.moved(bd.Location(center))
+        label = f"s{stage.index}-nozzle" if count == 1 else f"s{stage.index}-nozzle-{index}"
+        placed.label = label
+        solids.append((label, placed))
+    return solids
+
+
+def nozzle_source_fields(stage: Stage) -> tuple[str, ...]:
+    """喷管派生来源字段（装配树 metadata，§5.5「参数来源」口径）。"""
+    prefix = f"stages[{stage.index - 1}]"
+    return (
+        f"{prefix}.engine.thrust_vacuum_n",
+        f"{prefix}.engine.chamber_pressure_pa",
+        f"{prefix}.engine.expansion_ratio",
+        f"{prefix}.engine_count",
+    )
+
+
+def nozzle_note(stage: Stage, stage_radius_m: float) -> str:
+    """喷管节点的派生注记：公式、惯例值与收敛情况（不编造，§1.4-4）。"""
+    nozzle = derive_nozzle_geometry(stage, stage_radius_m)
+    if nozzle is None:
+        return (
+            "喷管钟形未派生：推进参数缺失或可用发动机占高不足（钟长比越下限"
+            f" {NOZZLE_BELL_MIN_RATIO}）——留白不编造"
+        )
+    ratio_note = (
+        "80% Rao"
+        if not nozzle.clamped
+        else f"长度比收敛为 {nozzle.length_ratio:.4f}（80% Rao 放不下，可用占高 "
+        f"{stage.engine_height_m:.3f} m）"
+    )
+    overlap_note = ""
+    if (
+        stage.engine_count > 1
+        and nozzle.placement_radius_m > GEOM_TOL
+        and nozzle.placement_radius_m
+        < nozzle.exit_radius_m / math.sin(math.pi / stage.engine_count) - 1e-9
+    ):
+        overlap_note = "；布置圆收敛到级半径内，钟间可能轻微重叠（工程近似）"
+    return (
+        f"自推进参数派生：rt=√(F_vac/(Pc·π·C_F))={nozzle.throat_radius_m:.4f} m"
+        f"（C_F={NOZZLE_THRUST_COEFFICIENT}，工程惯例非权威）、Re=rt·√ε="
+        f"{nozzle.exit_radius_m:.4f} m、钟长 {nozzle.length_m:.3f} m（{ratio_note}）" + overlap_note
+    )
+
+
 def _fairing_profile(diameter: float, height: float) -> MeridianProfile:
     """整流罩母线：柱段 + 切线卵形顶（基底相切 ⇒ G1，§5.3）。"""
     radius = diameter / 2.0
@@ -589,15 +838,19 @@ def build_stage_solids(
 ) -> list[tuple[str, bd.Solid]]:
     """一级的分区实体（按布局带逐段生成，节点名 = ``s<级序>-<分区>``）。
 
-    0 高分区（avionics 等）不产出节点——部件缺失即无节点，前端按名寻址
-    （OI-33 空轮廓机制在真部件下的演化，"保留下标对齐"语义改为"保序"）。
+    0 高分区（avionics / 被级间段包容的 engine_bay 等）不产出节点——部件缺失即无
+    节点，前端按名寻址（OI-33 空轮廓机制在真部件下的演化，"保留下标对齐"语义改为
+    "保序"）。共底隔板带（``bulkhead``）特例：实体为**独立薄壳**（交付 6，M5 第四片），
+    而非带的柱段包络。
     """
     solids: list[tuple[str, bd.Solid]] = []
     for band in layout.bands:
         if band.length <= GEOM_TOL:
             continue
         label = section_node_name(stage.index, band.section)
-        if abs(band.radius_start - band.radius_end) <= GEOM_TOL:
+        if band.section == SECTION_BULKHEAD:
+            solids.append((label, build_bulkhead_shell(stage, layout, z_offset + band.z_start)))
+        elif abs(band.radius_start - band.radius_end) <= GEOM_TOL:
             solids.append(
                 (
                     label,
@@ -618,6 +871,63 @@ def build_stage_solids(
                 )
             )
     return solids
+
+
+# ---------------------------------------------------------------------------
+# 纯数值节点枚举（装配树与分离时序共用的单一事实源）
+# ---------------------------------------------------------------------------
+
+
+def vehicle_node_index(vehicle: Vehicle) -> dict[str, tuple[int, str]]:
+    """整箭装配节点的**纯数值**枚举：``节点名 → (级序, 分区)``——无 OCCT。
+
+    与 :func:`build_assembly` 的节点产出同源（分区带 / 尾翼 / 顶级罩 / 助推器 /
+    喷管 / 共底隔板壳），供 **不触内核的消费者** 复用——分离时序的
+    ``surviving_nodes``（§8.9）按级序 / 分区元数据推导存留节点，绝不硬编码
+    节点名清单。:func:`build_assembly` 内部以意图断言钉住两者一致（漂移即报错）。
+    """
+    index: dict[str, tuple[int, str]] = {}
+    fin_count_total = 0
+    booster_total = 0
+    for stage in vehicle.stages:
+        layout = plan_stage(stage)
+        for band in layout.bands:
+            if band.length <= GEOM_TOL:
+                continue
+            index[section_node_name(stage.index, band.section)] = (
+                stage.index,
+                band.section,
+            )
+        # 喷管（交付 5）：具名 s<级>-nozzle[-<k>]，与 build_nozzle_solids 同规则
+        nozzle = derive_nozzle_geometry(stage, stage.diameter_m / 2.0)
+        if nozzle is not None:
+            if stage.engine_count <= 1:
+                index[f"s{stage.index}-nozzle"] = (stage.index, "nozzle")
+            else:
+                for k in range(stage.engine_count):
+                    index[f"s{stage.index}-nozzle-{k}"] = (stage.index, "nozzle")
+        # 尾翼（fin-<k> 全局编号）
+        if stage.geometry.fins_enabled and stage.geometry.fin_count:
+            for k in range(stage.geometry.fin_count):
+                index[f"fin-{fin_count_total + k}"] = (stage.index, "fin")
+            fin_count_total += stage.geometry.fin_count
+    # 顶级：载荷适配器 + 整流罩（有整流罩时）
+    top_stage = vehicle.stages[-1]
+    if fairing_adapter_heights(vehicle) is not None:
+        index[section_node_name(top_stage.index, SECTION_ADAPTER)] = (
+            top_stage.index,
+            SECTION_ADAPTER,
+        )
+        index[section_node_name(top_stage.index, SECTION_FAIRING)] = (
+            top_stage.index,
+            SECTION_FAIRING,
+        )
+    # 助推器（M4 形态沿用：booster-<k> 全局编号，级号 0）
+    for group in vehicle.boosters:
+        for k in range(group.count):
+            index[f"booster-{booster_total + k}"] = (0, "booster")
+        booster_total += group.count
+    return index
 
 
 # ---------------------------------------------------------------------------
@@ -964,6 +1274,30 @@ def build_assembly(vehicle: Vehicle) -> VehicleAssembly:
             }
             fin_index += len(fin_solids)
 
+        # 喷管钟形（交付 5，M5 第四片）：独立具名节点 s<级>-nozzle[-<k>]，
+        # 位于该级底部（级间段 / 发动机舱段占位内），派生公式随 metadata 下发
+        nozzle_solids = build_nozzle_solids(stage, z_offset, stage.diameter_m / 2.0)
+        for label, solid in nozzle_solids:
+            children.append(solid)
+            nodes[label] = AssemblyNode(
+                stage_index=stage.index,
+                section="nozzle",
+                z_start_m=z_offset,
+                length_m=solid.bounding_box().max.Z - solid.bounding_box().min.Z,
+                mass_kg=0.0,
+                material=stage.material,
+                source_fields=nozzle_source_fields(stage),
+                note=nozzle_note(stage, stage.diameter_m / 2.0),
+            )
+        if not nozzle_solids:
+            # 派生退化：留白注记挂在发动机舱段 / 级间段节点上（不编造，§1.4-4）
+            skip_note = "；喷管钟形未派生（推进参数缺失或占高不足）——留白"
+            for name in (f"s{stage.index}-engine-bay", f"s{stage.index}-interstage"):
+                if name in nodes and nodes[name].note is not None:
+                    nodes[name] = nodes[name].model_copy(
+                        update={"note": (nodes[name].note or "") + skip_note}
+                    )
+
         z_offset += layout.height
 
     # 顶级：载荷适配器 + 整流罩（有整流罩时，§5.9 表；vehicle 级输入）
@@ -1023,7 +1357,8 @@ def build_assembly(vehicle: Vehicle) -> VehicleAssembly:
         )
         z_offset += fairing_height
 
-    # 助推器（OI-36 M4 形态沿用：周向均布圆柱，节点名 booster-<k>，级号 0）
+    # 助推器（OI-36：M4 周向均布现状沿用，M5 完整布局——径向偏移 / 自定义角位，
+    # 节点名 booster-<k>，级号 0）
     boosters_summary: dict[str, Any] | None = None
     if vehicle.boosters:
         booster_solids: list[bd.Solid] = []
@@ -1032,6 +1367,8 @@ def build_assembly(vehicle: Vehicle) -> VehicleAssembly:
                 count=group.count,
                 diameter_m=group.stage.diameter_m,
                 length_m=group.stage.length_m,
+                radial_offset_m=group.radial_offset_m,
+                angles_deg=group.angles_deg,
             )
             booster_solids.extend(booster_cylinders_for_radius(core_max_radius, summary))
         for global_index, solid in enumerate(booster_solids):
@@ -1063,6 +1400,16 @@ def build_assembly(vehicle: Vehicle) -> VehicleAssembly:
     root = bd.Compound(children=children)
     root.label = GLB_ROOT_NAME
 
+    # 意图断言（§5.7：防"有效但错误"）：内核路径产出的节点集合必须与纯数值
+    # 枚举（vehicle_node_index，供分离时序复用）逐名一致——两处漂移即布局缺陷
+    pure_index = vehicle_node_index(vehicle)
+    if set(nodes) != set(pure_index):
+        msg = (
+            f"装配节点与纯数值枚举不一致：内核多出 {sorted(set(nodes) - set(pure_index))}、"
+            f"缺少 {sorted(set(pure_index) - set(nodes))}——这是节点枚举漂移缺陷，请上报"
+        )
+        raise AssemblyError(msg)
+
     total_length = z_offset
     max_radius = max(
         [core_max_radius, *(solid.bounding_box().max.X for solid in children)], default=0.0
@@ -1085,6 +1432,9 @@ def build_assembly(vehicle: Vehicle) -> VehicleAssembly:
 __all__ = [
     "BULKHEAD_VOLUME_TOL",
     "FIN_THICKNESS_RATIO",
+    "NOZZLE_BELL_LENGTH_RATIO",
+    "NOZZLE_BELL_MIN_RATIO",
+    "NOZZLE_THRUST_COEFFICIENT",
     "SECTION_ADAPTER",
     "SECTION_AVIONICS",
     "SECTION_BULKHEAD",
@@ -1092,6 +1442,7 @@ __all__ = [
     "SECTION_FAIRING",
     "SECTION_FORWARD_SKIRT",
     "SECTION_FUEL_TANK",
+    "SECTION_INTERSTAGE",
     "SECTION_INTERTANK",
     "SECTION_ORDER",
     "SECTION_OX_TANK",
@@ -1100,13 +1451,18 @@ __all__ = [
     "AssemblyError",
     "AssemblyNode",
     "Band",
+    "NozzleGeometry",
     "StageLayout",
     "VehicleAssembly",
     "build_assembly",
+    "build_bulkhead_shell",
     "build_fin_solids",
+    "build_nozzle_solids",
     "build_stage_solids",
+    "derive_nozzle_geometry",
     "fairing_adapter_heights",
     "plan_stage",
     "section_node_name",
     "vehicle_core_height_m",
+    "vehicle_node_index",
 ]

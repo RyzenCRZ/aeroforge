@@ -162,13 +162,14 @@ _F9_S2_DRY_KG = 4_000.0
 _F9_S2_PROP_KG = 107_500.0
 
 #: 有效加注比例（公开加注量 / 几何满箱质量，§5.9 九段分区装配账满箱口径 → §13.2 公开
-#: 分项；2026-09-20 按新装配账口径重标）：
+#: 分项；2026-09-20 按新装配账口径重标；2026-09-21 级间段切出后再标）：
 #: 一级满箱 424,843 kg（级长 42.6 − 发动机 2.4 − 分区预留 3.7〔2:1 封头 ×2 + 级间舱〕
 #: → 箱段柱体 36.5 m + 4 封头；O/F 2.34）→ 411,000/424,843 ≈ 0.9674；
-#: 二级满箱 146,114 kg（级长 19.2 = 12.6 + 级间段 6.6 并入二级账，同口径）→
-#: 107,500/146,114 ≈ 0.7357。
+#: 二级满箱 123,156 kg（级长 19.2 = 12.6 + 级间段 6.6 并入二级账；级间段 6.6 m 切出后
+#: 发动机舱段 4.5 m 被级间段包容〔MVac 喷管伸入级间段〕、净余量 2.1 m 由贮箱让出 →
+#: 箱段柱体 8.9 m + 4 封头）→ 107,500/123,156 ≈ 0.87288（取 0.8729）。
 _F9_S1_FILL = 0.9674
-_F9_S2_FILL = 0.7357
+_F9_S2_FILL = 0.8729
 
 
 def _merlin_1d() -> Engine:
@@ -228,12 +229,18 @@ def _f9_stage1() -> Stage:
 
 
 def _f9_stage2() -> Stage:
-    """Falcon 9 / Falcon Heavy 共用的二级。"""
+    """Falcon 9 / Falcon Heavy 共用的二级。
+
+    级间段（interstage）显式 6.6 m：公开口径该分离舱段并入二级账
+    （``length_m`` 19.2 m 已含之，从 19.2 内划出、非加高）；MVac 喷管伸入
+    级间段，发动机舱段由级间段包容（装配口径见 geometry.assembly）。
+    """
     return Stage(
         index=2,
         propellant="LOX/RP-1",
         diameter_m=3.7,
         length_m=19.2,
+        interstage_height_m=6.6,
         wall_thickness_m=0.004,
         material="al-li-2198",
         structure_coefficient=_F9_S2_DRY_KG / (_F9_S2_DRY_KG + _F9_S2_PROP_KG),
@@ -325,8 +332,13 @@ FALCON9_SOURCED_FIELDS: dict[str, str] = {
     "stages[1].diameter_m": "公开资料：二级直径 3.7 m（与芯级同径）",
     "stages[1].length_m": (
         "公开资料：二级长约 12.6 m + 级间段约 6.6 m（公开口径级间段并入二级账，"
-        "MVac 喷管伸入级间段内）⇒ Schema length_m（含级间段，§6.1）= 19.2 m；"
+        "MVac 喷管伸入级间段）⇒ Schema length_m（含级间段，§6.1）= 19.2 m；"
         "2026-09-20 按装配账满箱相容性复核修正（原 12.6 m 装不下公开推进剂 107.5 t）"
+    ),
+    "stages[1].interstage_height_m": (
+        "公开资料：级间段（S1 与 S2 之间的分离舱段）约 6.6 m——长度预算计入二级 "
+        "length_m 19.2 m（从 19.2 内划出、非加高，§5.9 共性 2 / §6.1）；"
+        "MVac 喷管伸入级间段，发动机舱段由级间段包容（装配口径见 geometry.assembly）"
     ),
     "stages[1].wall_thickness_m": _NOTE_WALL,
     "stages[1].structure_coefficient": (

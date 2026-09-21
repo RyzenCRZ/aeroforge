@@ -53,6 +53,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from aeroforge.errors import PerfError, SizingError
+from aeroforge.geometry.assembly import vehicle_node_index
 from aeroforge.params import staging
 from aeroforge.params.dag import G0
 from aeroforge.params.schema import SequenceEvent, Vehicle
@@ -130,6 +131,14 @@ class SequenceEventReport(BaseModel):
     mass_before_kg: float = Field(description="事件前质量（kg）")
     mass_after_kg: float = Field(description="事件后质量（kg）")
     mass_delta_kg: float = Field(description="质量突变（kg；负 = 质量离开该账）")
+    surviving_nodes: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "该事件后**存留的装配节点名**（自装配树的级序 / 分区元数据推导，"
+            "§8.9 OI-36 的 M5 部分）：分离 / 抛罩事件只删节点、不增；"
+            "boosters 随芯一级分离（分离时刻默认 = 芯一级关机，§6.1 Booster 层）"
+        ),
+    )
 
 
 class RecoveryCosts(BaseModel):
@@ -556,6 +565,12 @@ def apply_sequence(
     separated: set[int] = set()
     events_out: list[SequenceEventReport] = []
 
+    # ── 存留节点账（交付 3，OI-36 的 M5 部分）：自装配树的级序 / 分区元数据推导，
+    #    不硬编码节点名清单——枚举单一事实源是 vehicle_node_index（纯数值，无 OCCT）
+    node_index = vehicle_node_index(vehicle)
+    surviving: set[str] = set(node_index)
+    boosters_separate_with = min(stage_rows) if stage_rows else 0  # 助推器随芯一级分离（默认口径）
+
     for event in _events_from_vehicle(vehicle):
         if event.event == "ignition":
             time_s = event.time_s if event.time_s is not None else 0.0
@@ -572,6 +587,7 @@ def apply_sequence(
                     mass_before_kg=main_mass,
                     mass_after_kg=main_mass,
                     mass_delta_kg=0.0,
+                    surviving_nodes=tuple(sorted(surviving)),
                 )
             )
         elif event.event == "stage_separation":
@@ -584,10 +600,31 @@ def apply_sequence(
                     continue
                 index = remaining_indices[0]
             separated.add(index)
+            # 存留节点：该级节点组离场；芯一级分离时助推器组随行（分离时刻默认 =
+            # 芯一级关机，§6.1 Booster 层——时序事件模型无独立助推器事件）
+            surviving -= {
+                name for name, (stage_of, _section) in node_index.items() if stage_of == index
+            }
+            if index == boosters_separate_with:
+                surviving -= {
+                    name for name, (stage_of, _section) in node_index.items() if stage_of == 0
+                }
             burned = usable_by_stage.get(index, 0.0)
             clock += _stage_burn_duration_s(index, burned, vehicle)
             before = main_mass - burned
             thrown = stage_rows[index].m_dry_kg
+            # 0 级段随芯一级一并分离（§8.5 合并规则 + §6.1 Booster 层分离时刻默认）：
+            # 助推器推进剂与芯一级并联燃烧（燃烧量并入本事件）、干重随行抛离——
+            # 不入本事件则质量闭合断言（规则 1）必失败
+            zero_note = ""
+            if index == boosters_separate_with and sizing.zero_stage is not None:
+                zero = sizing.zero_stage
+                before -= zero.booster_propellant_kg
+                thrown += zero.booster_dry_kg
+                zero_note = (
+                    f"（0 级段随行：助推器推进剂 {zero.booster_propellant_kg:.0f} kg 已与"
+                    f"芯一级并联燃烧、干重 {zero.booster_dry_kg:.0f} kg 随行抛离——§8.5）"
+                )
             main_mass = before - thrown
             recovered_note = ""
             if costs is not None and index in indices:
@@ -604,11 +641,13 @@ def apply_sequence(
                     account="main_stack",
                     description=(
                         f"第 {index} 级关机/分离：燃烧可用推进剂 {burned:.0f} kg 后抛掉干质量 "
-                        f"{thrown:.0f} kg{recovered_note}——提高上面级初始质量比（§8.9 表）"
+                        f"{thrown:.0f} kg{zero_note}{recovered_note}——"
+                        "提高上面级初始质量比（§8.9 表）"
                     ),
                     mass_before_kg=before,
                     mass_after_kg=main_mass,
                     mass_delta_kg=-thrown,
+                    surviving_nodes=tuple(sorted(surviving)),
                 )
             )
         elif event.event == "fairing_jettison":
@@ -620,6 +659,10 @@ def apply_sequence(
                 delta = 0.0
             else:
                 delta = -fairing
+            # 存留节点：整流罩节点离场（按分区元数据，不硬编码件名）
+            surviving -= {
+                name for name, (_s, section) in node_index.items() if section == "fairing"
+            }
             before = main_mass
             main_mass += delta
             events_out.append(
@@ -634,6 +677,7 @@ def apply_sequence(
                     mass_before_kg=before,
                     mass_after_kg=main_mass,
                     mass_delta_kg=delta,
+                    surviving_nodes=tuple(sorted(surviving)),
                 )
             )
             warnings.extend(_fairing_jettison_warnings(twr, time_s))
@@ -668,6 +712,7 @@ def apply_sequence(
                     mass_before_kg=before,
                     mass_after_kg=before,
                     mass_delta_kg=0.0,
+                    surviving_nodes=tuple(sorted(surviving)),
                 )
             )
         elif event.event == "landing":
@@ -701,6 +746,7 @@ def apply_sequence(
                     mass_before_kg=stage_dry,
                     mass_after_kg=stage_dry - reserve,
                     mass_delta_kg=-reserve,
+                    surviving_nodes=tuple(sorted(surviving)),
                 )
             )
         else:  # pragma: no cover - Schema 枚举已限定事件类型
@@ -753,6 +799,13 @@ def apply_sequence(
         "sequence.capacity": (
             "运力代价 = 同一枚最终火箭的两次账本级反推（payload_for_dv_on_ledger，"
             "复用 §8.5/§8.6 链路）：expendable（满装全烧）− recoverable（预留不参与上升）"
+        ),
+        "sequence.surviving_nodes": (
+            "每个事件后存留的装配节点（交付 3，OI-36 的 M5 部分）：自装配树的级序 / "
+            "分区元数据推导（vehicle_node_index 纯数值枚举，与 build_assembly 以意图"
+            "断言钉住一致），不硬编码节点名清单；分离 → 该级节点组离场（芯一级分离时"
+            "助推器组随行，§6.1 Booster 层默认口径）、抛罩 → fairing 分区节点离场、"
+            "点火 / 入轨 / 回收点火不改节点集合（回收点火记被回收级独立账）"
         ),
         "sequence.dv_source": dv_source,
         "sequence.dynamic_pressure": (

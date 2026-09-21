@@ -3,6 +3,7 @@ import { useEffect } from 'react'
 import { DiagnosticsPanel } from '../components/DiagnosticsPanel'
 import { MeridianEditor } from '../components/MeridianEditor'
 import { Profile2D } from '../components/Profile2D'
+import { RecoveryPanel } from '../components/RecoveryPanel'
 import { SegmentPanel } from '../components/SegmentPanel'
 import { ThresholdPanel } from '../components/ThresholdPanel'
 import { VehiclePanel } from '../components/VehiclePanel'
@@ -135,6 +136,8 @@ export function Workspace() {
         <Profile2D />
         {/* 整箭数据 + 轨道运力（§11.5 布局：右栏 2D 视图组下方，FR-10 / FR-11） */}
         <VehicleSummaryPanel />
+        {/* 回收质量代价（§8.9 / M5：三项分解可解释；未启用时常驻「无代价」提示） */}
+        <RecoveryPanel />
       </aside>
     </div>
   )

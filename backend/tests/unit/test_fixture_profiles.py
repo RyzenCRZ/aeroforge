@@ -59,6 +59,8 @@ LEGAL = frozenset(
         "_axial_capsule",
         "_segmented_capsule",
         "_segmented_cylinder",
+        "_meridian_cylinder",
+        "_ogive_on_cylinder",
     }
 )
 
@@ -68,7 +70,19 @@ LEGAL_WITH_WARNING = frozenset({"_pinch"})
 #: 必须被拒的夹具
 #: ``_degenerate_middle`` 含两端半径均为 0 的轴向段，它与穹顶段在轴处呈 90° 折角，
 #: 违反 G1——用它验证几何层的"退化段不产出节点"分支（正常输入走不到该分支）。
-ILLEGAL = frozenset({"_g1_violation", "_degenerate_middle"})
+#: ``_cone_on_cylinder`` / ``_spiky_spline`` / ``_spiky_spline_between_cylinders``
+#: 是**曲面光顺测试（test_geometry_smoothing）的分析对象**：锥台-柱段设计折点、
+#: 局部鼓包与柱段夹持形态在产品校验器（G1 门禁 + 尖点检查）下 ok=False 属预期——
+#: 光顺端点接受这类"待修复"母线做分析，不构成夹具非法。
+ILLEGAL = frozenset(
+    {
+        "_g1_violation",
+        "_degenerate_middle",
+        "_cone_on_cylinder",
+        "_spiky_spline",
+        "_spiky_spline_between_cylinders",
+    }
+)
 
 
 def _factories() -> dict[str, MeridianProfile]:

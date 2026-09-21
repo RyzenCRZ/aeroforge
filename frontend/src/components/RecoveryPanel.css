@@ -1,0 +1,81 @@
+.recovery-panel__hint {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
+
+/* 未启用态：常驻呈现（不隐藏面板），但不抢视觉 */
+.recovery-panel__empty {
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+
+.recovery-panel__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.recovery-panel__field input {
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.recovery-panel__error {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-status-warn);
+}
+
+.recovery-panel__costs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0 0;
+}
+
+.recovery-panel__cost {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.recovery-panel__cost dt {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.recovery-panel__cost dd {
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+/* 每项的一句可解释文案（§8.9 可解释性验收）：小字随行 */
+.recovery-panel__explain {
+  font-size: 11px;
+  font-weight: normal;
+  line-height: 1.45;
+  color: var(--color-text-secondary);
+}
+
+/* 加总行：加重呈现，但语义仍是后端下发的 inert_cost_kg */
+.recovery-panel__cost--total {
+  border-bottom: none;
+  border-top: 2px solid var(--color-border);
+}
+
+.recovery-panel__cost--total dd {
+  font-weight: bold;
+}

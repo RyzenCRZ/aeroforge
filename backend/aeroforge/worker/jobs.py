@@ -95,7 +95,8 @@ class JobStage(StrEnum):
     几何链 ``meridian → solid → mesh → step → done``；MC 计算链
     ``sampling → evaluating → summarizing → done``（M4 第四片补入，前端按字符串
     消费、新增枚举值为增量变更）；导出链 ``solid → export → done``（M5 第三片，
-    §5.8——报告类导出无几何构建，直接 ``export``）。
+    §5.8——报告类导出无几何构建，直接 ``export``）；L2 弹道积分链
+    ``integrating → done``（M6 第二片，§8.6——单发积分无分阶段，仅 running/done）。
     """
 
     QUEUED = "queued"
@@ -107,6 +108,7 @@ class JobStage(StrEnum):
     SAMPLING = "sampling"
     EVALUATING = "evaluating"
     SUMMARIZING = "summarizing"
+    INTEGRATING = "integrating"
     DONE = "done"
 
 
@@ -121,6 +123,7 @@ _STAGE_PROGRESS: dict[JobStage, float] = {
     JobStage.SAMPLING: 0.05,
     JobStage.EVALUATING: 0.1,
     JobStage.SUMMARIZING: 0.95,
+    JobStage.INTEGRATING: 0.1,
     JobStage.DONE: 1.0,
 }
 
@@ -703,6 +706,13 @@ def shutdown_compute_pool(wait: bool = True) -> None:
             _compute_pool = None
 
 
+#: 计算侧作业消息（tagged 元组：首元素 = 作业类型 "mc" | "trajectory"，随 payload 展开；
+#: mc → (job_id, vehicle_json, samples:int, seed:int)，trajectory → (job_id,
+#: vehicle_json, program_json, dt_s:float)。线程边界消息按字段落型——payload 类型
+#: 由 submit_* 的调用方保证，分支内不再做联合窄化）。
+_ComputeWork = tuple[Any, ...]
+
+
 class ComputeJobRunner:
     """MC / 计算作业执行器：协调线程分派样本块到进程池（§9.1 计算侧）。
 
@@ -713,7 +723,7 @@ class ComputeJobRunner:
     def __init__(self, board: JobBoard, store: ArtifactStore | None = None) -> None:
         self.board = board
         self.store = store or ArtifactStore()
-        self._queue: queue.Queue[tuple[str, str, int, int] | None] = queue.Queue(maxsize=64)
+        self._queue: queue.Queue[_ComputeWork | None] = queue.Queue(maxsize=64)
         self._stop_lock = threading.Lock()
         self._stopped = False
         self._thread = threading.Thread(target=self._worker, name="aeroforge-compute", daemon=True)
@@ -748,7 +758,26 @@ class ComputeJobRunner:
             digest = hashlib.sha256(canonical_json(vehicle).encode("utf-8")).digest()
             seed = int.from_bytes(digest[:4], "big")
         record = self.board.create()
-        self._queue.put((record.job_id, vehicle.model_dump_json(), samples, seed))
+        self._queue.put(("mc", record.job_id, vehicle.model_dump_json(), samples, seed))
+        return record
+
+    def submit_trajectory(
+        self,
+        vehicle: Vehicle,
+        program_json: str,
+        *,
+        dt_s: float,
+    ) -> JobRecord:
+        """入队一个 L2 上升弹道积分作业（§8.6 L2）并立即返回 ``queued`` 快照。
+
+        ⚠ 只做微秒级簿记与入队——积分（百毫秒级实测，F9 ≈76 ms / CZ-5 ≈153 ms
+        / SV ≈272 ms，RK4 固定步长 0.1 s）在协调线程执行：超过端点同步阈值的
+        计算按 §9.1 惯例走作业体系，事件循环不被独占。
+        """
+        record = self.board.create()
+        self._queue.put(
+            ("trajectory", record.job_id, vehicle.model_dump_json(), program_json, dt_s)
+        )
         return record
 
     def get(self, job_id: str) -> JobRecord | None:
@@ -780,11 +809,18 @@ class ComputeJobRunner:
             item = self._queue.get()
             if item is None:
                 return
-            job_id, vehicle_json, samples, seed = item
-            try:
-                self._execute_mc(job_id, vehicle_json, samples, seed)
-            except BaseException as exc:
-                self._settle_failure(job_id, exc)
+            if item[0] == "trajectory":
+                _, job_id, vehicle_json, program_json, dt_s = item
+                try:
+                    self._execute_trajectory(job_id, vehicle_json, program_json, float(dt_s))
+                except BaseException as exc:
+                    self._settle_failure(job_id, exc, default_code="TRAJECTORY_FAILED")
+            else:
+                _, job_id, vehicle_json, samples, seed = item
+                try:
+                    self._execute_mc(job_id, vehicle_json, int(samples), int(seed))
+                except BaseException as exc:
+                    self._settle_failure(job_id, exc)
 
     def _execute_mc(self, job_id: str, vehicle_json: str, samples: int, seed: int) -> None:
         started = time.perf_counter()
@@ -866,8 +902,47 @@ class ComputeJobRunner:
             timings_ms=timings,
         )
 
-    def _settle_failure(self, job_id: str, exc: BaseException) -> None:
-        """把异常收敛为作业终态（取消 / MC 域错误 / 未预期异常）。"""
+    def _execute_trajectory(
+        self, job_id: str, vehicle_json: str, program_json: str, dt_s: float
+    ) -> None:
+        """L2 上升弹道积分（§8.6 L2）：协调线程内单发积分（百毫秒级，无分阶段）。"""
+        from aeroforge.perf.trajectory import TrajectoryProgram, integrate_ascent
+
+        started = time.perf_counter()
+        vehicle = Vehicle.model_validate_json(vehicle_json)
+        program = TrajectoryProgram.model_validate_json(program_json)
+
+        self.board.update(
+            job_id,
+            status=JobStatus.RUNNING,
+            stage=JobStage.INTEGRATING,
+            progress=_STAGE_PROGRESS[JobStage.INTEGRATING],
+            started_at=_now(),
+        )
+
+        result = integrate_ascent(vehicle, program, dt_s=dt_s)
+        metrics = result.model_dump(mode="json")
+        metrics["trajectory_job_id"] = job_id
+
+        self.board.update(
+            job_id,
+            status=JobStatus.SUCCEEDED,
+            stage=JobStage.DONE,
+            progress=1.0,
+            metrics=metrics,
+            finished_at=_now(),
+            timings_ms={"integrate_ms": round((time.perf_counter() - started) * 1000.0, 2)},
+        )
+
+    def _settle_failure(
+        self, job_id: str, exc: BaseException, *, default_code: str = "MC_FAILED"
+    ) -> None:
+        """把异常收敛为作业终态（取消 / 域错误 / 未预期异常）。
+
+        ``default_code`` 是作业类型对应的兜底错误码（MC 域维持既有
+        ``MC_FAILED``；L2 弹道积分为 ``TRAJECTORY_FAILED``，→ 422）；域异常
+        自带的消息与 suggestion 原样透传（§10.3：可操作，不降级为"未知错误"）。
+        """
         stage = self.board.stage_of(job_id)
         if isinstance(exc, (_Cancelled, MCCancelled)):
             error = ErrorBody(
@@ -879,7 +954,7 @@ class ComputeJobRunner:
             status = JobStatus.CANCELLED
         else:
             body = to_error_body(exc)
-            error = body.model_copy(update={"stage": stage.value, "code": "MC_FAILED"})
+            error = body.model_copy(update={"stage": stage.value, "code": default_code})
             status = JobStatus.FAILED
         self.board.update(
             job_id,

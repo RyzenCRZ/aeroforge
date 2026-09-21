@@ -962,6 +962,48 @@
         }
       }
     },
+    "/api/perf/latitude-curve": {
+      "post": {
+        "tags": [
+          "perf"
+        ],
+        "summary": "Latitude Curve",
+        "description": "运力—纬度曲线（OI-23；同步毫秒级——同一质量账 + 逐点二分，不触作业体系）。\n\n§16 M6 验收判据：曲线对纬度**单调不增**（FR-19 同型）——由测试显式断言\n（LEO / SSO 各一），本端点如实给值。耗时实测：质量账构建一次 + N 次载荷\n二分（纯数值），实测毫秒级（``compute_ms`` 随响应返回；若未来超 50 ms\n交互预算再议作业化——§9.1 的 >10 ms 红线只针对 async handler 内的\nOCCT/重计算，本端点为同步 def，FastAPI 自动入线程池不阻塞事件循环）。",
+        "operationId": "latitude_curve_api_perf_latitude_curve_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LatitudeCurveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LatitudeCurveResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/perf/evaluate": {
       "post": {
         "tags": [
@@ -987,6 +1029,90 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PerfEvaluateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/perf/trajectory": {
+      "post": {
+        "tags": [
+          "perf"
+        ],
+        "summary": "Run Trajectory",
+        "description": "投递 L2 简化上升弹道积分作业（§8.6 L2；异步——实测积分耗时超 50 ms 同步阈值）。\n\n点质量 2D 积分：ISA 1976 分层指数大气 + 球面地球（变重力 + 离心卸载）+\n重力转弯程序（γ 剖面 + 逆动力学攻角）→ **直接算出**四项损失（与 L1 同名\n对齐：gravity / aero / steering / back_pressure）。纯数值单发实测 F9 ≈76 ms\n/ CZ-5 ≈153 ms / SV ≈272 ms（RK4 0.1 s 步长），全部 > 50 ms——按 §9.1 惯例\n走既有作业体系（计算侧执行器），本端点只做参数域硬约束检查 + 微秒级入队。\n程序参数荒谬 / TWR ≤ 0 / 积分发散（触地、超第二宇宙速度）在作业内报错，\n作业终态 FAILED（``TRAJECTORY_FAILED`` → 422，错误携带最后状态）。",
+        "operationId": "run_trajectory_api_perf_trajectory_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PerfTrajectoryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PerfTrajectoryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orbits/transfer": {
+      "post": {
+        "tags": [
+          "orbits"
+        ],
+        "summary": "Orbit Transfer",
+        "description": "轨道机动解析（§8.10 全项闭式；纯解析毫秒级同步，不触作业体系）。\n\n``r_a_km`` 路径：Hohmann 两脉冲 + 远地点圆化 + 平面变更 + 复合矢量合成\n（GEO 直送与 GTO+圆化同口径——target=\"GEO\" 即 r_a 换算为同步半径）。\n``target=\"TLI\"/\"TMI\"/\"escape\"`` 路径：停泊轨道单脉冲射入，C3 与 ΔV 成对输出\n（TMI 的 ``window_assumption`` 必填，缺省给典型窗口文案——§8.10 约束 4）。\n请求自相矛盾（r_a_km 与 target 同给 / 全缺、C3 越域）走\n:class:`~aeroforge.errors.PerfError` → 422。",
+        "operationId": "orbit_transfer_api_orbits_transfer_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrbitTransferRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrbitTransferResponse"
                 }
               }
             }
@@ -1536,6 +1662,51 @@
         ],
         "title": "CheckResult",
         "description": "单项检查结果。"
+      },
+      "CompositeOut": {
+        "properties": {
+          "vector_km_s": {
+            "type": "number",
+            "title": "Vector Km S",
+            "description": "矢量合成脉冲（km/s，权威值）"
+          },
+          "circularization_km_s": {
+            "type": "number",
+            "title": "Circularization Km S",
+            "description": "远地点圆化单脉冲（km/s）"
+          },
+          "plane_change_km_s": {
+            "type": "number",
+            "title": "Plane Change Km S",
+            "description": "单独平面变更脉冲（km/s）"
+          },
+          "scalar_sum_km_s": {
+            "type": "number",
+            "title": "Scalar Sum Km S",
+            "description": "标量相加（km/s，禁止口径——仅供差值机检）"
+          },
+          "vector_minus_scalar_km_s": {
+            "type": "number",
+            "title": "Vector Minus Scalar Km S",
+            "description": "矢量 − 标量和（km/s，恒 ≤ 0）"
+          },
+          "inclination_deg": {
+            "type": "number",
+            "title": "Inclination Deg",
+            "description": "消倾角转角（°）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "vector_km_s",
+          "circularization_km_s",
+          "plane_change_km_s",
+          "scalar_sum_km_s",
+          "vector_minus_scalar_km_s",
+          "inclination_deg"
+        ],
+        "title": "CompositeOut",
+        "description": "远地点复合机动输出——矢量合成为权威值，标量和仅供差值机检（§8.10 约束 2）。"
       },
       "ContinuityLevel": {
         "properties": {
@@ -2690,6 +2861,73 @@
         "title": "HealthResponse",
         "description": "``GET /api/health`` 的响应体。\n\n作为 OpenAPI schema 的来源，前端 TS 类型由此生成（规格 §18.2：禁止手写重复类型）。"
       },
+      "HohmannOut": {
+        "properties": {
+          "dv1_km_s": {
+            "type": "number",
+            "title": "Dv1 Km S",
+            "description": "第一脉冲（内圆轨道，km/s；下降转移为负）"
+          },
+          "dv2_km_s": {
+            "type": "number",
+            "title": "Dv2 Km S",
+            "description": "第二脉冲（外圆轨道，km/s；下降转移为负）"
+          },
+          "total_km_s": {
+            "type": "number",
+            "title": "Total Km S",
+            "description": "两脉冲代数和（km/s）"
+          },
+          "a_t_km": {
+            "type": "number",
+            "title": "A T Km",
+            "description": "转移椭圆半长轴（km）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "dv1_km_s",
+          "dv2_km_s",
+          "total_km_s",
+          "a_t_km"
+        ],
+        "title": "HohmannOut",
+        "description": "Hohmann 两脉冲分段输出（§8.10 公式原文）。"
+      },
+      "InjectionOut": {
+        "properties": {
+          "dv_km_s": {
+            "type": "number",
+            "title": "Dv Km S",
+            "description": "停泊轨道单脉冲射入 ΔV（km/s，由 C3 反算）"
+          },
+          "c3_km2_s2": {
+            "type": "number",
+            "title": "C3 Km2 S2",
+            "description": "特征能量 C3 = v∞²（km²/s²；TLI<0，escape≥0）"
+          },
+          "window_assumption": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Assumption",
+            "description": "窗口/相位假设（TMI 必填；TLI/escape 为 null）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "dv_km_s",
+          "c3_km2_s2",
+          "window_assumption"
+        ],
+        "title": "InjectionOut",
+        "description": "转移射入输出——C3 与 ΔV 成对（OI-22 / §8.10 约束 1）。"
+      },
       "JobRecord": {
         "properties": {
           "job_id": {
@@ -2796,10 +3034,11 @@
           "sampling",
           "evaluating",
           "summarizing",
+          "integrating",
           "done"
         ],
         "title": "JobStage",
-        "description": "§9.3 的进度阶段。\n\n几何链 ``meridian → solid → mesh → step → done``；MC 计算链\n``sampling → evaluating → summarizing → done``（M4 第四片补入，前端按字符串\n消费、新增枚举值为增量变更）；导出链 ``solid → export → done``（M5 第三片，\n§5.8——报告类导出无几何构建，直接 ``export``）。"
+        "description": "§9.3 的进度阶段。\n\n几何链 ``meridian → solid → mesh → step → done``；MC 计算链\n``sampling → evaluating → summarizing → done``（M4 第四片补入，前端按字符串\n消费、新增枚举值为增量变更）；导出链 ``solid → export → done``（M5 第三片，\n§5.8——报告类导出无几何构建，直接 ``export``）；L2 弹道积分链\n``integrating → done``（M6 第二片，§8.6——单发积分无分阶段，仅 running/done）。"
       },
       "JobStatus": {
         "type": "string",
@@ -2864,6 +3103,110 @@
         ],
         "title": "JointCheck",
         "description": "段间接头（G0 由结构保证，此处校 G1）。"
+      },
+      "LatitudeCurvePoint": {
+        "properties": {
+          "lat_deg": {
+            "type": "number",
+            "title": "Lat Deg",
+            "description": "发射场纬度（°）"
+          },
+          "payload_kg": {
+            "type": "number",
+            "title": "Payload Kg",
+            "description": "该纬度下的反推运力（kg；不可达记 0）"
+          },
+          "attainable": {
+            "type": "boolean",
+            "title": "Attainable",
+            "description": "该纬度下目标是否可达",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "lat_deg",
+          "payload_kg"
+        ],
+        "title": "LatitudeCurvePoint",
+        "description": "纬度采样点（OI-23）。"
+      },
+      "LatitudeCurveRequest": {
+        "properties": {
+          "vehicle": {
+            "$ref": "#/components/schemas/Vehicle",
+            "description": "飞行器参数（§6.1 全量）：曲线只替换发射场纬度，方位角 / 倾角 / 构型全部固定——「固定其余参数」的 FR-19 / OI-23 口径"
+          },
+          "orbit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orbit",
+            "description": "目标轨道（LEO/SSO/GTO/GEO/TLI/TMI/GEO_GTO_CIRC 之一）；缺省取 Mission.orbit_type（不在表内时 422）"
+          },
+          "n_points": {
+            "type": "integer",
+            "maximum": 91.0,
+            "minimum": 2.0,
+            "title": "N Points",
+            "description": "纬度采样点数（0–90° 均匀；缺省 11 点 = 步距 9°，OI-23 工程惯例）",
+            "default": 11
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "vehicle"
+        ],
+        "title": "LatitudeCurveRequest",
+        "description": "``POST /api/perf/latitude-curve`` 的请求体（OI-23 运力—纬度曲线）。"
+      },
+      "LatitudeCurveResponse": {
+        "properties": {
+          "payload_key": {
+            "type": "string",
+            "title": "Payload Key",
+            "description": "运力量键（§8.8 形态：payload_<orbit>_kg）"
+          },
+          "orbit": {
+            "type": "string",
+            "title": "Orbit",
+            "description": "目标轨道"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/LatitudeCurvePoint"
+            },
+            "type": "array",
+            "title": "Points",
+            "description": "纬度采样点（0–90° 均匀）"
+          },
+          "assumption": {
+            "type": "string",
+            "title": "Assumption",
+            "description": "采样口径与单调性判据说明"
+          },
+          "compute_ms": {
+            "type": "number",
+            "title": "Compute Ms",
+            "description": "本次曲线计算耗时（ms，同步链实测）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "payload_key",
+          "orbit",
+          "points",
+          "assumption",
+          "compute_ms"
+        ],
+        "title": "LatitudeCurveResponse",
+        "description": "``POST /api/perf/latitude-curve`` 的响应体（§8.8 ``payload_latitude_curve``）。"
       },
       "LaunchSite": {
         "properties": {
@@ -3533,7 +3876,7 @@
               }
             ],
             "title": "Target Payload Kg",
-            "description": "当前目标轨道的运力点值（kg）；四轨道表（LEO/SSO/GTO/GEO）覆盖内取表行，表外轨道（TLI/TMI/escape/custom）为 null——随 M6 轨道层交付"
+            "description": "当前目标轨道的运力点值（kg）；七目标表（LEO/SSO/GTO/GEO/TLI/TMI/GEO_GTO_CIRC）覆盖内取表行，表外轨道（escape/custom）为 null"
           },
           "target_attainable": {
             "anyOf": [
@@ -3553,7 +3896,7 @@
             },
             "type": "object",
             "title": "Payload By Orbit",
-            "description": "四轨道点值运力表（与 /api/perf/evaluate 的 point.payload_by_orbit 同源同值）"
+            "description": "七目标点值运力表（与 /api/perf/evaluate 的 point.payload_by_orbit 同源同值）"
           }
         },
         "type": "object",
@@ -3564,7 +3907,7 @@
           "payload_by_orbit"
         ],
         "title": "OrbitCapacitySummary",
-        "description": "轨道运力摘要（FR-11：当前目标轨道点值 + 四轨道表）。"
+        "description": "轨道运力摘要（FR-11：当前目标轨道点值 + 七目标运力表）。"
       },
       "OrbitPayload": {
         "properties": {
@@ -3581,13 +3924,37 @@
           "dv_source": {
             "type": "string",
             "title": "Dv Source",
-            "description": "需求来源：量级锚定（§8.6 表中值）/ Mission 用户输入（loss_factors）"
+            "description": "需求来源：量级锚定（§8.6 表中值）/ Mission 用户输入（loss_factors）；复合行（TLI/TMI/GEO_GTO_CIRC）= 上升段锚定 + §8.10 轨道解析拼合"
           },
           "attainable": {
             "type": "boolean",
             "title": "Attainable",
             "description": "构型可达该目标与否；False 时需求超出零载荷可达上限、运力记 0",
             "default": true
+          },
+          "c3_km2_s2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "C3 Km2 S2",
+            "description": "特征能量 C3 = v∞²（km²/s²，OI-22：TLI 为负、TMI 典型 8–15）——TLI / TMI 行必填（§8.10 约束 1：禁止只给 ΔV），其余行为 null"
+          },
+          "window_assumption": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Assumption",
+            "description": "窗口/相位假设（§8.10 约束 4）：TMI 行必填（无窗口假设的 TMI 结果视为不可复现，CON-04 同口径），其余行为 null"
           }
         },
         "type": "object",
@@ -3598,6 +3965,217 @@
         ],
         "title": "OrbitPayload",
         "description": "运力表中一个目标轨道的点值（OI-38 / §8.8 ``payload_by_orbit`` 行）。"
+      },
+      "OrbitTransferRequest": {
+        "properties": {
+          "r_p_km": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "R P Km",
+            "description": "停泊轨道地心半径（km，如 200 km 高度 ≈ 6578.137）"
+          },
+          "r_a_km": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "R A Km",
+            "description": "目标轨道地心半径（km）——Hohmann / 圆化 / 复合机动用；与 target 二选一"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "GEO",
+                  "TLI",
+                  "TMI",
+                  "escape"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target",
+            "description": "定型目标：GEO（同步半径）/ TLI / TMI / escape——与 r_a_km 二选一"
+          },
+          "inclination_deg": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 180.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inclination Deg",
+            "description": "转移轨道倾角（°）——复合机动消倾角用；缺省取 latitude_deg（向东发射自然倾角）"
+          },
+          "latitude_deg": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 90.0,
+                "minimum": -90.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latitude Deg",
+            "description": "发射场纬度（°）——inclination_deg 缺省时的自然倾角来源"
+          },
+          "c3_km2_s2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "C3 Km2 S2",
+            "description": "特征能量 C3（km²/s²）——TLI/TMI/escape 的 C3 覆写（缺省：TLI −1.65、TMI 11.5、escape 0，§8.6 表注口径）"
+          },
+          "window_assumption": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Assumption",
+            "description": "窗口/相位假设覆写（TMI；缺省用典型窗口文案——§8.10 约束 4 必填口径）"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "r_p_km"
+        ],
+        "title": "OrbitTransferRequest",
+        "description": "``POST /api/orbits/transfer`` 的请求体（§8.10 解析口径）。\n\n``r_a_km``（Hohmann / 圆化 / 复合机动的外半径）与 ``target``（GEO / TLI /\nTMI / escape 定型目标）**恰给其一**；``r_p_km`` 是停泊轨道地心半径。"
+      },
+      "OrbitTransferResponse": {
+        "properties": {
+          "r_p_km": {
+            "type": "number",
+            "title": "R P Km",
+            "description": "停泊轨道地心半径（km，回显）"
+          },
+          "r_a_km": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "R A Km",
+            "description": "目标轨道地心半径（km；定型目标换算给出）"
+          },
+          "mu_m3_s2": {
+            "type": "number",
+            "title": "Mu M3 S2",
+            "description": "所用地心引力常数（m³/s²，WGS-84 GM——约束 3 标注）"
+          },
+          "parking_velocity_km_s": {
+            "type": "number",
+            "title": "Parking Velocity Km S",
+            "description": "停泊圆轨道速度 √(μ/r_p)（km/s）"
+          },
+          "hohmann": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HohmannOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Hohmann 两脉冲（r_a 路径时给出）"
+          },
+          "circularization_km_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Circularization Km S",
+            "description": "远地点圆化单脉冲（km/s，r_a 路径时给出）"
+          },
+          "plane_change_km_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plane Change Km S",
+            "description": "单独平面变更脉冲（km/s，远地点圆轨道速度口径——复合时勿单独相加）"
+          },
+          "composite": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompositeOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "远地点复合机动（圆化+平面变更矢量合成；inclination 缺省且 r_a 路径时给出）"
+          },
+          "injection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InjectionOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "转移射入（TLI/TMI/escape；C3 与 ΔV 成对，TMI 带窗口假设）"
+          },
+          "assumptions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Assumptions",
+            "description": "模型假设与常量标注（理想脉冲声明 + μ / r_p / r_a 口径，§8.10 约束 1/3）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "r_p_km",
+          "r_a_km",
+          "mu_m3_s2",
+          "parking_velocity_km_s",
+          "hohmann",
+          "circularization_km_s",
+          "plane_change_km_s",
+          "composite",
+          "injection",
+          "assumptions"
+        ],
+        "title": "OrbitTransferResponse",
+        "description": "§8.10 全项解析响应（μ / r_p 随行标注——约束 3；理想脉冲声明在 assumptions）。"
       },
       "ParabolaSegment": {
         "properties": {
@@ -3647,6 +4225,16 @@
             "title": "Mc",
             "description": "是否自动投递 MC 区间作业（OI-25 阶段②）：true（默认）→ 响应带 interval_pending=true 与 mc_job_id；false → 不投递、无区间作业",
             "default": true
+          },
+          "dv_supply": {
+            "type": "string",
+            "enum": [
+              "anchored",
+              "l2"
+            ],
+            "title": "Dv Supply",
+            "description": "ΔV 需求供给模式（§8.6，M6 收官片）：anchored（默认）= 锚定表 + 长燃时修正（毫秒级，缓存键与历史一致）；l2 = orbits 精算 ideal + L2 弹道积分四项损失（损失一阶冻结）− 自转加成（含一次 ~0.1 s 积分，物理升级路径）；Mission.loss_factors 用户覆写在两模式下都优先",
+            "default": "anchored"
           }
         },
         "additionalProperties": false,
@@ -3715,6 +4303,48 @@
         "title": "PerfEvaluateResponse",
         "description": "点值评估响应体（阶段①：点值 + MC 作业挂点）。"
       },
+      "PerfTrajectoryRequest": {
+        "properties": {
+          "vehicle": {
+            "$ref": "#/components/schemas/Vehicle",
+            "description": "飞行器参数（§6.1 全量；Mission.launch_site 提供发射场，Vehicle.aero 提供 Cd / 参考面积——缺失按工程惯例缺省并附 warning）"
+          },
+          "program": {
+            "$ref": "#/components/schemas/TrajectoryProgram",
+            "description": "重力转弯程序参数（§8.6 L2 可调自由度；缺省 = 工程惯例剖面：垂直段 8 s → 指数标高 40 km 收敛到 0°）"
+          },
+          "dt_s": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.01,
+            "title": "Dt S",
+            "description": "RK4 固定步长 [s]（§8.6「0.1 s 级」；可配 0.01–1.0）",
+            "default": 0.1
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "vehicle"
+        ],
+        "title": "PerfTrajectoryRequest",
+        "description": "``POST /api/perf/trajectory`` 的请求体（§8.6 L2 + 程序参数覆盖）。"
+      },
+      "PerfTrajectoryResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id",
+            "description": "弹道积分作业 id：GET /api/jobs/{id} 轮询或 /ws/jobs/{id} 订阅；成功后 metrics = 弹道结果（losses_km_s 四项分解 / burnout 燃尽状态 / stage_timeline / provenance）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id"
+        ],
+        "title": "PerfTrajectoryResponse",
+        "description": "``POST /api/perf/trajectory`` 的响应体（异步受理回执，形态随 ``/api/uncertainty/mc``）。"
+      },
       "PointEvaluation": {
         "properties": {
           "payload_by_orbit": {
@@ -3723,7 +4353,7 @@
             },
             "type": "object",
             "title": "Payload By Orbit",
-            "description": "各轨道点值运力表（OI-38：LEO / SSO / GTO / GEO 直送四目标）"
+            "description": "各轨道点值运力表（OI-38 + §8.10：LEO / SSO / GTO / GEO 直送 + TLI / TMI / GEO（GTO+圆化，键 GEO_GTO_CIRC）七目标；TLI/TMI 行带 c3_km2_s2，TMI 行带 window_assumption）"
           },
           "payload_mass_kg": {
             "type": "number",
@@ -3745,7 +4375,7 @@
               }
             ],
             "title": "C3 Km2 S2",
-            "description": "终态轨道特征能量 C3 = v∞²（km²/s²，束缚轨道为负）——TLI / TMI / 逃逸轨道必输出（OI-23），本片四目标均为束缚轨道"
+            "description": "终态轨道特征能量 C3 = v∞²（km²/s²，束缚轨道为负）——TLI / TMI / 逃逸轨道必输出（OI-23）；TMI 取典型值 11.5（§8.10 约束 4，窗口假设见运力表 TMI 行）"
           }
         },
         "type": "object",
@@ -6048,6 +6678,65 @@
         ],
         "title": "ThrustPoint",
         "description": "推力曲线上的一个点（已统一为 SI 单位）。"
+      },
+      "TrajectoryProgram": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "linear",
+              "exponential"
+            ],
+            "title": "Mode",
+            "description": "程序转弯模式：exponential = γ 随高度指数收敛（工程惯例缺省）；linear = 线性收敛",
+            "default": "exponential"
+          },
+          "vertical_rise_s": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Vertical Rise S",
+            "description": "垂直上升段时长 [s]（工程惯例 5–10 s；此段内弹道倾角恒 90°）",
+            "default": 8.0
+          },
+          "scale_height_m": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Scale Height M",
+            "description": "exponential 模式的程序标高 [m]：γ_cmd = γ_f + (90°−γ_f)·exp(−h/H)。缺省 40 km 服务常规两级构型；低 TWR 上面级的重型构型（如 S-IVB 级TWR<0.5）需加大标高放缓末段拉平，否则燃前触地（报错提示）",
+            "default": 40000.0
+          },
+          "pitch_rate_deg_per_km": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Pitch Rate Deg Per Km",
+            "description": "linear 模式的收敛斜率 [°/km]：γ_cmd = max(γ_f, 90° − k·h)",
+            "default": 0.5
+          },
+          "final_pitch_deg": {
+            "type": "number",
+            "title": "Final Pitch Deg",
+            "description": "目标弹道倾角 [°]（相对当地水平面；入轨剖面取 ~0°）",
+            "default": 0.0
+          },
+          "alpha_atmo_max_deg": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Alpha Atmo Max Deg",
+            "description": "逆动力学攻角饱和界——稠密段档 [°]（max-q 前后的气动载荷限制；工程惯例缺省 10°，§13.2 标定自由度）",
+            "default": 10.0
+          },
+          "alpha_vac_max_deg": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Alpha Vac Max Deg",
+            "description": "逆动力学攻角饱和界——真空段档 [°]（轨迹整形上限；工程惯例缺省 30°，§13.2 标定自由度）",
+            "default": 30.0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "TrajectoryProgram",
+        "description": "重力转弯程序参数（§8.6 L2 的可调自由度；缺省为工程惯例值、非权威来源）。\n\n程序量是**弹道倾角剖面 γ_cmd(h)**（§8.6 任务口径「γ 随高度线性/指数收敛到\n目标倾角」的字面实现，见模块 docstring「控制」节）：垂直段内恒 90°，其后随\n高度按模式收敛到 ``final_pitch_deg``；推力攻角 α 由逆动力学自满足以跟踪剖面\n（推力不足以跟踪时 α 饱和于 ±90°，γ 滞后于剖面——不虚构不存在的控制力）。"
       },
       "UnitsResponse": {
         "properties": {

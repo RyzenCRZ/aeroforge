@@ -1,4 +1,4 @@
-"""各轨道点值运力（OI-38 / §8.6 / §8.8，M4 计算内核第三片）。
+"""各轨道点值运力（OI-38 / §8.6 / §8.8 / §8.10，M4 第三片 + M6 轨道层第一片）。
 
 问题与算法（运力反推 = 定尺的逆问题）
 ------------------------------------
@@ -34,12 +34,28 @@ bisect ：中点求值 → 按 ΣΔV(mid) 与 dv_req 的大小关系收缩区间
 - 用户覆写：``Mission.loss_factors`` 给出（非 None）时，四项损失按用户份额
   （× 理想 ΔV）计，需求 = ``理想 ΔV + Σ损失 − 自转加成``（与 ΔV 瀑布同口径，
   §8.8），``dv_source`` 标「Mission 用户输入」。
+
+七目标运力表（M6 轨道层第一片，§8.10 / OI-22）
+----------------------------------------------
+锚定四目标（LEO / SSO / GTO / GEO 直送，OI-38）之外新增三行**复合需求**：
+**TLI / TMI / GEO（GTO+圆化，键 ``GEO_GTO_CIRC``）**——需求 = 锚定上升段（LEO
+行口径，含损失与纬度依赖）+ 停泊轨道上的解析机动（:mod:`aeroforge.perf.orbits`
+闭式：TLI/TMI 单脉冲射入、GTO 近地点点火 + 远地点圆化/平面变更矢量合成）。
+TLI / TMI 行带 ``c3_km2_s2``（§8.10 约束 1：禁止只给 ΔV），TMI 行另带必填的
+``window_assumption``（约束 4：无窗口假设的 TMI 结果视为不可复现）。
+
+运力—纬度曲线（OI-23，M6 验收判据）
+------------------------------------
+:func:`payload_latitude_curve`：给定构型与目标轨道，纬度 0–90° 均匀采样逐点
+反推运力（复用同一质量账与二分链，不另写第二套）；§16 M6 判据要求曲线对纬度
+**单调不增**（FR-19 同型，测试显式断言）。
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -50,12 +66,25 @@ from aeroforge.params.schema import LaunchSite, Vehicle
 from aeroforge.perf import mass as mass_module
 from aeroforge.perf.losses import (
     CAPACITY_ORBITS,
+    DEFAULT_LAUNCH_SITE,
+    DEFAULT_LEO_ALT_M,
+    DEFAULT_SSO_ALT_M,
+    EARTH_EQUATOR_RADIUS_M,
     ideal_orbit_dv_km_s,
     long_burn_surcharge_km_s,
     orbit_dv_requirement,
     rotation_assist_km_s,
 )
+from aeroforge.perf.orbits import (
+    GEO_RADIUS_M,
+    PARKING_DEFAULT_ALT_M,
+    circular_velocity_km_s,
+    geo_via_gto_km_s,
+    hohmann_transfer_km_s,
+    parking_injection_km_s,
+)
 from aeroforge.perf.solver import _booster_ledger, _stage_inputs
+from aeroforge.perf.trajectory import TrajectoryLosses, TrajectoryProgram, integrate_ascent
 
 #: 二分迭代上限（200 次的收缩因子 2⁻²⁰⁰ 远超双精度，实际 ~60 次收敛）。
 BISECT_MAX_ITERATIONS = 200
@@ -66,6 +95,29 @@ PAYLOAD_TOLERANCE_KG = 1e-9
 #: bracket 扩张的上限 [kg]（防病态输入下无限扩张；正常解远小于该值）。
 _PAYLOAD_BRACKET_CAP_KG = 1e15
 
+#: ΔV 需求供给模式（M6 收官片，§8.6 L2 接链）：
+#: - ``anchored``（缺省）——锚定表 + 长燃时修正（M4 口径，缓存键与数字字节稳定）；
+#: - ``l2``——orbits 精算理想 ΔV + L2 弹道积分四项损失 − 自转加成（物理升级路径）。
+DvSupplyMode = Literal["anchored", "l2"]
+
+#: L2 供给模式的标定程序参数（§13.2 三基准反标定，M6 收官片；标定记录见 §16.7）：
+#: **单一自由度偏离工程惯例缺省**——指数标高 40 → 65 km；其余取工程惯例值
+#: （垂直段 8 s、α 双饱和界 10°/30°）。标定过程（7 组候选参数的三基准扫描）：
+#: H=40k 缺省下 CZ-5 / SV 积分触地发散（程序-构型失配）；H ∈ [55,80] 全部可积，
+#: 其中 **H=65k 使 F9 −6.8% 与 SV −9.2% 同时带内 <10%**；CZ-5 在全部候选下
+#: +19%~+83%（模板能力偏置，根因见 §16.7——非程序参数可消除）。物理依据：标高
+#: 是 γ 剖面的转弯节奏——65 km 对应「上面积累速度前先爬升到稠密大气上界」的
+#: 常规剖面，也匹配 SV 低 TWR 上面级（S-IVB TWR≈0.41）的跟踪能力边界。
+L2_CALIBRATED_PROGRAM = TrajectoryProgram(scale_height_m=65_000.0)
+
+#: 运力表全目标（M6 轨道层第一片扩至七行）：锚定四目标 + 复合三行。
+#: ⚠ 时序链（perf.sequence）的单目标需求仍只走锚定四目标（CAPACITY_ORBITS）——
+#: 复合行的「上升段 + 解析机动」拼合不进时序账，避免两处各拼一份。
+PAYLOAD_ORBITS: tuple[str, ...] = (*CAPACITY_ORBITS, "TLI", "TMI", "GEO_GTO_CIRC")
+
+#: GEO（GTO+圆化）行的表键（GEO 经 GTO + 远地点圆化/平面变更复合，§8.10）。
+GEO_GTO_CIRC_ORBIT = "GEO_GTO_CIRC"
+
 
 class OrbitPayload(BaseModel):
     """运力表中一个目标轨道的点值（OI-38 / §8.8 ``payload_by_orbit`` 行）。"""
@@ -73,12 +125,49 @@ class OrbitPayload(BaseModel):
     payload_kg: float = Field(description="该目标轨道的反推载荷点值（kg）")
     dv_used_km_s: float = Field(description="反推所用 ΔV 需求（km/s，含损失与纬度依赖）")
     dv_source: str = Field(
-        description="需求来源：量级锚定（§8.6 表中值）/ Mission 用户输入（loss_factors）"
+        description=(
+            "需求来源：量级锚定（§8.6 表中值）/ Mission 用户输入（loss_factors）"
+            "；复合行（TLI/TMI/GEO_GTO_CIRC）= 上升段锚定 + §8.10 轨道解析拼合"
+        )
     )
     attainable: bool = Field(
         default=True,
         description="构型可达该目标与否；False 时需求超出零载荷可达上限、运力记 0",
     )
+    c3_km2_s2: float | None = Field(
+        default=None,
+        description=(
+            "特征能量 C3 = v∞²（km²/s²，OI-22：TLI 为负、TMI 典型 8–15）——"
+            "TLI / TMI 行必填（§8.10 约束 1：禁止只给 ΔV），其余行为 null"
+        ),
+    )
+    window_assumption: str | None = Field(
+        default=None,
+        description=(
+            "窗口/相位假设（§8.10 约束 4）：TMI 行必填（无窗口假设的 TMI 结果视为"
+            "不可复现，CON-04 同口径），其余行为 null"
+        ),
+    )
+
+
+class PayloadLatitudePoint(BaseModel):
+    """运力—纬度曲线上的一个采样点（OI-23 / §8.8 ``payload_latitude_curve``）。"""
+
+    lat_deg: float = Field(description="发射场纬度（°，0–90）")
+    payload_kg: float = Field(description="该纬度下的反推运力（kg；不可达记 0）")
+    attainable: bool = Field(default=True, description="该纬度下目标是否可达")
+
+
+class PayloadLatitudeCurve(BaseModel):
+    """运力—纬度曲线（OI-23）：固定其余参数，纬度采样 × 逐点运力反推。
+
+    M6 验收判据（§16）：曲线对纬度**单调不增**——由测试显式断言（LEO / SSO 各一）。
+    """
+
+    payload_key: str = Field(description="运力量键（§8.8 形态：payload_<orbit>_kg）")
+    orbit: str = Field(description="目标轨道（PAYLOAD_ORBITS 之一）")
+    points: tuple[PayloadLatitudePoint, ...] = Field(description="纬度采样点（0–90° 均匀）")
+    assumption: str = Field(description="采样口径与单调性判据说明")
 
 
 @dataclass(frozen=True, slots=True)
@@ -339,50 +428,405 @@ def anchored_dv_km_s(
     return requirement.value_km_s + surcharge.value_km_s, source, surcharge.assumption
 
 
-def payload_by_orbit(vehicle: Vehicle, site: LaunchSite) -> dict[str, OrbitPayload]:
-    """各轨道点值运力表（OI-38）：LEO / SSO / GTO / GEO（直送）四目标各反推一次。
+def _ascent_requirement_km_s(
+    vehicle: Vehicle, site: LaunchSite, ledger: FixedVehicleLedger
+) -> tuple[float, str]:
+    """上升段需求（LEO 行口径）：用户覆写 / 锚定 + 长燃时修正——复合行的公共底座。"""
+    if vehicle.mission.loss_factors is not None:
+        return _user_dv_requirement_km_s(vehicle, site, "LEO")
+    dv_used, source, _ = anchored_dv_km_s(vehicle, ledger, "LEO", site)
+    return dv_used, source
 
-    每项带所用 ΔV 需求值与来源（量级锚定 / 量级锚定 + 长燃时构型修正 /
-    Mission 用户输入，§8.8）；构型对某目标不可达时该项 ``payload_kg=0``、
-    ``attainable=False``（表保持四行齐备，由调用方按 attainable 汇总 warning，
-    不在表内丢行）。
+
+# ---------------------------------------------------------------------------
+# L2 供给模式（M6 收官片，§8.6 L2 接链）：orbits 精算 ideal + L2 损失 − 自转加成
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class L2SupplyState:
+    """L2 供给模式的**一次冻结态**：损失四项 + 标定程序 + 参考载荷。
+
+    损失一阶冻结（§13.2 标定纪律 / 任务口径）：L2 单发积分 ~0.1 s，而载荷二分
+    ~60 次求值——**每次迭代重跑积分不可接受**。故先按参考载荷跑**一次**积分取
+    四项损失，全表七行共用；二分内损失为常量（需求仍是常数，标准二分不变）。
+
+    参考载荷取**锚定模式 LEO 行运力**——它是全表七行的载荷量级中心（LEO 最大、
+    GEO 最小，取 LEO 锚最接近"上升段主导"的解），比用户输入载荷更靠近各行的
+    真解。一阶误差量级：载荷差 ΔP 通过 GLOW 改变重力损失 ~O(ΔP/GLOW)（F9 极端
+    情形 LEO vs GEO 差 22 t / 549 t ≈ 4%，重力损失响应 ~2%≈0.03 km/s ⟹ 载荷
+    误差 <1%——敏感性实测见 test_capacity_dual_supply 注释）。
     """
-    table: dict[str, OrbitPayload] = {}
-    user_override = vehicle.mission.loss_factors is not None
-    ledger = vehicle_ledger(vehicle)
-    for orbit in CAPACITY_ORBITS:
-        if user_override:
+
+    losses_km_s: TrajectoryLosses
+    program: TrajectoryProgram
+    reference_payload_kg: float
+    warnings: tuple[str, ...]
+
+    @property
+    def total_km_s(self) -> float:
+        return self.losses_km_s.total_km_s
+
+
+def l2_reference_losses_km_s(
+    vehicle: Vehicle,
+    ledger: FixedVehicleLedger,
+    site: LaunchSite,
+    *,
+    program: TrajectoryProgram = L2_CALIBRATED_PROGRAM,
+) -> L2SupplyState:
+    """L2 供给的冻结态：按锚定 LEO 参考载荷跑一次弹道积分（§8.6 L2）。
+
+    - 参考载荷 = 锚定模式 LEO 行运力（不可达时退回用户输入载荷并告警）；
+    - 积分失败的诚实口径：PerfError 原样上抛（L2 是显式选用的模式——程序-构型
+      失配是真实物理事实，静默回落锚定表会伪装成"算出来了"）；
+    - 程序参数缺省用 :data:`L2_CALIBRATED_PROGRAM`（§13.2 三基准反标定一套参数
+      服务全部构型——禁止逐构型调参，SV 的标高需求统一进参数空间处理）。
+    """
+    try:
+        # 参考载荷 = 锚定模式 LEO 行运力（**含长燃时修正的完整 anchored 需求**——
+        # 缺口修正：裸表值会让长燃时构型的参考载荷偏大 ~65%，冻结点偏离七行真解）
+        anchored_req, _, _ = anchored_dv_km_s(vehicle, ledger, "LEO", site)
+        reference_payload = payload_for_dv_on_ledger(
+            ledger,
+            anchored_req,
+            bracket_hint_kg=vehicle.payload_mass_kg,
+        )
+    except PerfError:
+        reference_payload = vehicle.payload_mass_kg
+    probe = vehicle.model_copy(update={"payload_mass_kg": reference_payload})
+    result = integrate_ascent(probe, program)
+    return L2SupplyState(
+        losses_km_s=result.losses_km_s,
+        program=program,
+        reference_payload_kg=reference_payload,
+        warnings=tuple(result.warnings),
+    )
+
+
+def _l2_ideal_km_s(vehicle: Vehicle, site: LaunchSite, orbit: str) -> tuple[float, str]:
+    """L2 模式的理想 ΔV [km/s]（§8.10 orbits 精算；返回 (ideal, 来源注)）。
+
+    - LEO / SSO：停泊（圆）轨道速度 ``√(μ/r)``——高度取 Mission 显式值，缺省按
+      :data:`DEFAULT_LEO_ALT_M` / :data:`DEFAULT_SSO_ALT_M`（与锚定链同一份工程
+      惯例剖面）；倾角差（SSO 的 dogleg / 方位角惩罚）不在 2D 面内模型内——它经
+      自转加成的方位角投影进入（南向发射加成为负），来源注如实声明；
+    - GTO：停泊圆速度 + Hohmann 第一脉冲（= 转移椭圆近地点速度，与锚定链
+      ``ideal_orbit_dv_km_s`` 同值，此处自 perf.orbits 精算取得——单一公式族）；
+    - GEO（直送）：停泊圆速度 + :func:`geo_via_gto_km_s` 全路线（近地点点火 +
+      远地点圆化/平面变更**矢量合成**，Δi = Mission.inclination_deg 或发射场
+      纬度——比锚定链的理想多出平面变更精算，§8.10 约束 2）。
+    """
+    mission = vehicle.mission
+    if orbit == "LEO":
+        radius = EARTH_EQUATOR_RADIUS_M + (mission.altitude_m or DEFAULT_LEO_ALT_M)
+        return circular_velocity_km_s(radius), (
+            f"停泊圆轨道速度 √(μ/r)，r = R+{radius - EARTH_EQUATOR_RADIUS_M:.0f} m"
+            "（perf.orbits 精算，§8.10；倾角差经自转加成方位角投影进入，2D 面内模型不含 dogleg）"
+        )
+    if orbit == "SSO":
+        radius = EARTH_EQUATOR_RADIUS_M + (mission.altitude_m or DEFAULT_SSO_ALT_M)
+        return circular_velocity_km_s(radius), (
+            f"停泊圆轨道速度 √(μ/r)，r = R+{radius - EARTH_EQUATOR_RADIUS_M:.0f} m"
+            "（perf.orbits 精算，§8.10；SSO 倾角差经自转加成方位角投影进入）"
+        )
+    r_p_m = _parking_radius_m(vehicle)
+    if orbit == "GTO":
+        kick = hohmann_transfer_km_s(r_p_m, GEO_RADIUS_M)
+        ideal = circular_velocity_km_s(r_p_m) + kick.dv1_km_s
+        return ideal, (
+            "停泊圆速度 + Hohmann 近地点点火（= GTO 转移椭圆近地点速度；"
+            f"perf.orbits 精算，§8.10，r_p={r_p_m:.0f} m）"
+        )
+    if orbit == "GEO":
+        inclination = (
+            mission.inclination_deg if mission.inclination_deg is not None else site.latitude_deg
+        )
+        geo = geo_via_gto_km_s(r_p_m, inclination)
+        return circular_velocity_km_s(r_p_m) + geo.total_km_s, (
+            "停泊圆速度 + GEO（GTO+远地点圆化/平面变更矢量合成）全路线"
+            f"（perf.orbits 精算，§8.10，Δi={inclination:.2f}°）"
+        )
+    raise PerfError(  # pragma: no cover - 调用方已按目标分派
+        f"轨道 {orbit!r} 无 L2 精算理想 ΔV 口径",
+        suggestion="四锚定目标走 _l2_ideal_km_s；复合行走上升段底座 + 解析机动",
+    )
+
+
+def l2_dv_km_s(
+    vehicle: Vehicle,
+    site: LaunchSite,
+    orbit: str,
+    state: L2SupplyState,
+) -> tuple[float, str]:
+    """L2 供给的需求组装 [km/s]：``(ideal_orbits + ΣL2损失 − 自转加成, source)``。
+
+    - 四锚定目标：ideal（:func:`_l2_ideal_km_s`）+ 冻结的四项损失 − 自转加成
+      （**与 L1 同口径复用** :func:`rotation_assist_km_s`——含相容因子，任务口径）；
+    - 复合行（TLI / TMI / GEO_GTO_CIRC）：上升段底座 = L2 的 LEO 行需求（同一
+      冻结态），停泊轨道外机动沿用 §8.10 解析闭式——**射入段脉冲保持理想脉冲
+      口径**（orbits 模块 assumption 已声明"不含有限推力损失"；L2 上升段损失只
+      覆盖上升段，射入段的有限推力小量按惯例并入理想脉冲口径、不重复建模）；
+    - **长燃时修正在 L2 模式自然消失**：L2 积分按质量账推进真实燃时（CZ-5 芯级
+      319 s 的长燃累积直接体现在重力损失里），``long_burn_surcharge`` 的 k_g
+      标定自由度不再需要——由测试钉住（l2 模式 dv_source 不含长燃时文案）。
+    """
+    loss_total = state.total_km_s
+    assist = rotation_assist_km_s(
+        site.latitude_deg, site.altitude_m, site.azimuth_deg, vehicle.mission.inclination_deg
+    )
+    loss_note = (
+        f"L2 弹道积分四项损失 {loss_total:.2f} km/s（gravity/aero/steering/back_pressure，"
+        f"§8.6 L2；程序=垂直段 {state.program.vertical_rise_s:.0f} s + 标高 "
+        f"{state.program.scale_height_m / 1000:.0f} km，§13.2 三基准反标定）；"
+    )
+    if orbit in ("TLI", "TMI", GEO_GTO_CIRC_ORBIT):
+        ascent_ideal, ascent_note = _l2_ideal_km_s(vehicle, site, "LEO")
+        ascent_dv = ascent_ideal + loss_total - assist
+        return ascent_dv, (
+            f"上升段（L2 口径）：{loss_note}ideal={ascent_note}"
+            f" − 自转加成 {assist:.2f}（L1 口径含相容因子）+ §8.10 轨道解析"
+            "（射入/圆化脉冲为理想脉冲口径，L2 损失只覆盖上升段）"
+        )
+    ideal, ideal_note = _l2_ideal_km_s(vehicle, site, orbit)
+    total = ideal + loss_total - assist
+    return total, (
+        f"orbits 精算理想 ΔV（{ideal_note}）+ {loss_note}"
+        f"− 自转加成 {assist:.2f} km/s（L1 口径含相容因子，§8.6）"
+    )
+
+
+def _parking_radius_m(vehicle: Vehicle) -> float:
+    """停泊轨道半径 [m]（§8.10 约束 3 的 r_p 标注口径）：近地点优先，缺省 200 km。"""
+    perigee = vehicle.mission.perigee_altitude_m or PARKING_DEFAULT_ALT_M
+    return EARTH_EQUATOR_RADIUS_M + perigee
+
+
+def _in_space_addition_km_s(
+    vehicle: Vehicle, site: LaunchSite, orbit: str
+) -> tuple[float, float | None, str | None]:
+    """复合行（TLI / TMI / GEO_GTO_CIRC）的停泊轨道外解析需求（§8.10 闭式）。
+
+    返回 ``(dv_km_s, c3_km2_s2, window_assumption)``——TLI / TMI 行的 C3 必输出
+    （约束 1），TMI 的窗口假设必填（约束 4）；GEO_GTO_CIRC 行的平面变更与圆化
+    走矢量合成（约束 2），转角取 Mission.inclination_deg（缺省 = 发射场纬度，
+    向东发射的自然倾角口径）。
+    """
+    r_p_m = _parking_radius_m(vehicle)
+    if orbit == "TLI":
+        injection = parking_injection_km_s("TLI", r_p_m)
+        return injection.dv_km_s, injection.c3_km2_s2, None
+    if orbit == "TMI":
+        injection = parking_injection_km_s("TMI", r_p_m)
+        return injection.dv_km_s, injection.c3_km2_s2, injection.window_assumption
+    if orbit == GEO_GTO_CIRC_ORBIT:
+        inclination = (
+            vehicle.mission.inclination_deg
+            if vehicle.mission.inclination_deg is not None
+            else site.latitude_deg
+        )
+        geo = geo_via_gto_km_s(r_p_m, inclination)
+        return geo.total_km_s, None, None
+    raise PerfError(  # pragma: no cover - 调用方已按 PAYLOAD_ORBITS 分派
+        f"轨道 {orbit!r} 不是复合目标（TLI/TMI/GEO_GTO_CIRC）",
+        suggestion="锚定目标走 orbit_dv_requirement（§8.6 表）",
+    )
+
+
+_IN_SPACE_SOURCE_TAG: dict[str, str] = {
+    "TLI": "§8.10 轨道解析（TLI 单脉冲射入，C3 成对输出——地心束缚 C3<0）",
+    "TMI": ("§8.10 轨道解析（TMI 单脉冲射入，C3 成对输出且窗口/相位假设必填——§8.10 约束 4）"),
+    "GEO_GTO_CIRC": (
+        "§8.10 轨道解析（GTO 近地点点火 + 远地点圆化/平面变更矢量合成"
+        "——标量相加被禁止，§8.10 约束 2）"
+    ),
+}
+
+
+def payload_for_orbit(
+    vehicle: Vehicle,
+    site: LaunchSite,
+    orbit: str,
+    *,
+    ledger: FixedVehicleLedger | None = None,
+    dv_supply: DvSupplyMode = "anchored",
+    l2_state: L2SupplyState | None = None,
+) -> OrbitPayload:
+    """单个目标轨道的运力反推（OI-38 / §8.10）：payload_by_orbit 的单行本体。
+
+    - 锚定四目标（CAPACITY_ORBITS）：需求 = 锚定表 / 用户覆写（M4 口径）/
+      **L2 供给**（M6 收官片：orbits 精算 ideal + L2 冻结损失 − 自转加成）；
+    - 复合三行（TLI / TMI / GEO_GTO_CIRC）：需求 = **上升段底座（随 dv_supply
+      切换：anchored = LEO 行锚定口径；l2 = LEO 行 L2 口径）** +
+      :mod:`aeroforge.perf.orbits` 解析机动——``dv_source`` 记录两段拼合口径；
+      TLI / TMI 行带 ``c3_km2_s2``，TMI 行带 ``window_assumption``（§8.10）；
+    - 不可达：``payload_kg=0``、``attainable=False``（行齐备不丢行）。
+
+    ``ledger`` 复用已构建质量账（纬度曲线 / 运力表 / MC 多次反推不重算几何账）；
+    ``l2_state`` 复用已构建的 L2 冻结态（一次积分服务全表，缺省按需构建）。
+    ``Mission.loss_factors`` 用户覆写在两种供给模式下都优先（最显式的用户输入）。
+    """
+    led = ledger if ledger is not None else vehicle_ledger(vehicle)
+    c3: float | None = None
+    window: str | None = None
+    if orbit in CAPACITY_ORBITS:
+        if vehicle.mission.loss_factors is not None:
             dv_used, source = _user_dv_requirement_km_s(vehicle, site, orbit)
-        else:
-            dv_used, source, _ = anchored_dv_km_s(vehicle, ledger, orbit, site)
-        try:
-            payload = payload_for_dv_on_ledger(
-                ledger, dv_used, bracket_hint_kg=vehicle.payload_mass_kg
+        elif dv_supply == "l2":
+            state = (
+                l2_state if l2_state is not None else l2_reference_losses_km_s(vehicle, led, site)
             )
-        except PerfError:
-            table[orbit] = OrbitPayload(
-                payload_kg=0.0,
-                dv_used_km_s=dv_used,
-                dv_source=source,
-                attainable=False,
-            )
+            dv_used, source = l2_dv_km_s(vehicle, site, orbit, state)
         else:
-            table[orbit] = OrbitPayload(payload_kg=payload, dv_used_km_s=dv_used, dv_source=source)
-    return table
+            dv_used, source, _ = anchored_dv_km_s(vehicle, led, orbit, site)
+    elif orbit in ("TLI", "TMI", GEO_GTO_CIRC_ORBIT):
+        if dv_supply == "l2" and vehicle.mission.loss_factors is None:
+            state = (
+                l2_state if l2_state is not None else l2_reference_losses_km_s(vehicle, led, site)
+            )
+            ascent_dv, ascent_source = l2_dv_km_s(vehicle, site, orbit, state)
+        else:
+            ascent_dv, ascent_source = _ascent_requirement_km_s(vehicle, site, led)
+            ascent_source = f"上升段（LEO 行口径）：{ascent_source}"
+        add_dv, c3, window = _in_space_addition_km_s(vehicle, site, orbit)
+        dv_used = ascent_dv + add_dv
+        source = f"{ascent_source} + {_IN_SPACE_SOURCE_TAG[orbit]}"
+    else:
+        raise PerfError(
+            f"轨道 {orbit!r} 不在运力表目标内（PAYLOAD_ORBITS = {PAYLOAD_ORBITS}）",
+            suggestion="表键取 LEO/SSO/GTO/GEO/TLI/TMI/GEO_GTO_CIRC；escape/custom 走 "
+            "POST /api/orbits/transfer 做单点解析",
+        )
+    try:
+        payload = payload_for_dv_on_ledger(led, dv_used, bracket_hint_kg=vehicle.payload_mass_kg)
+    except PerfError:
+        return OrbitPayload(
+            payload_kg=0.0,
+            dv_used_km_s=dv_used,
+            dv_source=source,
+            attainable=False,
+            c3_km2_s2=c3,
+            window_assumption=window,
+        )
+    return OrbitPayload(
+        payload_kg=payload,
+        dv_used_km_s=dv_used,
+        dv_source=source,
+        c3_km2_s2=c3,
+        window_assumption=window,
+    )
+
+
+def payload_by_orbit(
+    vehicle: Vehicle,
+    site: LaunchSite,
+    *,
+    dv_supply: DvSupplyMode = "anchored",
+) -> dict[str, OrbitPayload]:
+    """各轨道点值运力表（OI-38 + §8.10）：七目标各反推一次（M6 轨道层扩行）。
+
+    锚定四目标（LEO / SSO / GTO / GEO 直送）+ 复合三行（TLI / TMI /
+    GEO（GTO+圆化））。每项带所用 ΔV 需求值与来源（量级锚定 / 量级锚定 +
+    长燃时构型修正 / Mission 用户输入 / L2 弹道积分 / 复合拼合，§8.8）；构型对
+    某目标不可达时该项 ``payload_kg=0``、``attainable=False``（表保持七行齐备，
+    由调用方按 attainable 汇总 warning，不在表内丢行）。
+
+    ``dv_supply="l2"`` 时先建**一次** L2 冻结态（单发积分 ~0.1 s，锚定 LEO 参考
+    载荷），七行共用——每次迭代重跑积分不可接受（损失一阶冻结，§16.7）。
+    """
+    ledger = vehicle_ledger(vehicle)
+    l2_state: L2SupplyState | None = None
+    if dv_supply == "l2" and vehicle.mission.loss_factors is None:
+        l2_state = l2_reference_losses_km_s(vehicle, ledger, site)
+    return {
+        orbit: payload_for_orbit(
+            vehicle, site, orbit, ledger=ledger, dv_supply=dv_supply, l2_state=l2_state
+        )
+        for orbit in PAYLOAD_ORBITS
+    }
+
+
+#: 纬度曲线缺省采样点数（0–90° 均匀 11 点：步距 9°，OI-23 口径的工程惯例采样）。
+LATITUDE_CURVE_DEFAULT_POINTS = 11
+
+
+def latitude_samples(n_points: int = LATITUDE_CURVE_DEFAULT_POINTS) -> tuple[float, ...]:
+    """纬度采样序列（0–90° 均匀 n 点；n < 2 显式拒绝——单点不成曲线）。"""
+    if n_points < 2:
+        raise PerfError(
+            f"纬度曲线至少 2 个采样点，收到 {n_points}",
+            suggestion="缺省 11 点（0–90° 步距 9°，OI-23 工程惯例采样）",
+        )
+    return tuple(90.0 * i / (n_points - 1) for i in range(n_points))
+
+
+def payload_latitude_curve(
+    vehicle: Vehicle, orbit: str, *, n_points: int = LATITUDE_CURVE_DEFAULT_POINTS
+) -> PayloadLatitudeCurve:
+    """运力—纬度曲线（OI-23，M6 验收判据）：纬度 0–90° 采样逐点反推运力。
+
+    **固定其余参数**：只替换发射场纬度（方位角 / 倾角 / 构型全部保持），逐点
+    复用同一份质量账与二分链（不另写第二套齐氏账）。发射场缺失按默认场纬度
+    骨架取 0–90° 采样（§8.6 口径：纬度是自转加成与转向损失的唯一输入）。
+
+    §16 M6 判据：曲线对纬度**单调不增**——由测试对 LEO / SSO 各显式断言一次；
+    本函数如实给值，不内置单调性裁剪。
+    """
+    if orbit not in PAYLOAD_ORBITS:
+        raise PerfError(
+            f"轨道 {orbit!r} 不在运力表目标内（PAYLOAD_ORBITS = {PAYLOAD_ORBITS}）",
+            suggestion="曲线目标取 LEO/SSO/GTO/GEO/TLI/TMI/GEO_GTO_CIRC 之一",
+        )
+    ledger = vehicle_ledger(vehicle)
+    base_site = vehicle.mission.launch_site or DEFAULT_LAUNCH_SITE
+    points: list[PayloadLatitudePoint] = []
+    for lat in latitude_samples(n_points):
+        row = payload_for_orbit(
+            vehicle,
+            base_site.model_copy(update={"latitude_deg": lat}),
+            orbit,
+            ledger=ledger,
+        )
+        points.append(
+            PayloadLatitudePoint(lat_deg=lat, payload_kg=row.payload_kg, attainable=row.attainable)
+        )
+    return PayloadLatitudeCurve(
+        payload_key=f"payload_{orbit.lower()}_kg",
+        orbit=orbit,
+        points=tuple(points),
+        assumption=(
+            f"纬度 0–90° 均匀 {n_points} 点采样（其余参数固定：方位角/倾角/构型不变）；"
+            "逐点 = 同一质量账的载荷二分（复用 OI-38 链路不另算）；§16 M6 验收判据："
+            "曲线对纬度单调不增（FR-19 同型）"
+        ),
+    )
 
 
 __all__ = [
     "BISECT_MAX_ITERATIONS",
     "CAPACITY_ORBITS",
+    "GEO_GTO_CIRC_ORBIT",
+    "L2_CALIBRATED_PROGRAM",
+    "LATITUDE_CURVE_DEFAULT_POINTS",
+    "PAYLOAD_ORBITS",
     "PAYLOAD_TOLERANCE_KG",
+    "DvSupplyMode",
     "FixedVehicleLedger",
+    "L2SupplyState",
     "OrbitPayload",
+    "PayloadLatitudeCurve",
+    "PayloadLatitudePoint",
     "StageMasses",
     "ZeroStageMasses",
     "anchored_dv_km_s",
     "first_stage_burn_time_s",
+    "l2_dv_km_s",
+    "l2_reference_losses_km_s",
+    "latitude_samples",
     "payload_by_orbit",
     "payload_for_dv",
     "payload_for_dv_on_ledger",
+    "payload_for_orbit",
+    "payload_latitude_curve",
     "vehicle_ledger",
 ]

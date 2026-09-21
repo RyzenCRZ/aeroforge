@@ -176,12 +176,20 @@ def test_falcon9_reports_content_matches_evaluate(client: TestClient) -> None:
     assert params_payload["vehicle"]["name"] == "Falcon 9"
     assert params_payload["sourced_fields"], "模板命中时 sourced_fields 必须非空"
 
-    # perf_json：evaluate 点值输出原样（payload_by_orbit 四轨道 + glow 一致）
+    # perf_json：evaluate 点值输出原样（payload_by_orbit 七目标 + glow 一致）
     perf_response = client.get(f"/api/artifacts/{files['perf_json']['key']}/export.perf.json")
     assert perf_response.status_code == 200
     perf_payload = cast(dict[str, Any], json.loads(perf_response.text))
     point = cast(dict[str, Any], perf_payload["point"])
-    assert set(point["payload_by_orbit"]) == {"LEO", "SSO", "GTO", "GEO"}
+    assert set(point["payload_by_orbit"]) == {
+        "LEO",
+        "SSO",
+        "GTO",
+        "GEO",
+        "TLI",
+        "TMI",
+        "GEO_GTO_CIRC",
+    }
     assert point["glow_kg"] == pytest.approx(glow_evaluate, rel=1e-12)
 
 
@@ -331,7 +339,15 @@ def test_summary_matches_evaluate_and_sections(client: TestClient) -> None:
     assert summary["capacity"]["target_payload_kg"] == pytest.approx(
         table["LEO"]["payload_kg"], rel=1e-12
     )
-    assert set(summary["capacity"]["payload_by_orbit"]) == {"LEO", "SSO", "GTO", "GEO"}
+    assert set(summary["capacity"]["payload_by_orbit"]) == {
+        "LEO",
+        "SSO",
+        "GTO",
+        "GEO",
+        "TLI",
+        "TMI",
+        "GEO_GTO_CIRC",
+    }
 
 
 def test_summary_booster_envelope_includes_boosters(client: TestClient) -> None:

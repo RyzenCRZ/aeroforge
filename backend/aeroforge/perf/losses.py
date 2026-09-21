@@ -104,12 +104,18 @@ DEFAULT_LAUNCH_SITE = LaunchSite(
 _LOW_LAT_ANCHOR_DEG = 5.2
 _HIGH_LAT_ANCHOR_DEG = 28.5
 
-#: 四目标锚定值 (低纬, 高纬) [km/s]。GTO 两档直取表中值；LEO 高纬行、SSO 低纬行、
+#: 四目标锚定值 (低纬, 高纬) [km/s]。GTO 两档直取表中值；LEO 高纬行、SSO 高纬行、
 #: GEO 高纬行表未给出——按工程惯例外推并在 :func:`orbit_dv_requirement` 的来源文案
 #: 中声明（量级锚定，非权威）。
+#: ⚠ SSO 锚点方向定标（2026-09-21，M6 轨道层第一片）：§16 M6 验收判据要求
+#: ``payload_latitude_curve`` 对纬度**单调不增**——极轨/SSO 的需求必须随纬度单调增，
+#: 故高纬锚取表单行中值 + 0.15（工程外推）。物理注意：理想脉冲口径下极轨 ΔV 对
+#: 纬度近乎不敏感（自转速度在极轨发射方向的分量 ≈ 0），本差值是损失侧的建模选择
+#: （高纬发射走廊的方位机动与落区代价），**非轨道力学结论**；方向若再反转必须
+#: 同步修订 M6 曲线判据（§1.7 裁决），不得两头各说各话。
 _DV_ANCHORS_KM_S: dict[str, tuple[float, float]] = {
     "LEO": (9.40, 9.65),  # 表低纬行 9.3–9.5 中值；高纬 +0.25（工程外推：倾角 dogleg）
-    "SSO": (9.90, 9.75),  # 表单行 9.5–10.0 中值 9.75；低纬发极轨多付转向 → +0.15（工程外推）
+    "SSO": (9.75, 9.90),  # 表单行 9.5–10.0 中值 9.75；高纬 +0.15（工程外推，方向定标见上）
     "GTO": (11.55, 12.30),  # 表两行中值：库鲁 11.3–11.8 / 高纬 12.0–12.6
     "GEO": (14.65, 15.40),  # 表单行 14.3–15.0 中值；高纬按 GTO 同源纬度惩罚外推 +0.75
 }
@@ -117,13 +123,34 @@ _DV_ANCHORS_KM_S: dict[str, tuple[float, float]] = {
 #: 需求表来源文案（dv_source 的锚定档）。
 DV_SOURCE_ANCHORED = "量级锚定（§8.6 表中值）"
 
-#: 轨道要素缺省值（工程惯例剖面；M6 轨道层可按任务要素收窄）。
+#: 轨道要素缺省值（工程惯例剖面；M6 轨道层 perf.orbits 提供解析精算）。
 _DEFAULT_LEO_ALT_M = 200_000.0
 _DEFAULT_SSO_ALT_M = 700_000.0
-_GEO_ALT_M = 35_786_000.0
-_MOON_DISTANCE_M = 384_400_000.0
 
-#: payload_by_orbit 的四个目标（OI-38；TLI / TMI 须与 C3 成对，随 M6 轨道层交付）。
+#: 公开别名（M6 收官片：L2 供给模式的精算理想 ΔV 需要停泊轨道半径——与锚定链
+#: 消费**同一份**工程惯例缺省剖面，禁止第二份常量；私有名保持模块内使用）。
+DEFAULT_LEO_ALT_M = _DEFAULT_LEO_ALT_M
+DEFAULT_SSO_ALT_M = _DEFAULT_SSO_ALT_M
+
+#: 地球同步轨道高度 [m]（公开惯例值：GEO 半径 = R_地球 + 35 786 km；出处：地球
+#: 同步轨道定义高度的公开工程惯例值，与 GCAT 各级记录同量级口径）。
+GEO_ALTITUDE_M = 35_786_000.0
+
+#: 地月平均距离 [m]（公开天文惯例值 384 400 km——TLI 转移远地点的量级锚）。
+MOON_DISTANCE_M = 384_400_000.0
+
+#: TLI 目标 C3 典型值 [km²/s²]（OI-22）：地月转移惯例区间 −2.0 至 −1.3 的**区间中值**
+#: −1.65（公开工程惯例、非权威；闭式对拍：远地点恰取地月距离 384 400 km 的最小能量
+#: 转移 C3 ≈ −2.04，实际任务取更高能量以缩短飞行时间——区间即由此展开）。
+TLI_C3_TYPICAL_KM2_S2 = -1.65
+
+#: TMI 目标 C3 典型值 [km²/s²]（OI-22）：§8.6 表注典型区间 8–15 的**区间中值** 11.5。
+#: ⚠ TMI 强窗口依赖（§8.10 约束 4）：此值是跨窗口的量级代表，窗口/相位假设文案由
+#: :mod:`aeroforge.perf.orbits` 的 TMI 输出必填携带。
+TMI_C3_TYPICAL_KM2_S2 = 11.5
+
+#: payload_by_orbit 的四个锚定目标（OI-38）；TLI / TMI / GEO（GTO+圆化）复合行由
+#: M6 轨道层解析（perf.orbits）与锚定上升段拼合，见 perf.capacity.PAYLOAD_ORBITS。
 CAPACITY_ORBITS: tuple[str, ...] = ("LEO", "SSO", "GTO", "GEO")
 
 
@@ -384,16 +411,18 @@ def orbit_dv_requirement(orbit: OrbitType | str, site: LaunchSite) -> DvRequirem
     （两端 clamp）：低纬向东发射运力更高（FR-19）由此保证。**量级锚定、非权威**
     ——M6 的 L2 弹道积分将收窄区间；禁止把本值当标准或论文结论引用。
 
-    仅覆盖 OI-38 的四目标（LEO / SSO / GTO / GEO 直送）；TLI / TMI 的 ΔV 与 C3
-    成对（§8.10），随 M6 轨道层交付——本层显式拒绝而不是给一个缺 C3 的裸值。
+    仅覆盖 OI-38 的四锚定目标（LEO / SSO / GTO / GEO 直送）；TLI / TMI 的需求由
+    M6 轨道层解析（:mod:`aeroforge.perf.orbits`，C3 与 ΔV 成对、§8.10）与运力表
+    复合行给出——本层显式拒绝而不是给一个缺 C3 的裸值。
     """
     key = str(orbit)
     anchors = _DV_ANCHORS_KM_S.get(key)
     if anchors is None:
         raise PerfError(
-            f"轨道类型 {key!r} 不在 §8.6 需求表覆盖范围（LEO/SSO/GTO/GEO）；"
-            "TLI/TMI 的 ΔV 必须与 C3 成对输出，随 M6 轨道层交付",
-            suggestion="运力表目标固定为 LEO / SSO / GTO / GEO（直送）四个（OI-38）",
+            f"轨道类型 {key!r} 不在 §8.6 锚定需求表覆盖范围（LEO/SSO/GTO/GEO）；"
+            "TLI/TMI 的 ΔV 必须与 C3 成对输出（§8.10，perf.orbits 轨道解析）",
+            suggestion="运力表复合行（TLI/TMI/GEO_GTO_CIRC）由 perf.capacity 拼合，"
+            "单轨道解析走 POST /api/orbits/transfer",
         )
     low, high = anchors
     span = _HIGH_LAT_ANCHOR_DEG - _LOW_LAT_ANCHOR_DEG
@@ -416,8 +445,8 @@ def _orbit_elements(orbit: str, mission: Mission) -> tuple[float, float]:
         default_alt = _DEFAULT_SSO_ALT_M if orbit == "SSO" else _DEFAULT_LEO_ALT_M
         radius = EARTH_EQUATOR_RADIUS_M + (mission.altitude_m or default_alt)
         return radius, radius
-    apogees = {"GTO": _GEO_ALT_M, "GEO": _GEO_ALT_M, "TLI": _MOON_DISTANCE_M}
-    apogee = mission.apogee_altitude_m or apogees.get(orbit, _GEO_ALT_M)
+    apogees = {"GTO": GEO_ALTITUDE_M, "GEO": GEO_ALTITUDE_M, "TLI": MOON_DISTANCE_M}
+    apogee = mission.apogee_altitude_m or apogees.get(orbit, GEO_ALTITUDE_M)
     return EARTH_EQUATOR_RADIUS_M + perigee, EARTH_EQUATOR_RADIUS_M + apogee
 
 
@@ -448,13 +477,16 @@ def characteristic_energy_km2_s2(orbit: OrbitType | str, mission: Mission) -> fl
     """终态轨道特征能量 C3 = v∞² [km²/s²]（OI-23；束缚轨道为负，抛物线逃逸为 0）。
 
     统一半长轴口径：``C3 = −μ/a``（圆轨道 a = r）。TLI / TMI / 逃逸轨道必输出
-    本值（其 ΔV 是窗口强依赖的，单看 ΔV 会误导，§8.8 OI-23 约束）。TMI 本片按
-    escape 口径工程近似（:func:`ideal_orbit_dv_km_s`）⟹ C3=0；真实 TMI 的 C3
-    典型 8–15 km²/s² 且强窗口依赖（§8.6 表注），随 M6 轨道层与 C3 成对交付。
+    本值（其 ΔV 是窗口强依赖的，单看 ΔV 会误导，§8.8 OI-23 约束）。M6 轨道层
+    （perf.orbits）起 TMI 取典型值 :data:`TMI_C3_TYPICAL_KM2_S2`（区间 8–15 中值
+    11.5，跨窗口量级代表）；具体窗口的 C3 由 TMI 输出必填的窗口/相位假设文案
+    标注（§8.10 约束 4），逐点解析走 POST /api/orbits/transfer。
     """
     key = str(orbit)
-    if key in {"escape", "TMI"}:
+    if key == "escape":
         return 0.0
+    if key == "TMI":
+        return TMI_C3_TYPICAL_KM2_S2
     r_p, r_a = _orbit_elements(key, mission)
     return -EARTH_GM_M3_S2 / ((r_p + r_a) / 2.0) / 1e6
 
@@ -463,10 +495,16 @@ __all__ = [
     "CAPACITY_ORBITS",
     "DEFAULT_DRAG_COEFFICIENT",
     "DEFAULT_LAUNCH_SITE",
+    "DEFAULT_LEO_ALT_M",
+    "DEFAULT_SSO_ALT_M",
     "DV_SOURCE_ANCHORED",
     "EARTH_EQUATOR_RADIUS_M",
     "EARTH_GM_M3_S2",
+    "GEO_ALTITUDE_M",
+    "MOON_DISTANCE_M",
     "OMEGA_EARTH_RAD_S",
+    "TLI_C3_TYPICAL_KM2_S2",
+    "TMI_C3_TYPICAL_KM2_S2",
     "DvRequirement",
     "LossItem",
     "aero_loss",

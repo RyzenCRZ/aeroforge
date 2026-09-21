@@ -190,7 +190,7 @@ def compute_vehicle_key(vehicle: Vehicle) -> CacheKey:
     )
 
 
-def evaluate_cache_key(vehicle: Vehicle) -> str:
+def evaluate_cache_key(vehicle: Vehicle, dv_supply: str = "anchored") -> str:
     """``POST /api/perf/evaluate`` 的缓存键（§9.2 同构：canonical + spec_version）。
 
     - 键输入 = 飞行器参数的 canonical JSON（键序固定、浮点定量、缺省省略——
@@ -200,10 +200,15 @@ def evaluate_cache_key(vehicle: Vehicle) -> str:
       两类键语义不同（Vehicle 输入 vs 剖面输入），前缀使目录混用一眼可辨。
     - ⚠ 本键**不含**几何 kernel 版本：evaluate 是纯数值链（无 OCCT），几何语义
       未变时不得因无关版本递增而全量失效缓存。
+    - ⚠ ``dv_supply``（M6 收官片双供给模式）**仅非缺省时进键**——缺省
+      ``anchored`` 的键与历史字节逐位一致（既有缓存不失效）；``l2`` 是另一份
+      数字（含弹道积分损失），与锚定结果必须分键，混键会让两种模式互相覆盖。
     """
-    digest = hashlib.sha256(
-        "\x00".join((vehicle_canonical_json(vehicle), SPEC_VERSION)).encode("utf-8")
-    ).hexdigest()
+    parts = [vehicle_canonical_json(vehicle)]
+    if dv_supply != "anchored":
+        parts.append(f"dv_supply={dv_supply}")
+    parts.append(SPEC_VERSION)
+    digest = hashlib.sha256("\x00".join(parts).encode("utf-8")).hexdigest()
     return f"perf-evaluate-{digest}"
 
 

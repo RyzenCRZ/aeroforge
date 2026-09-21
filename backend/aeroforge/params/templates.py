@@ -596,7 +596,13 @@ SATURNV_SOURCED_FIELDS: dict[str, str] = {
     "stages[2].length_m": "公开资料：S-IVB 级长约 17.8 m",
     "stages[2].wall_thickness_m": _NOTE_WALL,
     "stages[2].structure_coefficient": (
-        "由公开干重 13,500 kg / 推进剂 106,600 kg 反算：σ = 13,500/120,100 ≈ 0.1124"
+        "由公开干重 13,500 kg（含仪器舱 IU，公开口径 ~13.5 t）/ 推进剂 106,600 kg "
+        "反算：σ = 13,500/120,100 ≈ 0.1124。M6 数据专项（2026-09-21）复核："
+        "GCAT stages.tsv「Saturn S-IVB」行记录 Dry_Mass = 13,300 kg"
+        "（Launch_Mass 120.0 t → 推进剂 106.7 t，与本模板一致 ±0.1%）——GCAT 无误、"
+        "模板与公开权威口径一致，数值不修；几何 vs σ 干重门禁的越限（33.4%）源于"
+        "模型颗粒度：仪器舱 / 底推分离装置等支持系统不在「贮箱壁 + 发动机 + "
+        "分数闭环」账内（test_m5_acceptance 登记口径）"
     ),
     "stages[2].fill_fraction": _NOTE_FILL,
     "stages[2].engine_count": "公开资料：S-IVB 装 1 台 J-2",
@@ -628,12 +634,21 @@ SATURNV_SOURCED_FIELDS: dict[str, str] = {
 # 长征五号（CZ-5 基本型：芯级 2 级串联 + 4× 并联助推器，级号 0，OI-36）
 # ---------------------------------------------------------------------------
 
-# 公开分项质量（kg，工程典型值）。§13.2 标称 GLOW ≈ 867 t：分项合计 ≈ 841 t
-# （4×[11,000+145,000] + [9,500+158,000] + [1,300+23,000] + 载荷 25,000），
-# 差约 3%——公开来源本就不闭合，口径与 Falcon 9 一致（门禁取 5%，见测试）。
+# 公开分项质量（kg，工程典型值）。§13.2 标称 GLOW ≈ 867 t：分项合计 ≈ 843.5 t
+# （4×[11,000+145,000] + [9,500+158,000] + [4,000+23,000] + 载荷 25,000），
+# 差约 2.7%——公开来源本就不闭合，口径与 Falcon 9 一致（门禁取 5%，见测试）。
 _CZ5_CORE1_DRY_KG = 9_500.0
 _CZ5_CORE1_PROP_KG = 158_000.0
-_CZ5_CORE2_DRY_KG = 1_300.0
+# ⚠ 芯二级干重（M6 数据专项，2026-09-21 复核修正）：旧值 1,300 kg **低于两台
+# YF-75D 自重**（物理不可能——公开估计单台约 0.7–0.8 t 量级）。GCAT 快照
+# stages.tsv「CZ-5 Stage 2」行（Stage_Alt_Name=CZ-H5-2）记录 Dry_Mass = 6,700 kg
+# （Launch_Mass 36.0 t、Duration 700 s），与公开权威口径（干重 ~4 t 量级）不同
+# ——GCAT 该值口径未拆分，很可能含级间段/适配器，不取。按公开估计区间中值口径
+# 取 4,000 kg（「公开估计 ~4 t 量级」的代表值；非编造、非 GCAT 抄录，出处见
+# CZ5_SOURCED_FIELDS["stages[1].structure_coefficient"]）。复核后几何 vs σ 干重
+# 门禁复跑：偏差由 72.3% 收窄至 44.0%（残差源于几何模型颗粒度——非贮箱分数与
+# 大膨胀比喷管发动机账偏轻），越限级登记保留（test_m5_acceptance）。
+_CZ5_CORE2_DRY_KG = 4_000.0
 _CZ5_CORE2_PROP_KG = 23_000.0
 _CZ5_BOOSTER_DRY_KG = 11_000.0
 _CZ5_BOOSTER_PROP_KG = 145_000.0
@@ -837,8 +852,11 @@ CZ5_SOURCED_FIELDS: dict[str, str] = {
     "stages[1].length_m": f"{_SOURCE_CZ5}（量级）：芯二级约 12.4 m",
     "stages[1].wall_thickness_m": _NOTE_WALL,
     "stages[1].structure_coefficient": (
-        f"{_SOURCE_CZ5}分项质量反算：干重 ≈ 1,300 kg / 推进剂 ≈ 23,000 kg，"
-        "σ = 1,300/24,300 ≈ 0.0535"
+        f"{_SOURCE_CZ5}分项质量反算：干重 4,000 kg（M6 数据专项 2026-09-21 修正："
+        "「公开估计 ~4 t 量级」区间口径的代表值/中值；旧值 1,300 kg 低于两台 "
+        "YF-75D 自重，物理不可能。GCAT stages.tsv「CZ-5 Stage 2」行记录 "
+        "Dry_Mass = 6,700 kg 口径不同——很可能含级间段/适配器，不取）/ "
+        "推进剂 23,000 kg，σ = 4,000/27,000 ≈ 0.1481"
     ),
     "stages[1].fill_fraction": _NOTE_FILL,
     "stages[1].engine_count": f"{_SOURCE_CZ5}：芯二级 2 台 YF-75D",

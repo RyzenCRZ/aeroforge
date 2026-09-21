@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from aeroforge.errors import PerfError
@@ -22,14 +24,19 @@ class PointEvaluation(BaseModel):
     """点值结果（§8.7 阶段 ① 的 ``point`` 载荷）。"""
 
     payload_by_orbit: dict[str, OrbitPayload] = Field(
-        description="各轨道点值运力表（OI-38：LEO / SSO / GTO / GEO 直送四目标）"
+        description=(
+            "各轨道点值运力表（OI-38 + §8.10：LEO / SSO / GTO / GEO 直送 + "
+            "TLI / TMI / GEO（GTO+圆化，键 GEO_GTO_CIRC）七目标；TLI/TMI 行带 "
+            "c3_km2_s2，TMI 行带 window_assumption）"
+        )
     )
     payload_mass_kg: float = Field(description="用户输入的载荷质量（kg，对照基准）")
     glow_kg: float = Field(description="固定火箭在用户载荷下的起飞质量（kg）")
     c3_km2_s2: float | None = Field(
         description=(
             "终态轨道特征能量 C3 = v∞²（km²/s²，束缚轨道为负）——"
-            "TLI / TMI / 逃逸轨道必输出（OI-23），本片四目标均为束缚轨道"
+            "TLI / TMI / 逃逸轨道必输出（OI-23）；TMI 取典型值 11.5（§8.10 约束 4，"
+            "窗口假设见运力表 TMI 行）"
         )
     )
 
@@ -70,8 +77,17 @@ def resolve_site(vehicle: Vehicle, warnings: list[str]) -> LaunchSite:
     return DEFAULT_LAUNCH_SITE
 
 
-def compute_point_evaluation(vehicle: Vehicle) -> PerfEvaluateResponse:
-    """阶段①点值链（§8.6 L1 损失 + OI-38 运力表 + OI-23 瀑布；毫秒级纯数值）。"""
+def compute_point_evaluation(
+    vehicle: Vehicle, *, dv_supply: Literal["anchored", "l2"] = "anchored"
+) -> PerfEvaluateResponse:
+    """阶段①点值链（§8.6 运力表 + OI-23 瀑布；毫秒级纯数值；anchored 模式）。
+
+    ``dv_supply="l2"``（M6 收官片）：运力表的 ΔV 需求供给切换为 orbits 精算
+    ideal + L2 弹道积分四项损失（损失一阶冻结）− 自转加成——表内逐行
+    ``dv_source`` 标注实际模式；ΔV 瀑布仍为 L1 物理分解（瀑布的「理论 ideal +
+    L1 损失」与运力供给是两条口径，§8.8 既有纪律，不随供给模式切换）。
+    l2 模式含一次弹道积分（~0.1 s），比 anchored 慢两个量级——调用方按需选用。
+    """
     warnings: list[str] = []
     site = resolve_site(vehicle, warnings)
     mission = vehicle.mission
@@ -84,7 +100,7 @@ def compute_point_evaluation(vehicle: Vehicle) -> PerfEvaluateResponse:
     except PerfError:
         c3 = None
 
-    table = payload_by_orbit(vehicle, site)
+    table = payload_by_orbit(vehicle, site, dv_supply=dv_supply)
     for orbit, row in table.items():
         if not row.attainable:
             warnings.append(
@@ -101,12 +117,35 @@ def compute_point_evaluation(vehicle: Vehicle) -> PerfEvaluateResponse:
         if mission.loss_factors is not None
         else "L1 参数化经验模型（§8.6；系数工程惯例、非权威来源）"
     )
-    provenance = {
-        "payload_by_orbit.dv_source": (
+    if mission.loss_factors is not None:
+        dv_prov = "Mission 用户输入（loss_factors 份额口径，§6.1）"
+    elif dv_supply == "l2":
+        dv_prov = (
+            "L2 弹道积分四项损失（§8.6 L2，参考载荷一阶冻结）+ perf.orbits 精算"
+            "理想 ΔV（§8.10）− 自转加成（L1 口径）——M6 收官片物理供给路径"
+        )
+    else:
+        dv_prov = (
             "§8.6 目标轨道 ΔV 需求表区间中值 + 发射场纬度线性插值"
             "（量级锚定、非权威——禁止当标准引用）"
-            if mission.loss_factors is None
-            else "Mission 用户输入（loss_factors 份额口径，§6.1）"
+        )
+    composite_ascent = (
+        "上升段（L2 口径，损失一阶冻结）"
+        if dv_supply == "l2"
+        else "上升段锚定（LEO 行口径，含损失与纬度依赖）"
+    )
+    provenance = {
+        "payload_by_orbit.dv_source": dv_prov,
+        "payload_by_orbit.composite_rows": (
+            f"TLI / TMI / GEO_GTO_CIRC 复合行 = {composite_ascent}+ perf.orbits "
+            "§8.10 解析机动（TLI/TMI 单脉冲射入——C3 与 ΔV 成对且同一组 μ/r_p；"
+            "GTO 近地点点火 + 远地点圆化/平面变更矢量合成；射入/圆化脉冲恒为"
+            "理想脉冲口径——L2 上升段损失只覆盖上升段，不重复建模射入段）"
+        ),
+        "payload_by_orbit.tmi_window": (
+            "TMI 行 window_assumption 必填（§8.10 约束 4 / CON-04：C3 取典型值"
+            " 8–15 km²/s² 区间中值 11.5 的跨窗口量级代表，窗口/相位假设随行——"
+            "无窗口假设的 TMI 结果视为不可复现）"
         ),
         "payload_by_orbit.solver": (
             "载荷二分：ΣΔV(载荷) 单调减，区间收敛 1e-9 kg（200 次上限）；"
@@ -122,7 +161,10 @@ def compute_point_evaluation(vehicle: Vehicle) -> PerfEvaluateResponse:
             "ω·(R+海拔)·cos(纬度)·cos(方位角)·相容因子（ω、R 取 WGS-84；"
             "相容因子与转向损失同一失配量驱动，§8.6 约束 2）"
         ),
-        "point.c3_km2_s2": "终态轨道 C3 = −μ/a（束缚为负；TMI 本片按 escape 口径近似）",
+        "point.c3_km2_s2": (
+            "终态轨道 C3（束缚为负；escape=0、TMI 取典型值 11.5 km²/s²——"
+            "窗口/相位假设见运力表 TMI 行 window_assumption，§8.10 约束 4）"
+        ),
         "interval.two_stage": (
             "OI-25 两阶段契约：本响应为阶段①点值（interval_pending=true 时区间在途）；"
             "阶段②经作业通道下发 {interval, moments, sensitivity, …} 并整体覆盖同名键"

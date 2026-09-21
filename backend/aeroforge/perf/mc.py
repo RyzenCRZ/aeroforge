@@ -41,7 +41,7 @@ from pydantic import BaseModel, Field
 from aeroforge.errors import PerfError
 from aeroforge.params.schema import Vehicle
 from aeroforge.perf.capacity import (
-    CAPACITY_ORBITS,
+    PAYLOAD_ORBITS,
     OrbitPayload,
     payload_by_orbit,
     payload_for_dv_on_ledger,
@@ -480,9 +480,9 @@ def _orbit_specs(
 
 
 def _metric_orbit(vehicle: Vehicle) -> str:
-    """敏感度基准轨道：Mission 目标（四目标内）否则 LEO。"""
+    """敏感度基准轨道：Mission 目标（运力表七目标内）否则 LEO。"""
     orbit = str(vehicle.mission.orbit_type)
-    return orbit if orbit in CAPACITY_ORBITS else "LEO"
+    return orbit if orbit in PAYLOAD_ORBITS else "LEO"
 
 
 def _chunk_rows(values: np.ndarray) -> list[list[list[float]]]:

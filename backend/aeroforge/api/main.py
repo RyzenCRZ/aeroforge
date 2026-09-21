@@ -27,6 +27,7 @@ from aeroforge.api import (
     geometry,
     importers,
     jobs,
+    orbits,
     params,
     perf,
     sizing,
@@ -54,6 +55,7 @@ _STATUS_BY_CODE: dict[str, int] = {
     "SIZING_SOLVE_FAILED": 422,
     "SIZING_NO_CONVERGENCE": 422,
     "PERF_EVALUATE_FAILED": 422,
+    "TRAJECTORY_FAILED": 422,
     "EXPORT_FAILED": 422,
     "EXPORT_VALIDATION_FAILED": 422,
 }
@@ -100,6 +102,7 @@ app.include_router(artifacts.router)
 app.include_router(importers.router)
 app.include_router(sizing.router)
 app.include_router(perf.router)
+app.include_router(orbits.router)
 app.include_router(uncertainty.router)
 app.include_router(export.router)
 app.include_router(vehicle.router)

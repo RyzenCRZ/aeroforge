@@ -530,6 +530,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/perf/latitude-curve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Latitude Curve
+         * @description 运力—纬度曲线（OI-23；同步毫秒级——同一质量账 + 逐点二分，不触作业体系）。
+         *
+         *     §16 M6 验收判据：曲线对纬度**单调不增**（FR-19 同型）——由测试显式断言
+         *     （LEO / SSO 各一），本端点如实给值。耗时实测：质量账构建一次 + N 次载荷
+         *     二分（纯数值），实测毫秒级（``compute_ms`` 随响应返回；若未来超 50 ms
+         *     交互预算再议作业化——§9.1 的 >10 ms 红线只针对 async handler 内的
+         *     OCCT/重计算，本端点为同步 def，FastAPI 自动入线程池不阻塞事件循环）。
+         */
+        post: operations["latitude_curve_api_perf_latitude_curve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/perf/evaluate": {
         parameters: {
             query?: never;
@@ -551,6 +577,61 @@ export interface paths {
          *     sha256(canonical_json(vehicle) + spec_version)（§9.2），命中直接同步返回。
          */
         post: operations["evaluate_performance_api_perf_evaluate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/perf/trajectory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Trajectory
+         * @description 投递 L2 简化上升弹道积分作业（§8.6 L2；异步——实测积分耗时超 50 ms 同步阈值）。
+         *
+         *     点质量 2D 积分：ISA 1976 分层指数大气 + 球面地球（变重力 + 离心卸载）+
+         *     重力转弯程序（γ 剖面 + 逆动力学攻角）→ **直接算出**四项损失（与 L1 同名
+         *     对齐：gravity / aero / steering / back_pressure）。纯数值单发实测 F9 ≈76 ms
+         *     / CZ-5 ≈153 ms / SV ≈272 ms（RK4 0.1 s 步长），全部 > 50 ms——按 §9.1 惯例
+         *     走既有作业体系（计算侧执行器），本端点只做参数域硬约束检查 + 微秒级入队。
+         *     程序参数荒谬 / TWR ≤ 0 / 积分发散（触地、超第二宇宙速度）在作业内报错，
+         *     作业终态 FAILED（``TRAJECTORY_FAILED`` → 422，错误携带最后状态）。
+         */
+        post: operations["run_trajectory_api_perf_trajectory_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/orbits/transfer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Orbit Transfer
+         * @description 轨道机动解析（§8.10 全项闭式；纯解析毫秒级同步，不触作业体系）。
+         *
+         *     ``r_a_km`` 路径：Hohmann 两脉冲 + 远地点圆化 + 平面变更 + 复合矢量合成
+         *     （GEO 直送与 GTO+圆化同口径——target="GEO" 即 r_a 换算为同步半径）。
+         *     ``target="TLI"/"TMI"/"escape"`` 路径：停泊轨道单脉冲射入，C3 与 ΔV 成对输出
+         *     （TMI 的 ``window_assumption`` 必填，缺省给典型窗口文案——§8.10 约束 4）。
+         *     请求自相矛盾（r_a_km 与 target 同给 / 全缺、C3 越域）走
+         *     :class:`~aeroforge.errors.PerfError` → 422。
+         */
+        post: operations["orbit_transfer_api_orbits_transfer_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -901,6 +982,42 @@ export interface components {
              * @description 相对误差
              */
             relative_error?: number | null;
+        };
+        /**
+         * CompositeOut
+         * @description 远地点复合机动输出——矢量合成为权威值，标量和仅供差值机检（§8.10 约束 2）。
+         */
+        CompositeOut: {
+            /**
+             * Vector Km S
+             * @description 矢量合成脉冲（km/s，权威值）
+             */
+            vector_km_s: number;
+            /**
+             * Circularization Km S
+             * @description 远地点圆化单脉冲（km/s）
+             */
+            circularization_km_s: number;
+            /**
+             * Plane Change Km S
+             * @description 单独平面变更脉冲（km/s）
+             */
+            plane_change_km_s: number;
+            /**
+             * Scalar Sum Km S
+             * @description 标量相加（km/s，禁止口径——仅供差值机检）
+             */
+            scalar_sum_km_s: number;
+            /**
+             * Vector Minus Scalar Km S
+             * @description 矢量 − 标量和（km/s，恒 ≤ 0）
+             */
+            vector_minus_scalar_km_s: number;
+            /**
+             * Inclination Deg
+             * @description 消倾角转角（°）
+             */
+            inclination_deg: number;
         };
         /**
          * ContinuityLevel
@@ -1578,6 +1695,53 @@ export interface components {
             version: string;
         };
         /**
+         * HohmannOut
+         * @description Hohmann 两脉冲分段输出（§8.10 公式原文）。
+         */
+        HohmannOut: {
+            /**
+             * Dv1 Km S
+             * @description 第一脉冲（内圆轨道，km/s；下降转移为负）
+             */
+            dv1_km_s: number;
+            /**
+             * Dv2 Km S
+             * @description 第二脉冲（外圆轨道，km/s；下降转移为负）
+             */
+            dv2_km_s: number;
+            /**
+             * Total Km S
+             * @description 两脉冲代数和（km/s）
+             */
+            total_km_s: number;
+            /**
+             * A T Km
+             * @description 转移椭圆半长轴（km）
+             */
+            a_t_km: number;
+        };
+        /**
+         * InjectionOut
+         * @description 转移射入输出——C3 与 ΔV 成对（OI-22 / §8.10 约束 1）。
+         */
+        InjectionOut: {
+            /**
+             * Dv Km S
+             * @description 停泊轨道单脉冲射入 ΔV（km/s，由 C3 反算）
+             */
+            dv_km_s: number;
+            /**
+             * C3 Km2 S2
+             * @description 特征能量 C3 = v∞²（km²/s²；TLI<0，escape≥0）
+             */
+            c3_km2_s2: number;
+            /**
+             * Window Assumption
+             * @description 窗口/相位假设（TMI 必填；TLI/escape 为 null）
+             */
+            window_assumption: string | null;
+        };
+        /**
          * JobRecord
          * @description 作业状态快照（跨线程传递的**纯数据**，不含任何几何对象）。
          */
@@ -1617,10 +1781,11 @@ export interface components {
          *     几何链 ``meridian → solid → mesh → step → done``；MC 计算链
          *     ``sampling → evaluating → summarizing → done``（M4 第四片补入，前端按字符串
          *     消费、新增枚举值为增量变更）；导出链 ``solid → export → done``（M5 第三片，
-         *     §5.8——报告类导出无几何构建，直接 ``export``）。
+         *     §5.8——报告类导出无几何构建，直接 ``export``）；L2 弹道积分链
+         *     ``integrating → done``（M6 第二片，§8.6——单发积分无分阶段，仅 running/done）。
          * @enum {string}
          */
-        JobStage: "queued" | "meridian" | "solid" | "mesh" | "step" | "export" | "sampling" | "evaluating" | "summarizing" | "done";
+        JobStage: "queued" | "meridian" | "solid" | "mesh" | "step" | "export" | "sampling" | "evaluating" | "summarizing" | "integrating" | "done";
         /**
          * JobStatus
          * @description §9.3 的作业生命周期状态。
@@ -1657,6 +1822,78 @@ export interface components {
              * @enum {string}
              */
             severity: "pass" | "warn" | "fail" | "skip";
+        };
+        /**
+         * LatitudeCurvePoint
+         * @description 纬度采样点（OI-23）。
+         */
+        LatitudeCurvePoint: {
+            /**
+             * Lat Deg
+             * @description 发射场纬度（°）
+             */
+            lat_deg: number;
+            /**
+             * Payload Kg
+             * @description 该纬度下的反推运力（kg；不可达记 0）
+             */
+            payload_kg: number;
+            /**
+             * Attainable
+             * @description 该纬度下目标是否可达
+             * @default true
+             */
+            attainable: boolean;
+        };
+        /**
+         * LatitudeCurveRequest
+         * @description ``POST /api/perf/latitude-curve`` 的请求体（OI-23 运力—纬度曲线）。
+         */
+        LatitudeCurveRequest: {
+            /** @description 飞行器参数（§6.1 全量）：曲线只替换发射场纬度，方位角 / 倾角 / 构型全部固定——「固定其余参数」的 FR-19 / OI-23 口径 */
+            vehicle: components["schemas"]["Vehicle"];
+            /**
+             * Orbit
+             * @description 目标轨道（LEO/SSO/GTO/GEO/TLI/TMI/GEO_GTO_CIRC 之一）；缺省取 Mission.orbit_type（不在表内时 422）
+             */
+            orbit?: string | null;
+            /**
+             * N Points
+             * @description 纬度采样点数（0–90° 均匀；缺省 11 点 = 步距 9°，OI-23 工程惯例）
+             * @default 11
+             */
+            n_points: number;
+        };
+        /**
+         * LatitudeCurveResponse
+         * @description ``POST /api/perf/latitude-curve`` 的响应体（§8.8 ``payload_latitude_curve``）。
+         */
+        LatitudeCurveResponse: {
+            /**
+             * Payload Key
+             * @description 运力量键（§8.8 形态：payload_<orbit>_kg）
+             */
+            payload_key: string;
+            /**
+             * Orbit
+             * @description 目标轨道
+             */
+            orbit: string;
+            /**
+             * Points
+             * @description 纬度采样点（0–90° 均匀）
+             */
+            points: components["schemas"]["LatitudeCurvePoint"][];
+            /**
+             * Assumption
+             * @description 采样口径与单调性判据说明
+             */
+            assumption: string;
+            /**
+             * Compute Ms
+             * @description 本次曲线计算耗时（ms，同步链实测）
+             */
+            compute_ms: number;
         };
         /**
          * LaunchSite
@@ -2023,7 +2260,7 @@ export interface components {
         };
         /**
          * OrbitCapacitySummary
-         * @description 轨道运力摘要（FR-11：当前目标轨道点值 + 四轨道表）。
+         * @description 轨道运力摘要（FR-11：当前目标轨道点值 + 七目标运力表）。
          */
         OrbitCapacitySummary: {
             /**
@@ -2033,7 +2270,7 @@ export interface components {
             target_orbit: string;
             /**
              * Target Payload Kg
-             * @description 当前目标轨道的运力点值（kg）；四轨道表（LEO/SSO/GTO/GEO）覆盖内取表行，表外轨道（TLI/TMI/escape/custom）为 null——随 M6 轨道层交付
+             * @description 当前目标轨道的运力点值（kg）；七目标表（LEO/SSO/GTO/GEO/TLI/TMI/GEO_GTO_CIRC）覆盖内取表行，表外轨道（escape/custom）为 null
              */
             target_payload_kg: number | null;
             /**
@@ -2043,7 +2280,7 @@ export interface components {
             target_attainable: boolean | null;
             /**
              * Payload By Orbit
-             * @description 四轨道点值运力表（与 /api/perf/evaluate 的 point.payload_by_orbit 同源同值）
+             * @description 七目标点值运力表（与 /api/perf/evaluate 的 point.payload_by_orbit 同源同值）
              */
             payload_by_orbit: {
                 [key: string]: components["schemas"]["OrbitPayload"];
@@ -2066,7 +2303,7 @@ export interface components {
             dv_used_km_s: number;
             /**
              * Dv Source
-             * @description 需求来源：量级锚定（§8.6 表中值）/ Mission 用户输入（loss_factors）
+             * @description 需求来源：量级锚定（§8.6 表中值）/ Mission 用户输入（loss_factors）；复合行（TLI/TMI/GEO_GTO_CIRC）= 上升段锚定 + §8.10 轨道解析拼合
              */
             dv_source: string;
             /**
@@ -2075,6 +2312,107 @@ export interface components {
              * @default true
              */
             attainable: boolean;
+            /**
+             * C3 Km2 S2
+             * @description 特征能量 C3 = v∞²（km²/s²，OI-22：TLI 为负、TMI 典型 8–15）——TLI / TMI 行必填（§8.10 约束 1：禁止只给 ΔV），其余行为 null
+             */
+            c3_km2_s2?: number | null;
+            /**
+             * Window Assumption
+             * @description 窗口/相位假设（§8.10 约束 4）：TMI 行必填（无窗口假设的 TMI 结果视为不可复现，CON-04 同口径），其余行为 null
+             */
+            window_assumption?: string | null;
+        };
+        /**
+         * OrbitTransferRequest
+         * @description ``POST /api/orbits/transfer`` 的请求体（§8.10 解析口径）。
+         *
+         *     ``r_a_km``（Hohmann / 圆化 / 复合机动的外半径）与 ``target``（GEO / TLI /
+         *     TMI / escape 定型目标）**恰给其一**；``r_p_km`` 是停泊轨道地心半径。
+         */
+        OrbitTransferRequest: {
+            /**
+             * R P Km
+             * @description 停泊轨道地心半径（km，如 200 km 高度 ≈ 6578.137）
+             */
+            r_p_km: number;
+            /**
+             * R A Km
+             * @description 目标轨道地心半径（km）——Hohmann / 圆化 / 复合机动用；与 target 二选一
+             */
+            r_a_km?: number | null;
+            /**
+             * Target
+             * @description 定型目标：GEO（同步半径）/ TLI / TMI / escape——与 r_a_km 二选一
+             */
+            target?: ("GEO" | "TLI" | "TMI" | "escape") | null;
+            /**
+             * Inclination Deg
+             * @description 转移轨道倾角（°）——复合机动消倾角用；缺省取 latitude_deg（向东发射自然倾角）
+             */
+            inclination_deg?: number | null;
+            /**
+             * Latitude Deg
+             * @description 发射场纬度（°）——inclination_deg 缺省时的自然倾角来源
+             */
+            latitude_deg?: number | null;
+            /**
+             * C3 Km2 S2
+             * @description 特征能量 C3（km²/s²）——TLI/TMI/escape 的 C3 覆写（缺省：TLI −1.65、TMI 11.5、escape 0，§8.6 表注口径）
+             */
+            c3_km2_s2?: number | null;
+            /**
+             * Window Assumption
+             * @description 窗口/相位假设覆写（TMI；缺省用典型窗口文案——§8.10 约束 4 必填口径）
+             */
+            window_assumption?: string | null;
+        };
+        /**
+         * OrbitTransferResponse
+         * @description §8.10 全项解析响应（μ / r_p 随行标注——约束 3；理想脉冲声明在 assumptions）。
+         */
+        OrbitTransferResponse: {
+            /**
+             * R P Km
+             * @description 停泊轨道地心半径（km，回显）
+             */
+            r_p_km: number;
+            /**
+             * R A Km
+             * @description 目标轨道地心半径（km；定型目标换算给出）
+             */
+            r_a_km: number | null;
+            /**
+             * Mu M3 S2
+             * @description 所用地心引力常数（m³/s²，WGS-84 GM——约束 3 标注）
+             */
+            mu_m3_s2: number;
+            /**
+             * Parking Velocity Km S
+             * @description 停泊圆轨道速度 √(μ/r_p)（km/s）
+             */
+            parking_velocity_km_s: number;
+            /** @description Hohmann 两脉冲（r_a 路径时给出） */
+            hohmann: components["schemas"]["HohmannOut"] | null;
+            /**
+             * Circularization Km S
+             * @description 远地点圆化单脉冲（km/s，r_a 路径时给出）
+             */
+            circularization_km_s: number | null;
+            /**
+             * Plane Change Km S
+             * @description 单独平面变更脉冲（km/s，远地点圆轨道速度口径——复合时勿单独相加）
+             */
+            plane_change_km_s: number | null;
+            /** @description 远地点复合机动（圆化+平面变更矢量合成；inclination 缺省且 r_a 路径时给出） */
+            composite: components["schemas"]["CompositeOut"] | null;
+            /** @description 转移射入（TLI/TMI/escape；C3 与 ΔV 成对，TMI 带窗口假设） */
+            injection: components["schemas"]["InjectionOut"] | null;
+            /**
+             * Assumptions
+             * @description 模型假设与常量标注（理想脉冲声明 + μ / r_p / r_a 口径，§8.10 约束 1/3）
+             */
+            assumptions: string[];
         };
         /**
          * ParabolaSegment
@@ -2118,6 +2456,13 @@ export interface components {
              * @default true
              */
             mc: boolean;
+            /**
+             * Dv Supply
+             * @description ΔV 需求供给模式（§8.6，M6 收官片）：anchored（默认）= 锚定表 + 长燃时修正（毫秒级，缓存键与历史一致）；l2 = orbits 精算 ideal + L2 弹道积分四项损失（损失一阶冻结）− 自转加成（含一次 ~0.1 s 积分，物理升级路径）；Mission.loss_factors 用户覆写在两模式下都优先
+             * @default anchored
+             * @enum {string}
+             */
+            dv_supply: "anchored" | "l2";
         };
         /**
          * PerfEvaluateResponse
@@ -2151,13 +2496,40 @@ export interface components {
             mc_job_id?: string | null;
         };
         /**
+         * PerfTrajectoryRequest
+         * @description ``POST /api/perf/trajectory`` 的请求体（§8.6 L2 + 程序参数覆盖）。
+         */
+        PerfTrajectoryRequest: {
+            /** @description 飞行器参数（§6.1 全量；Mission.launch_site 提供发射场，Vehicle.aero 提供 Cd / 参考面积——缺失按工程惯例缺省并附 warning） */
+            vehicle: components["schemas"]["Vehicle"];
+            /** @description 重力转弯程序参数（§8.6 L2 可调自由度；缺省 = 工程惯例剖面：垂直段 8 s → 指数标高 40 km 收敛到 0°） */
+            program?: components["schemas"]["TrajectoryProgram"];
+            /**
+             * Dt S
+             * @description RK4 固定步长 [s]（§8.6「0.1 s 级」；可配 0.01–1.0）
+             * @default 0.1
+             */
+            dt_s: number;
+        };
+        /**
+         * PerfTrajectoryResponse
+         * @description ``POST /api/perf/trajectory`` 的响应体（异步受理回执，形态随 ``/api/uncertainty/mc``）。
+         */
+        PerfTrajectoryResponse: {
+            /**
+             * Job Id
+             * @description 弹道积分作业 id：GET /api/jobs/{id} 轮询或 /ws/jobs/{id} 订阅；成功后 metrics = 弹道结果（losses_km_s 四项分解 / burnout 燃尽状态 / stage_timeline / provenance）
+             */
+            job_id: string;
+        };
+        /**
          * PointEvaluation
          * @description 点值结果（§8.7 阶段 ① 的 ``point`` 载荷）。
          */
         PointEvaluation: {
             /**
              * Payload By Orbit
-             * @description 各轨道点值运力表（OI-38：LEO / SSO / GTO / GEO 直送四目标）
+             * @description 各轨道点值运力表（OI-38 + §8.10：LEO / SSO / GTO / GEO 直送 + TLI / TMI / GEO（GTO+圆化，键 GEO_GTO_CIRC）七目标；TLI/TMI 行带 c3_km2_s2，TMI 行带 window_assumption）
              */
             payload_by_orbit: {
                 [key: string]: components["schemas"]["OrbitPayload"];
@@ -2174,7 +2546,7 @@ export interface components {
             glow_kg: number;
             /**
              * C3 Km2 S2
-             * @description 终态轨道特征能量 C3 = v∞²（km²/s²，束缚轨道为负）——TLI / TMI / 逃逸轨道必输出（OI-23），本片四目标均为束缚轨道
+             * @description 终态轨道特征能量 C3 = v∞²（km²/s²，束缚轨道为负）——TLI / TMI / 逃逸轨道必输出（OI-23）；TMI 取典型值 11.5（§8.10 约束 4，窗口假设见运力表 TMI 行）
              */
             c3_km2_s2: number | null;
         };
@@ -3533,6 +3905,60 @@ export interface components {
             thrust_n: number;
         };
         /**
+         * TrajectoryProgram
+         * @description 重力转弯程序参数（§8.6 L2 的可调自由度；缺省为工程惯例值、非权威来源）。
+         *
+         *     程序量是**弹道倾角剖面 γ_cmd(h)**（§8.6 任务口径「γ 随高度线性/指数收敛到
+         *     目标倾角」的字面实现，见模块 docstring「控制」节）：垂直段内恒 90°，其后随
+         *     高度按模式收敛到 ``final_pitch_deg``；推力攻角 α 由逆动力学自满足以跟踪剖面
+         *     （推力不足以跟踪时 α 饱和于 ±90°，γ 滞后于剖面——不虚构不存在的控制力）。
+         */
+        TrajectoryProgram: {
+            /**
+             * Mode
+             * @description 程序转弯模式：exponential = γ 随高度指数收敛（工程惯例缺省）；linear = 线性收敛
+             * @default exponential
+             * @enum {string}
+             */
+            mode: "linear" | "exponential";
+            /**
+             * Vertical Rise S
+             * @description 垂直上升段时长 [s]（工程惯例 5–10 s；此段内弹道倾角恒 90°）
+             * @default 8
+             */
+            vertical_rise_s: number;
+            /**
+             * Scale Height M
+             * @description exponential 模式的程序标高 [m]：γ_cmd = γ_f + (90°−γ_f)·exp(−h/H)。缺省 40 km 服务常规两级构型；低 TWR 上面级的重型构型（如 S-IVB 级TWR<0.5）需加大标高放缓末段拉平，否则燃前触地（报错提示）
+             * @default 40000
+             */
+            scale_height_m: number;
+            /**
+             * Pitch Rate Deg Per Km
+             * @description linear 模式的收敛斜率 [°/km]：γ_cmd = max(γ_f, 90° − k·h)
+             * @default 0.5
+             */
+            pitch_rate_deg_per_km: number;
+            /**
+             * Final Pitch Deg
+             * @description 目标弹道倾角 [°]（相对当地水平面；入轨剖面取 ~0°）
+             * @default 0
+             */
+            final_pitch_deg: number;
+            /**
+             * Alpha Atmo Max Deg
+             * @description 逆动力学攻角饱和界——稠密段档 [°]（max-q 前后的气动载荷限制；工程惯例缺省 10°，§13.2 标定自由度）
+             * @default 10
+             */
+            alpha_atmo_max_deg: number;
+            /**
+             * Alpha Vac Max Deg
+             * @description 逆动力学攻角饱和界——真空段档 [°]（轨迹整形上限；工程惯例缺省 30°，§13.2 标定自由度）
+             * @default 30
+             */
+            alpha_vac_max_deg: number;
+        };
+        /**
          * UnitsResponse
          * @description ``GET /api/params/units`` 的响应体（§1.7.3 OI-32）。
          */
@@ -4705,6 +5131,39 @@ export interface operations {
             };
         };
     };
+    latitude_curve_api_perf_latitude_curve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LatitudeCurveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LatitudeCurveResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     evaluate_performance_api_perf_evaluate_post: {
         parameters: {
             query?: never;
@@ -4725,6 +5184,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PerfEvaluateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_trajectory_api_perf_trajectory_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PerfTrajectoryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PerfTrajectoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    orbit_transfer_api_orbits_transfer_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrbitTransferRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrbitTransferResponse"];
                 };
             };
             /** @description Validation Error */

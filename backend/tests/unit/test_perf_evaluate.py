@@ -30,16 +30,21 @@ import pytest
 from fastapi.testclient import TestClient
 
 from aeroforge.api.main import app
+from aeroforge.cache.store import evaluate_cache_key
 from aeroforge.errors import PerfError
 from aeroforge.params.schema import LaunchSite, LossFactors, Vehicle
-from aeroforge.params.templates import falcon9_vehicle
+from aeroforge.params.templates import cz5_vehicle, falcon9_vehicle
 from aeroforge.perf.budget import CLOSURE_TOLERANCE_KM_S, delta_v_budget
 from aeroforge.perf.capacity import (
+    PAYLOAD_ORBITS,
+    l2_reference_losses_km_s,
     payload_by_orbit,
     payload_for_dv,
+    payload_for_orbit,
     vehicle_ledger,
 )
 from aeroforge.perf.losses import (
+    DEFAULT_LAUNCH_SITE,
     DV_SOURCE_ANCHORED,
     EARTH_EQUATOR_RADIUS_M,
     EARTH_GM_M3_S2,
@@ -362,13 +367,18 @@ def test_payload_for_dv_rejects_infeasible_and_nonpositive(single_stage_vehicle:
 def test_payload_by_orbit_unattainable_rows_reported_not_dropped(
     single_stage_vehicle: Vehicle,
 ) -> None:
-    """不可达目标：表保持四行齐备，该项 payload=0 且 attainable=False（不丢行）。"""
+    """不可达目标：表保持七行齐备，该项 payload=0 且 attainable=False（不丢行）。"""
     table = payload_by_orbit(single_stage_vehicle, _site(28.5))
-    assert set(table) == {"LEO", "SSO", "GTO", "GEO"}
+    assert set(table) == {"LEO", "SSO", "GTO", "GEO", "TLI", "TMI", "GEO_GTO_CIRC"}
     leo = table["LEO"]
     assert not leo.attainable  # 单级上限 ~9.1 km/s < LEO 需求 9.65：如实报告
     assert leo.payload_kg == 0.0
     assert leo.dv_used_km_s == pytest.approx(9.65, abs=1e-12)  # 需求值仍如实给出
+    # 复合行同样如实给需求并保持齐备（M6 轨道层：TLI/TMI/GEO_GTO_CIRC）
+    assert not table["TLI"].attainable and not table["TMI"].attainable
+    assert not table["GEO_GTO_CIRC"].attainable
+    assert table["TLI"].c3_km2_s2 is not None and table["TLI"].c3_km2_s2 < 0.0
+    assert table["TMI"].window_assumption  # 窗口假设必填（§8.10 约束 4）
 
 
 # ---------------------------------------------------------------------------
@@ -414,13 +424,26 @@ def test_evaluate_endpoint_returns_full_shape(
     assert point["c3_km2_s2"] is not None and point["c3_km2_s2"] < 0.0  # LEO 束缚轨道
 
     table = point["payload_by_orbit"]
-    assert set(table) == {"LEO", "SSO", "GTO", "GEO"}
+    assert set(table) == {"LEO", "SSO", "GTO", "GEO", "TLI", "TMI", "GEO_GTO_CIRC"}
     for row in table.values():
-        assert set(row) == {"payload_kg", "dv_used_km_s", "dv_source", "attainable"}
-        assert row["dv_source"] == DV_SOURCE_ANCHORED
+        assert set(row) == {
+            "payload_kg",
+            "dv_used_km_s",
+            "dv_source",
+            "attainable",
+            "c3_km2_s2",
+            "window_assumption",
+        }
+    for orbit in ("LEO", "SSO", "GTO", "GEO"):
+        assert table[orbit]["dv_source"] == DV_SOURCE_ANCHORED
+        assert table[orbit]["c3_km2_s2"] is None
+        assert table[orbit]["window_assumption"] is None
     assert table["LEO"]["attainable"] and table["GTO"]["attainable"]
     assert table["LEO"]["payload_kg"] > table["GTO"]["payload_kg"]
-    assert not table["GEO"]["attainable"]  # two_stage 上限 ~13.3 km/s < GEO 15.4
+    assert not table["GEO"]["attainable"]  # two_stage 上限 ~13.7 km/s < GEO 15.4
+    assert table["TLI"]["attainable"] and table["TLI"]["c3_km2_s2"] < 0.0
+    assert table["TMI"]["attainable"] and table["TMI"]["window_assumption"]
+    assert not table["GEO_GTO_CIRC"]["attainable"]  # 复合需求 13.94 > 上限 13.7
     assert any("可达上限" in w for w in body["warnings"])
 
     budget = body["delta_v_budget"]
@@ -587,3 +610,120 @@ def test_falcon9_leo_capacity_smoke_reports_number() -> None:
     assert all(row.attainable for row in table.values())
     assert math.isfinite(leo) and leo > 0.0
     assert leo > gto > geo  # 轨道越远运力越低（点值序自检）
+
+
+# ---------------------------------------------------------------------------
+# 运力供给双模式（M6 收官片：anchored 缺省 / l2 物理路径，§8.6 L2 接链）
+# ---------------------------------------------------------------------------
+
+
+def test_dual_supply_anchored_default_byte_identical(two_stage_vehicle: Vehicle) -> None:
+    """缺省（不传模式 / 显式 anchored）两条路径的七行表逐字节一致——缺省=既有口径。"""
+    vehicle = two_stage_vehicle
+    site = vehicle.mission.launch_site or DEFAULT_LAUNCH_SITE
+    implicit = payload_by_orbit(vehicle, site)
+    explicit = payload_by_orbit(vehicle, site, dv_supply="anchored")
+    assert implicit.keys() == explicit.keys()
+    for orbit in implicit:
+        assert implicit[orbit] == explicit[orbit], f"{orbit} 行在两种缺省写法下不一致"
+    # 缺省口径不含 L2 文案（anchored 数字与 M4 以来口径相同）
+    assert all("L2" not in row.dv_source for row in implicit.values())
+
+
+def test_dual_supply_l2_rows_marked_and_differ() -> None:
+    """l2 模式：逐行 dv_source 标注 L2 弹道积分 + orbits 精算，数字与 anchored 不同。"""
+    vehicle = falcon9_vehicle()
+    site = vehicle.mission.launch_site or DEFAULT_LAUNCH_SITE
+    table = payload_by_orbit(vehicle, site, dv_supply="l2")
+    assert len(table) == len(PAYLOAD_ORBITS)
+    for orbit, row in table.items():
+        assert "L2 弹道积分" in row.dv_source, f"{orbit} 行 dv_source 缺 L2 标注：{row.dv_source}"
+        assert "orbits 精算" in row.dv_source or "上升段（L2 口径）" in row.dv_source
+    # 与 anchored 模式解不同（损失账不同——L2 积分 vs 经验表）
+    anchored = payload_by_orbit(vehicle, site, dv_supply="anchored")
+    assert table["LEO"].dv_used_km_s != pytest.approx(anchored["LEO"].dv_used_km_s)
+    assert table["LEO"].payload_kg != pytest.approx(anchored["LEO"].payload_kg, rel=1e-12)
+
+
+def test_dual_supply_long_burn_surcharge_absent_in_l2() -> None:
+    """长燃时修正在 L2 模式**自然消失**（CZ-5 480 s 长燃由积分直接推进——k_g 标定
+    自由度不再需要）；anchored 模式仍带该修正（M4 口径不回退）。"""
+    vehicle = cz5_vehicle()
+    site = vehicle.mission.launch_site or DEFAULT_LAUNCH_SITE
+    anchored = payload_by_orbit(vehicle, site, dv_supply="anchored")
+    l2 = payload_by_orbit(vehicle, site, dv_supply="l2")
+    assert "长燃时" in anchored["LEO"].dv_source
+    assert "长燃时" not in l2["LEO"].dv_source
+    assert "L2 弹道积分" in l2["LEO"].dv_source
+
+
+def test_dual_supply_composite_rows_keep_c3_and_window() -> None:
+    """l2 模式复合行：TLI/TMI 仍带 C3（§8.10 约束 1）、TMI 仍带窗口假设（约束 4），
+    射入段脉冲保持理想脉冲口径（L2 损失只覆盖上升段——来源注声明）。"""
+    vehicle = falcon9_vehicle()
+    site = vehicle.mission.launch_site or DEFAULT_LAUNCH_SITE
+    table = payload_by_orbit(vehicle, site, dv_supply="l2")
+    tli, tmi = table["TLI"], table["TMI"]
+    assert tli.c3_km2_s2 is not None and tli.c3_km2_s2 < 0.0
+    assert tmi.c3_km2_s2 is not None and tmi.window_assumption is not None
+    assert "L2 损失只覆盖上升段" in tli.dv_source
+    # 复合行 > 纯 LEO 行需求（射入/机动脉冲叠加在上升段之上）
+    assert table["TLI"].dv_used_km_s > table["LEO"].dv_used_km_s
+
+
+def test_dual_supply_freeze_sensitivity_below_one_percent() -> None:
+    """损失一阶冻结的敏感性实测（任务口径：冻结点 vs 最优点差值评估进测试注释）：
+    在 L2 解出的载荷处**重跑一次积分**再解一次（二阶精化），载荷漂移 < 1%——
+    实测三基准 ≤ 0.07%（损失对 GLOW 的响应被 GLOW 本身的体量稀释）。"""
+    vehicle = falcon9_vehicle()
+    site = vehicle.mission.launch_site or DEFAULT_LAUNCH_SITE
+    ledger = vehicle_ledger(vehicle)
+    state = l2_reference_losses_km_s(vehicle, ledger, site)
+    frozen = payload_for_orbit(vehicle, site, "LEO", ledger=ledger, dv_supply="l2", l2_state=state)
+    at_solution = vehicle.model_copy(update={"payload_mass_kg": frozen.payload_kg})
+    refined_state = l2_reference_losses_km_s(at_solution, vehicle_ledger(at_solution), site)
+    refined = payload_for_orbit(
+        at_solution,
+        site,
+        "LEO",
+        ledger=vehicle_ledger(at_solution),
+        dv_supply="l2",
+        l2_state=refined_state,
+    )
+    drift = abs(refined.payload_kg - frozen.payload_kg) / frozen.payload_kg
+    assert drift < 0.01, (
+        f"冻结敏感性 {drift:.2%} ≥ 1%（损失 {state.total_km_s:.3f}→{refined_state.total_km_s:.3f}）"
+    )
+
+
+def test_dual_supply_evaluate_endpoint_l2_mode(client: TestClient) -> None:
+    """端点 l2 模式：请求带 dv_supply=l2 → 七行 dv_source 带 L2 标注；缺省请求体
+    （不带该字段）行为与历史逐字段一致（Schema 扩展不破坏既有请求）。"""
+    vehicle_json = falcon9_vehicle().model_dump(mode="json")
+    legacy = client.post("/api/perf/evaluate", json={"vehicle": vehicle_json, "mc": False})
+    assert legacy.status_code == 200
+    assert "L2" not in legacy.json()["point"]["payload_by_orbit"]["LEO"]["dv_source"]
+
+    l2_response = client.post(
+        "/api/perf/evaluate", json={"vehicle": vehicle_json, "mc": False, "dv_supply": "l2"}
+    )
+    assert l2_response.status_code == 200
+    l2_rows = l2_response.json()["point"]["payload_by_orbit"]
+    assert "L2 弹道积分" in l2_rows["LEO"]["dv_source"]
+    assert "L2" not in legacy.json()["point"]["payload_by_orbit"]["LEO"]["dv_source"]
+    # 两种模式的缓存互不污染（连发两次 l2 命中 l2 缓存而非 anchored 缓存）
+    second = client.post(
+        "/api/perf/evaluate", json={"vehicle": vehicle_json, "mc": False, "dv_supply": "l2"}
+    )
+    assert second.json()["cache_hit"] is True
+    assert "L2 弹道积分" in second.json()["point"]["payload_by_orbit"]["LEO"]["dv_source"]
+
+
+def test_evaluate_cache_key_mode_isolation(two_stage_vehicle: Vehicle) -> None:
+    """缓存键：缺省（anchored）键与历史形态一致（模式不进键）；l2 键不同（两份
+    数字必须分键，混键会让两种模式互相覆盖——§9.2 缓存纪律）。"""
+    key_default = evaluate_cache_key(two_stage_vehicle)
+    key_anchored = evaluate_cache_key(two_stage_vehicle, dv_supply="anchored")
+    key_l2 = evaluate_cache_key(two_stage_vehicle, dv_supply="l2")
+    assert key_default == key_anchored  # 缺省模式字节稳定——既有缓存不失效
+    assert key_l2 != key_anchored  # l2 是另一份数字（含弹道积分损失），必须分键

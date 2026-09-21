@@ -13,8 +13,12 @@
   内层自上而下，含 0 级段（OI-36）——纯数值，不碰 OCCT。
 - :mod:`aeroforge.perf.losses` —— 弹道损失 L1（§8.6）：重力 / 气动 / 转向 /
   背压四项参数化经验模型 + 自转加成 + 目标轨道 ΔV 需求表（量级锚定）。
-- :mod:`aeroforge.perf.capacity` —— 各轨道点值运力（OI-38）：固定火箭的载荷
-  二分与 LEO / SSO / GTO / GEO（直送）四目标运力表。
+- :mod:`aeroforge.perf.capacity` —— 各轨道点值运力（OI-38 + §8.10）：固定火箭的
+  载荷二分与 LEO / SSO / GTO / GEO 直送 + TLI / TMI / GEO（GTO+圆化）七目标
+  运力表 + 运力—纬度曲线（OI-23）。
+- :mod:`aeroforge.perf.orbits` —— 轨道精算层（§8.10，M6 轨道层第一片）：Hohmann
+  两脉冲 / 圆化 / 平面变更 / 复合机动矢量合成 / TLI·TMI·逃逸单脉冲射入——
+  C3↔ΔV 双向一致（同一组 μ/r_p 互逆），TMI 必带窗口/相位假设。
 - :mod:`aeroforge.perf.budget` —— ΔV 瀑布组装（OI-23 / §8.8）：理想 ΔV →
   各损失项 → 自转加成 → 总额，闭合容差 1e-6 km/s。
 

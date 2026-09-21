@@ -483,8 +483,9 @@ def _mission_dv_used_km_s(vehicle: Vehicle) -> tuple[float, str, list[str]]:
     orbit = str(vehicle.mission.orbit_type)
     if orbit not in CAPACITY_ORBITS:
         warnings.append(
-            f"Mission.orbit_type={orbit} 不在四目标运力表（LEO/SSO/GTO/GEO）——"
-            "时序运力代价按 LEO 需求核算（TLI/TMI 随 M6 轨道层交付）"
+            f"Mission.orbit_type={orbit} 不在锚定四目标运力表（LEO/SSO/GTO/GEO）——"
+            "时序运力代价按 LEO 需求核算（TLI/TMI/GEO_GTO_CIRC 复合需求的"
+            "「上升段+解析机动」拼合不进时序账，轨道解析见 perf.orbits）"
         )
         orbit = "LEO"
     if vehicle.mission.loss_factors is not None:

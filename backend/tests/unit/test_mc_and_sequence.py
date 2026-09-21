@@ -298,7 +298,16 @@ def test_mc_seed_reproducibility_byte_identical(two_stage_vehicle: Vehicle) -> N
 def test_mc_percentiles_ordered_and_reasonable(two_stage_vehicle: Vehicle) -> None:
     """P5 ≤ P50 ≤ P95（全量）；P50(LEO) ≈ 点值 ±5%（同链路应如此——偏差大即物理分叉）。"""
     result = run_monte_carlo(two_stage_vehicle, samples=_MC_SMOKE_SAMPLES, seed=7)
-    assert set(result.interval) == {"leo_kg", "sso_kg", "gto_kg", "geo_kg", "glow_kg"}
+    assert set(result.interval) == {
+        "leo_kg",
+        "sso_kg",
+        "gto_kg",
+        "geo_kg",
+        "tli_kg",
+        "tmi_kg",
+        "geo_gto_circ_kg",
+        "glow_kg",
+    }
     for key, row in result.interval.items():
         assert row.p5 <= row.p50 <= row.p95, f"{key} 分位序破坏：{row}"
         assert math.isfinite(row.p5) and math.isfinite(row.p95)

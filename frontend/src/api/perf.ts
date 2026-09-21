@@ -204,17 +204,21 @@ function isPerfEvaluateResponse(value: unknown): value is PerfEvaluateResponse {
  *
  * @param vehicle 飞行器参数（Mission 内嵌：目标轨道 / 倾角 / 发射场是 ΔV 的唯一输入）
  * @param mission 任务覆写（给出时替换 `vehicle.mission` 再发送——后端请求体
- *   `extra="forbid"` 且只有 `vehicle` / `mc` 两个键，覆写必须在前端边界完成合并）
+ *   `extra="forbid"` 且只有 `vehicle` / `mc` / `dv_supply` 三个键，覆写必须在前端边界完成合并）
  * @param mc 是否自动投递阶段②的 MC 区间作业（默认 true）
+ * @param dvSupply ΔV 需求供给模式（§8.6，M6 收官片：anchored=锚定表【默认】/
+ *   l2=orbits 精算 + L2 弹道积分损失；缺省保持历史口径）
  */
 export function evaluatePerformance(
   vehicle: Vehicle,
   mission?: Mission,
   mc: boolean = true,
+  dvSupply: PerfEvaluateRequest['dv_supply'] = 'anchored',
 ): Promise<PerfEvaluateResponse> {
   const body: PerfEvaluateRequest = {
     vehicle: mission === undefined ? vehicle : { ...vehicle, mission },
     mc,
+    dv_supply: dvSupply,
   }
   return postJson('/api/perf/evaluate', body, isPerfEvaluateResponse)
 }

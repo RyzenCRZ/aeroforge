@@ -49,20 +49,20 @@ class VehicleSummaryRequest(BaseModel):
 
 
 class OrbitCapacitySummary(BaseModel):
-    """轨道运力摘要（FR-11：当前目标轨道点值 + 四轨道表）。"""
+    """轨道运力摘要（FR-11：当前目标轨道点值 + 七目标运力表）。"""
 
     target_orbit: str = Field(description="当前 Mission 的目标轨道类型（§6.1 OrbitType）")
     target_payload_kg: float | None = Field(
         description=(
-            "当前目标轨道的运力点值（kg）；四轨道表（LEO/SSO/GTO/GEO）覆盖内取表行，"
-            "表外轨道（TLI/TMI/escape/custom）为 null——随 M6 轨道层交付"
+            "当前目标轨道的运力点值（kg）；七目标表（LEO/SSO/GTO/GEO/TLI/TMI/"
+            "GEO_GTO_CIRC）覆盖内取表行，表外轨道（escape/custom）为 null"
         ),
     )
     target_attainable: bool | None = Field(
         description="当前目标轨道是否可达（表外轨道为 null）；不可达时点值记 0"
     )
     payload_by_orbit: dict[str, OrbitPayload] = Field(
-        description="四轨道点值运力表（与 /api/perf/evaluate 的 point.payload_by_orbit 同源同值）"
+        description="七目标点值运力表（与 /api/perf/evaluate 的 point.payload_by_orbit 同源同值）"
     )
 
 
@@ -168,8 +168,9 @@ def vehicle_summary(request: VehicleSummaryRequest) -> VehicleSummaryResponse:
     target_row: OrbitPayload | None = table.get(mission.orbit_type)
     if target_row is None:
         warnings.append(
-            f"目标轨道 {mission.orbit_type} 不在四轨道运力表（LEO/SSO/GTO/GEO）覆盖内——"
-            "当前目标点值为 null（TLI/TMI 随 M6 轨道层交付）"
+            f"目标轨道 {mission.orbit_type} 不在七目标运力表（LEO/SSO/GTO/GEO/"
+            "TLI/TMI/GEO_GTO_CIRC）覆盖内——当前目标点值为 null（单点解析走 "
+            "POST /api/orbits/transfer）"
         )
 
     provenance = {

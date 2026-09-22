@@ -662,6 +662,90 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/optimize/nsga2": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Nsga2
+         * @description 投递 NSGA-II 多目标优化作业（§14；异步——进度按代数上报）。
+         *
+         *     同步段只做校验与入队（规则 1）：参数域硬约束、变量三重校验（路径 / 类别 /
+         *     基线一致性，不合法 422 ``OPTIMIZE_INVALID``）、目标键与规模边界。缺省
+         *     40×20（F9 三变量实测 < 0.5 s，§16 M6 判据「一次优化 < 1 min」）。
+         */
+        post: operations["start_nsga2_api_optimize_nsga2_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/optimize/trade-study": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Trade Study
+         * @description 投递权衡研究作业（§14；方案数 > 20 当场 422，不进作业）。
+         */
+        post: operations["start_trade_study_api_optimize_trade_study_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/optimize/sweep": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Sweep
+         * @description 投递批量扫描作业（§14；轴数 / 范围 / 组合数超限当场 422，不进作业）。
+         */
+        post: operations["start_sweep_api_optimize_sweep_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/optimize/inverse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Inverse
+         * @description 投递逆向设计作业（§14；目标不可达时作业终态 FAILED，``OPTIMIZE_INFEASIBLE``）。
+         */
+        post: operations["start_inverse_api_optimize_inverse_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/export": {
         parameters: {
             query?: never;
@@ -1742,6 +1826,32 @@ export interface components {
             window_assumption: string | null;
         };
         /**
+         * InverseRequest
+         * @description ``POST /api/optimize/inverse`` 的请求体（逆向设计，规格 §14）。
+         */
+        InverseRequest: {
+            /** @description 基线飞行器参数（§6.1 全量；构型方案由此缩放派生） */
+            vehicle: components["schemas"]["Vehicle"];
+            /**
+             * Target Orbit
+             * @description 目标轨道（LEO / GTO / GEO）
+             * @enum {string}
+             */
+            target_orbit: "LEO" | "GTO" | "GEO";
+            /**
+             * Target Payload Kg
+             * @description 目标运力（kg；约束 运力 ≥ 目标，最小 GLOW）
+             */
+            target_payload_kg: number;
+            /**
+             * Dv Supply
+             * @description ΔV 需求供给模式（§8.6）：anchored（缺省，毫秒级）/ l2（每次评估一次积分）
+             * @default anchored
+             * @enum {string}
+             */
+            dv_supply: "anchored" | "l2";
+        };
+        /**
          * JobRecord
          * @description 作业状态快照（跨线程传递的**纯数据**，不含任何几何对象）。
          */
@@ -1785,7 +1895,7 @@ export interface components {
          *     ``integrating → done``（M6 第二片，§8.6——单发积分无分阶段，仅 running/done）。
          * @enum {string}
          */
-        JobStage: "queued" | "meridian" | "solid" | "mesh" | "step" | "export" | "sampling" | "evaluating" | "summarizing" | "integrating" | "done";
+        JobStage: "queued" | "meridian" | "solid" | "mesh" | "step" | "export" | "sampling" | "evaluating" | "summarizing" | "integrating" | "optimizing" | "done";
         /**
          * JobStatus
          * @description §9.3 的作业生命周期状态。
@@ -2257,6 +2367,82 @@ export interface components {
              * @default false
              */
             derived: boolean;
+        };
+        /**
+         * Nsga2Request
+         * @description ``POST /api/optimize/nsga2`` 的请求体（多目标优化，规格 §14）。
+         */
+        Nsga2Request: {
+            /** @description 基线飞行器参数（§6.1 全量；候选由此逐项派生） */
+            vehicle: components["schemas"]["Vehicle"];
+            /**
+             * Variables
+             * @description 优化变量清单（path + kind + base；搜索边界由后端按变量类别推导）
+             */
+            variables: components["schemas"]["OptimizeVariableSpec"][];
+            /**
+             * Population Size
+             * @description 种群规模（缺省 40；范围 4–200）
+             * @default 40
+             */
+            population_size: number;
+            /**
+             * Generations
+             * @description 进化代数（缺省 20；范围 1–100）
+             * @default 20
+             */
+            generations: number;
+            /**
+             * Seed
+             * @description 随机种子（同 seed 同输入两跑 Pareto 前沿逐位一致，§14 可复现）
+             * @default 42
+             */
+            seed: number;
+            /**
+             * Objectives
+             * @description 目标键列表（可组合，非空）：min_glow / max_payload_leo / min_dry_mass——前端片暴露前两个
+             */
+            objectives: ("min_glow" | "max_payload_leo" | "min_dry_mass")[];
+            /**
+             * Dv Supply
+             * @description ΔV 需求供给模式（§8.6）：anchored（缺省，毫秒级）；l2 = 每候选一次弹道积分（~0.1 s）——大种群 × l2 会线性放大作业时长，按需选用
+             * @default anchored
+             * @enum {string}
+             */
+            dv_supply: "anchored" | "l2";
+        };
+        /**
+         * OptimizeJobResponse
+         * @description 优化作业投递的受理回执（形态随 ``/api/perf/trajectory`` 的异步挂点）。
+         */
+        OptimizeJobResponse: {
+            /**
+             * Job Id
+             * @description 优化作业 id：GET /api/jobs/{id} 轮询或 /ws/jobs/{id} 订阅；成功后 metrics = 结果载荷（键随端点：pareto_front / variants / rows / config）
+             */
+            job_id: string;
+        };
+        /**
+         * OptimizeVariableSpec
+         * @description 优化变量声明（前端逐项下发；``base`` 是基线 Vehicle 的当前值）。
+         */
+        OptimizeVariableSpec: {
+            /**
+             * Path
+             * @description 变量路径（跨层共享的 field_path 词汇，§6.3 末注）：stages[i].length_m / stages[i].engine_count / boosters[j].count
+             */
+            path: string;
+            /**
+             * Kind
+             * @description 变量类别：continuous_scale = 长度按比例缩放（取值为无量纲因子）；integer_count = 数量类整数变量（发动机台数 / 助推器数量）
+             * @enum {string}
+             */
+            kind: "continuous_scale" | "integer_count";
+            /**
+             * Base
+             * @description 基线 Vehicle 在该路径上的当前值（后端按其校验一致性，防陈旧请求）
+             */
+            base: number;
         };
         /**
          * OrbitCapacitySummary
@@ -3602,6 +3788,52 @@ export interface components {
             cross_check: components["schemas"]["CrossCheckOutcome"];
         };
         /**
+         * SweepAxisSpec
+         * @description 批量扫描的一个轴（变量 × 范围 × 步数；与前端 ``SweepAxisSpec`` 契约对齐）。
+         */
+        SweepAxisSpec: {
+            /**
+             * Path
+             * @description 变量路径（stages[i].length_m / stages[i].engine_count / boosters[j].count）
+             */
+            path: string;
+            /**
+             * Min
+             * @description 范围下界（continuous_scale 路径 = 缩放因子；integer_count 路径 = 绝对数量）
+             */
+            min: number;
+            /**
+             * Max
+             * @description 范围上界（口径同 min）
+             */
+            max: number;
+            /**
+             * Steps
+             * @description 步数（≥ 2；下界到上界均匀采样）
+             */
+            steps: number;
+        };
+        /**
+         * SweepRequest
+         * @description ``POST /api/optimize/sweep`` 的请求体（批量扫描，规格 §14）。
+         */
+        SweepRequest: {
+            /** @description 基线飞行器参数（§6.1 全量；格点候选由此逐项派生） */
+            vehicle: components["schemas"]["Vehicle"];
+            /**
+             * Axes
+             * @description 扫描轴清单（1–3 轴；组合数 = 各轴取值数的笛卡尔积，≤ 10000）
+             */
+            axes: components["schemas"]["SweepAxisSpec"][];
+            /**
+             * Dv Supply
+             * @description ΔV 需求供给模式（§8.6）：anchored（缺省，毫秒级）/ l2（每格点一次积分）
+             * @default anchored
+             * @enum {string}
+             */
+            dv_supply: "anchored" | "l2";
+        };
+        /**
          * TangentOgiveSegment
          * @description 切线卵形段（§5.3 曲线族，M5）：头锥（工程常用）。
          *
@@ -3903,6 +4135,26 @@ export interface components {
              * @description 推力（N）
              */
             thrust_n: number;
+        };
+        /**
+         * TradeStudyRequest
+         * @description ``POST /api/optimize/trade-study`` 的请求体（权衡研究，规格 §14）。
+         */
+        TradeStudyRequest: {
+            /** @description 基线飞行器参数（§6.1 全量；方案由此逐项派生） */
+            vehicle: components["schemas"]["Vehicle"];
+            /**
+             * Variant Count
+             * @description 方案数（1–20；§14 目标尺度 ≤ 20，超限 422）
+             */
+            variant_count: number;
+            /**
+             * Dv Supply
+             * @description ΔV 需求供给模式（§8.6）：anchored（缺省，毫秒级）/ l2（每方案一次积分）
+             * @default anchored
+             * @enum {string}
+             */
+            dv_supply: "anchored" | "l2";
         };
         /**
          * TrajectoryProgram
@@ -5283,6 +5535,138 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["McResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_nsga2_api_optimize_nsga2_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Nsga2Request"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptimizeJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_trade_study_api_optimize_trade_study_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TradeStudyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptimizeJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_sweep_api_optimize_sweep_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SweepRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptimizeJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_inverse_api_optimize_inverse_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InverseRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptimizeJobResponse"];
                 };
             };
             /** @description Validation Error */

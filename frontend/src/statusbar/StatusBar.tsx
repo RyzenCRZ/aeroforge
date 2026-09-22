@@ -41,6 +41,7 @@ export const JOB_STAGE_TEXT: Record<JobStage, string> = {
   evaluating: 'MC 求值中',
   summarizing: 'MC 统计汇总',
   integrating: '弹道积分中',
+  optimizing: '优化评估中',
   done: '完成',
 }
 

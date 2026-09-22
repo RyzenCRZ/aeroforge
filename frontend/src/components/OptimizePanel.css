@@ -1,0 +1,265 @@
+/* ============================================================================
+ * 右栏「优化与权衡」面板（规格 §14，M6 缺项补做的前端片）。
+ *
+ * 颜色一律引用语义 token（§11.2 / tokens.css）；失败降级提示用
+ * --color-status-error，进行中作业条用 --color-status-warn（与同族面板同口径）。
+ * ==========================================================================*/
+
+.optimize-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ---- 基线构型名 / 作业进行中条 / 失败降级 --------------------------------- */
+
+.optimize-panel__baseline {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.optimize-panel__baseline-note {
+  color: var(--color-text-secondary);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.optimize-panel__job {
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--color-status-warn);
+  border-radius: 6px;
+  color: var(--color-status-warn);
+  font-size: 11px;
+  line-height: 1.6;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.optimize-panel__error {
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--color-status-error);
+  border-radius: 6px;
+  color: var(--color-status-error);
+  font-size: 11px;
+  line-height: 1.6;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.optimize-panel__note {
+  margin: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  line-height: 1.6;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* ---- 四标签（四个能力各一块，同一面板） ----------------------------------- */
+
+.optimize-panel__tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 6px;
+}
+
+.optimize-panel__tab {
+  padding: 3px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.optimize-panel__tab--active {
+  border-color: var(--color-accent);
+  color: var(--color-text-primary);
+}
+
+.optimize-panel__section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 标签切换用 hidden 属性显隐：类选择器会盖掉 UA 的 [hidden] 样式，必须显式补回 */
+.optimize-panel__section[hidden] {
+  display: none;
+}
+
+/* ---- 表单行 / 输入 ------------------------------------------------------- */
+
+.optimize-panel__row {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.optimize-panel__field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.optimize-panel__field input,
+.optimize-panel__field select {
+  width: 90px;
+  padding: 2px 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 12px;
+}
+
+.optimize-panel__checks {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.optimize-panel__check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.optimize-panel__check input[type='checkbox'] {
+  accent-color: var(--color-accent);
+}
+
+.optimize-panel__hint {
+  margin: 0;
+  color: var(--color-text-secondary);
+  text-transform: none;
+  letter-spacing: 0;
+  line-height: 1.6;
+}
+
+.optimize-panel__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* ---- 按钮（vehicle-summary__button 同款口径） ----------------------------- */
+
+.optimize-panel__button {
+  padding: 4px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.optimize-panel__button:hover:not(:disabled) {
+  border-color: var(--color-accent);
+}
+
+.optimize-panel__button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.optimize-panel__button--small {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+/* ---- 结果表（Pareto 前沿 / 权衡对比 / 扫描聚合 / 逆向最小构型） ------------- */
+
+.optimize-panel__result {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.optimize-panel__warnings {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.optimize-panel__warning {
+  color: var(--color-status-warn);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.optimize-panel__table {
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.optimize-panel__table th,
+.optimize-panel__table td {
+  padding: 3px 10px 3px 0;
+  text-align: left;
+  vertical-align: top;
+}
+
+.optimize-panel__table thead th {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.optimize-panel__table tbody th {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.optimize-panel__summary {
+  max-width: 260px;
+  line-height: 1.5;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.optimize-panel__row-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* 行内 provenance 展开区（审计纪律 §14：候选方案必须可溯源） */
+.optimize-panel__prov {
+  border-top: 1px dashed var(--color-border);
+}
+
+.optimize-panel__prov-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 4px 16px;
+  margin: 0;
+}
+
+.optimize-panel__prov-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.optimize-panel__prov-item dd {
+  margin: 0;
+  white-space: nowrap;
+}

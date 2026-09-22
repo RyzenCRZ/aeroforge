@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 
 import { DiagnosticsPanel } from '../components/DiagnosticsPanel'
 import { MeridianEditor } from '../components/MeridianEditor'
+import { OptimizePanel } from '../components/OptimizePanel'
 import { Profile2D } from '../components/Profile2D'
 import { RecoveryPanel } from '../components/RecoveryPanel'
 import { SegmentPanel } from '../components/SegmentPanel'
@@ -136,6 +137,8 @@ export function Workspace() {
         <Profile2D />
         {/* 整箭数据 + 轨道运力（§11.5 布局：右栏 2D 视图组下方，FR-10 / FR-11） */}
         <VehicleSummaryPanel />
+        {/* 优化与权衡（§14 / M6：多目标优化 / 权衡研究 / 批量扫描 / 逆向设计，四标签同一面板） */}
+        <OptimizePanel />
         {/* 回收质量代价（§8.9 / M5：三项分解可解释；未启用时常驻「无代价」提示） */}
         <RecoveryPanel />
       </aside>

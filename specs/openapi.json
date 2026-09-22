@@ -1172,6 +1172,174 @@
         }
       }
     },
+    "/api/optimize/nsga2": {
+      "post": {
+        "tags": [
+          "optimize"
+        ],
+        "summary": "Start Nsga2",
+        "description": "投递 NSGA-II 多目标优化作业（§14；异步——进度按代数上报）。\n\n同步段只做校验与入队（规则 1）：参数域硬约束、变量三重校验（路径 / 类别 /\n基线一致性，不合法 422 ``OPTIMIZE_INVALID``）、目标键与规模边界。缺省\n40×20（F9 三变量实测 < 0.5 s，§16 M6 判据「一次优化 < 1 min」）。",
+        "operationId": "start_nsga2_api_optimize_nsga2_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Nsga2Request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptimizeJobResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/optimize/trade-study": {
+      "post": {
+        "tags": [
+          "optimize"
+        ],
+        "summary": "Start Trade Study",
+        "description": "投递权衡研究作业（§14；方案数 > 20 当场 422，不进作业）。",
+        "operationId": "start_trade_study_api_optimize_trade_study_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TradeStudyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptimizeJobResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/optimize/sweep": {
+      "post": {
+        "tags": [
+          "optimize"
+        ],
+        "summary": "Start Sweep",
+        "description": "投递批量扫描作业（§14；轴数 / 范围 / 组合数超限当场 422，不进作业）。",
+        "operationId": "start_sweep_api_optimize_sweep_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SweepRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptimizeJobResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/optimize/inverse": {
+      "post": {
+        "tags": [
+          "optimize"
+        ],
+        "summary": "Start Inverse",
+        "description": "投递逆向设计作业（§14；目标不可达时作业终态 FAILED，``OPTIMIZE_INFEASIBLE``）。",
+        "operationId": "start_inverse_api_optimize_inverse_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InverseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptimizeJobResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/export": {
       "post": {
         "tags": [
@@ -2928,6 +3096,49 @@
         "title": "InjectionOut",
         "description": "转移射入输出——C3 与 ΔV 成对（OI-22 / §8.10 约束 1）。"
       },
+      "InverseRequest": {
+        "properties": {
+          "vehicle": {
+            "$ref": "#/components/schemas/Vehicle",
+            "description": "基线飞行器参数（§6.1 全量；构型方案由此缩放派生）"
+          },
+          "target_orbit": {
+            "type": "string",
+            "enum": [
+              "LEO",
+              "GTO",
+              "GEO"
+            ],
+            "title": "Target Orbit",
+            "description": "目标轨道（LEO / GTO / GEO）"
+          },
+          "target_payload_kg": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Target Payload Kg",
+            "description": "目标运力（kg；约束 运力 ≥ 目标，最小 GLOW）"
+          },
+          "dv_supply": {
+            "type": "string",
+            "enum": [
+              "anchored",
+              "l2"
+            ],
+            "title": "Dv Supply",
+            "description": "ΔV 需求供给模式（§8.6）：anchored（缺省，毫秒级）/ l2（每次评估一次积分）",
+            "default": "anchored"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "vehicle",
+          "target_orbit",
+          "target_payload_kg"
+        ],
+        "title": "InverseRequest",
+        "description": "``POST /api/optimize/inverse`` 的请求体（逆向设计，规格 §14）。"
+      },
       "JobRecord": {
         "properties": {
           "job_id": {
@@ -3035,6 +3246,7 @@
           "evaluating",
           "summarizing",
           "integrating",
+          "optimizing",
           "done"
         ],
         "title": "JobStage",
@@ -3858,6 +4070,124 @@
         ],
         "title": "MotorParseResult",
         "description": "发动机解析结果（``.eng`` / ``.rse`` 同构）。字段名带 SI 单位后缀。"
+      },
+      "Nsga2Request": {
+        "properties": {
+          "vehicle": {
+            "$ref": "#/components/schemas/Vehicle",
+            "description": "基线飞行器参数（§6.1 全量；候选由此逐项派生）"
+          },
+          "variables": {
+            "items": {
+              "$ref": "#/components/schemas/OptimizeVariableSpec"
+            },
+            "type": "array",
+            "title": "Variables",
+            "description": "优化变量清单（path + kind + base；搜索边界由后端按变量类别推导）"
+          },
+          "population_size": {
+            "type": "integer",
+            "maximum": 200.0,
+            "minimum": 4.0,
+            "title": "Population Size",
+            "description": "种群规模（缺省 40；范围 4–200）",
+            "default": 40
+          },
+          "generations": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Generations",
+            "description": "进化代数（缺省 20；范围 1–100）",
+            "default": 20
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Seed",
+            "description": "随机种子（同 seed 同输入两跑 Pareto 前沿逐位一致，§14 可复现）",
+            "default": 42
+          },
+          "objectives": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "min_glow",
+                "max_payload_leo",
+                "min_dry_mass"
+              ]
+            },
+            "type": "array",
+            "title": "Objectives",
+            "description": "目标键列表（可组合，非空）：min_glow / max_payload_leo / min_dry_mass——前端片暴露前两个"
+          },
+          "dv_supply": {
+            "type": "string",
+            "enum": [
+              "anchored",
+              "l2"
+            ],
+            "title": "Dv Supply",
+            "description": "ΔV 需求供给模式（§8.6）：anchored（缺省，毫秒级）；l2 = 每候选一次弹道积分（~0.1 s）——大种群 × l2 会线性放大作业时长，按需选用",
+            "default": "anchored"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "vehicle",
+          "variables",
+          "objectives"
+        ],
+        "title": "Nsga2Request",
+        "description": "``POST /api/optimize/nsga2`` 的请求体（多目标优化，规格 §14）。"
+      },
+      "OptimizeJobResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id",
+            "description": "优化作业 id：GET /api/jobs/{id} 轮询或 /ws/jobs/{id} 订阅；成功后 metrics = 结果载荷（键随端点：pareto_front / variants / rows / config）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id"
+        ],
+        "title": "OptimizeJobResponse",
+        "description": "优化作业投递的受理回执（形态随 ``/api/perf/trajectory`` 的异步挂点）。"
+      },
+      "OptimizeVariableSpec": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path",
+            "description": "变量路径（跨层共享的 field_path 词汇，§6.3 末注）：stages[i].length_m / stages[i].engine_count / boosters[j].count"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "continuous_scale",
+              "integer_count"
+            ],
+            "title": "Kind",
+            "description": "变量类别：continuous_scale = 长度按比例缩放（取值为无量纲因子）；integer_count = 数量类整数变量（发动机台数 / 助推器数量）"
+          },
+          "base": {
+            "type": "number",
+            "title": "Base",
+            "description": "基线 Vehicle 在该路径上的当前值（后端按其校验一致性，防陈旧请求）"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "path",
+          "kind",
+          "base"
+        ],
+        "title": "OptimizeVariableSpec",
+        "description": "优化变量声明（前端逐项下发；``base`` 是基线 Vehicle 的当前值）。"
       },
       "OrbitCapacitySummary": {
         "properties": {
@@ -6216,6 +6546,76 @@
         "title": "StageSizing",
         "description": "单级（芯级串联链）的求解结果。"
       },
+      "SweepAxisSpec": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path",
+            "description": "变量路径（stages[i].length_m / stages[i].engine_count / boosters[j].count）"
+          },
+          "min": {
+            "type": "number",
+            "title": "Min",
+            "description": "范围下界（continuous_scale 路径 = 缩放因子；integer_count 路径 = 绝对数量）"
+          },
+          "max": {
+            "type": "number",
+            "title": "Max",
+            "description": "范围上界（口径同 min）"
+          },
+          "steps": {
+            "type": "integer",
+            "minimum": 2.0,
+            "title": "Steps",
+            "description": "步数（≥ 2；下界到上界均匀采样）"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "path",
+          "min",
+          "max",
+          "steps"
+        ],
+        "title": "SweepAxisSpec",
+        "description": "批量扫描的一个轴（变量 × 范围 × 步数；与前端 ``SweepAxisSpec`` 契约对齐）。"
+      },
+      "SweepRequest": {
+        "properties": {
+          "vehicle": {
+            "$ref": "#/components/schemas/Vehicle",
+            "description": "基线飞行器参数（§6.1 全量；格点候选由此逐项派生）"
+          },
+          "axes": {
+            "items": {
+              "$ref": "#/components/schemas/SweepAxisSpec"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Axes",
+            "description": "扫描轴清单（1–3 轴；组合数 = 各轴取值数的笛卡尔积，≤ 10000）"
+          },
+          "dv_supply": {
+            "type": "string",
+            "enum": [
+              "anchored",
+              "l2"
+            ],
+            "title": "Dv Supply",
+            "description": "ΔV 需求供给模式（§8.6）：anchored（缺省，毫秒级）/ l2（每格点一次积分）",
+            "default": "anchored"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "vehicle",
+          "axes"
+        ],
+        "title": "SweepRequest",
+        "description": "``POST /api/optimize/sweep`` 的请求体（批量扫描，规格 §14）。"
+      },
       "TangentOgiveSegment": {
         "properties": {
           "length": {
@@ -6678,6 +7078,38 @@
         ],
         "title": "ThrustPoint",
         "description": "推力曲线上的一个点（已统一为 SI 单位）。"
+      },
+      "TradeStudyRequest": {
+        "properties": {
+          "vehicle": {
+            "$ref": "#/components/schemas/Vehicle",
+            "description": "基线飞行器参数（§6.1 全量；方案由此逐项派生）"
+          },
+          "variant_count": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Variant Count",
+            "description": "方案数（1–20；§14 目标尺度 ≤ 20，超限 422）"
+          },
+          "dv_supply": {
+            "type": "string",
+            "enum": [
+              "anchored",
+              "l2"
+            ],
+            "title": "Dv Supply",
+            "description": "ΔV 需求供给模式（§8.6）：anchored（缺省，毫秒级）/ l2（每方案一次积分）",
+            "default": "anchored"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "vehicle",
+          "variant_count"
+        ],
+        "title": "TradeStudyRequest",
+        "description": "``POST /api/optimize/trade-study`` 的请求体（权衡研究，规格 §14）。"
       },
       "TrajectoryProgram": {
         "properties": {

@@ -17,6 +17,7 @@ import hashlib
 import json
 import shutil
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
@@ -42,6 +43,10 @@ ARTIFACT_METRICS = "metrics.json"
 ARTIFACT_PROVENANCE = "provenance.json"
 ARTIFACT_EVALUATE = "evaluate.json"
 ARTIFACT_MC = "mc.json"
+# 优化候选评估产物（M6 §14：优化过程必须复用缓存且每候选带 provenance）——
+# 单个候选 Vehicle 的目标量（GLOW / 干重 / LEO 运力 / 约束轨道运力）缓存，
+# 供 NSGA-II / 批量扫描 / 权衡研究在同参数候选上直接命中（§14 约束 1）。
+ARTIFACT_OPTIMIZE = "optimize.json"
 
 # 多格式导出产物（§5.8，M5 第三片）：几何格式落在构建键的 export/ 子目录，
 # 报告类落在 report-<hash> 键的 export/ 子目录——同一逻辑名在两种键下都经
@@ -68,6 +73,7 @@ ALLOWED_ARTIFACTS: frozenset[str] = frozenset(
         ARTIFACT_PROVENANCE,
         ARTIFACT_EVALUATE,
         ARTIFACT_MC,
+        ARTIFACT_OPTIMIZE,
         ARTIFACT_EXPORT_STEP,
         ARTIFACT_EXPORT_IGES,
         ARTIFACT_EXPORT_STL,
@@ -87,6 +93,7 @@ ARTIFACT_MEDIA_TYPES: dict[str, str] = {
     ARTIFACT_PROVENANCE: "application/json",
     ARTIFACT_EVALUATE: "application/json",
     ARTIFACT_MC: "application/json",
+    ARTIFACT_OPTIMIZE: "application/json",
     ARTIFACT_EXPORT_STEP: "application/step",
     ARTIFACT_EXPORT_IGES: "model/iges",
     ARTIFACT_EXPORT_STL: "model/stl",
@@ -226,6 +233,33 @@ def mc_cache_key(vehicle: Vehicle, samples: int, seed: int) -> str:
         ).encode("utf-8")
     ).hexdigest()
     return f"perf-mc-{digest}"
+
+
+def optimize_cache_key(
+    vehicle: Vehicle,
+    *,
+    dv_supply: str = "anchored",
+    extra_orbits: Sequence[str] = (),
+) -> str:
+    """优化候选评估（§14 M6）的缓存键：``perf-optimize-<sha256>``。
+
+    与 :func:`evaluate_cache_key` 同构（canonical + SPEC_VERSION，``\\x00`` 防拼接
+    碰撞；``perf-`` 前缀与几何键区分；不含几何 kernel 版本——纯数值链）。键输入
+    在 Vehicle canonical 之外追加**候选评估的口径分量**：
+
+    - ``dv_supply`` 仅非缺省时进键（同 :func:`evaluate_cache_key` 的字节稳定纪律——
+      缺省 ``anchored`` 的键与历史形态一致）；
+    - ``extra_orbits``（逆向设计的约束轨道）排序后进键——LEO 运力恒算并存储，
+      约束轨道 ≠ LEO 时追加该行，同构型的 NSGA-II 与逆向设计共享同一份候选缓存。
+    """
+    parts = [vehicle_canonical_json(vehicle)]
+    if dv_supply != "anchored":
+        parts.append(f"dv_supply={dv_supply}")
+    if extra_orbits:
+        parts.append("orbits=" + ",".join(sorted(set(extra_orbits))))
+    parts.append(SPEC_VERSION)
+    digest = hashlib.sha256("\x00".join(parts).encode("utf-8")).hexdigest()
+    return f"perf-optimize-{digest}"
 
 
 def report_cache_key(vehicle: Vehicle) -> str:
@@ -443,6 +477,31 @@ class ArtifactStore:
         流入界面的代价远高于重算一次秒级 MC 的代价）。
         """
         path = self.dir_for(key) / ARTIFACT_MC
+        if not path.is_file():
+            return None
+        try:
+            payload: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
+        return payload
+
+    def load_optimize(self, key: str) -> dict[str, Any] | None:
+        """读取优化候选评估缓存（``optimize.json``，§14）；未缓存 / 损坏返回 ``None``。
+
+        损坏按未命中处理并重算覆盖（同 :meth:`load_evaluate` 哲学：候选评估是
+        毫秒级纯数值，重算代价远低于把损坏 JSON 的 ``None`` 当成有效目标值）。
+        命中语义：同一候选 Vehicle（canonical JSON 同键）的目标量直接复用，
+        NSGA-II / 权衡 / 扫描 / 逆向在同参数候选上不重算（§14 约束 1）。
+        """
+        return self._load_json_atomic_cached(key, ARTIFACT_OPTIMIZE)
+
+    def save_optimize(self, key: str, payload: dict[str, Any]) -> None:
+        """写入优化候选评估缓存（原子写，同 :meth:`save_evaluate` 哲学）。"""
+        self._save_json_atomic(key, ARTIFACT_OPTIMIZE, payload)
+
+    def _load_json_atomic_cached(self, key: str, logical_name: str) -> dict[str, Any] | None:
+        """``load_evaluate`` / ``load_mc`` / ``load_optimize`` 共用的损坏容错读取。"""
+        path = self.dir_for(key) / logical_name
         if not path.is_file():
             return None
         try:

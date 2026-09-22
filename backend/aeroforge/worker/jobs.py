@@ -41,7 +41,7 @@ import uuid
 from concurrent.futures import ProcessPoolExecutor
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field
 
@@ -74,6 +74,11 @@ from aeroforge.geometry.revolve import (
     measure,
 )
 from aeroforge.geometry.validate import validate_solid
+from aeroforge.optimize import OptimizeCancelled
+from aeroforge.optimize.inverse import InverseRequest, run_inverse
+from aeroforge.optimize.nsga2 import Nsga2Request, run_nsga2
+from aeroforge.optimize.sweep import SweepRequest, run_sweep
+from aeroforge.optimize.trade_study import TradeStudyRequest, run_trade_study
 from aeroforge.params.schema import Vehicle
 from aeroforge.perf import mc as mc_module
 from aeroforge.perf.mc import DEFAULT_SAMPLES, MAX_SAMPLES, MIN_SAMPLES, MCCancelled
@@ -109,6 +114,7 @@ class JobStage(StrEnum):
     EVALUATING = "evaluating"
     SUMMARIZING = "summarizing"
     INTEGRATING = "integrating"
+    OPTIMIZING = "optimizing"
     DONE = "done"
 
 
@@ -124,6 +130,7 @@ _STAGE_PROGRESS: dict[JobStage, float] = {
     JobStage.EVALUATING: 0.1,
     JobStage.SUMMARIZING: 0.95,
     JobStage.INTEGRATING: 0.1,
+    JobStage.OPTIMIZING: 0.1,
     JobStage.DONE: 1.0,
 }
 
@@ -780,6 +787,18 @@ class ComputeJobRunner:
         )
         return record
 
+    def submit_optimize(self, kind: str, spec_json: str) -> JobRecord:
+        """入队一个优化作业（§14：nsga2 / trade-study / sweep / inverse）。
+
+        ⚠ 只做微秒级簿记与入队——候选评估链（实测 ~0.2 ms/次，见
+        :mod:`aeroforge.optimize` 模块注）在协调线程顺序执行：按 §9.1 惯例走
+        作业体系（进度按代数 / 批次上报、可取消），事件循环不被独占。请求
+        校验（变量 / 上限）已在 API 层同步完成，此处只做执行。
+        """
+        record = self.board.create()
+        self._queue.put(("optimize", record.job_id, kind, spec_json))
+        return record
+
     def get(self, job_id: str) -> JobRecord | None:
         return self.board.get(job_id)
 
@@ -815,6 +834,14 @@ class ComputeJobRunner:
                     self._execute_trajectory(job_id, vehicle_json, program_json, float(dt_s))
                 except BaseException as exc:
                     self._settle_failure(job_id, exc, default_code="TRAJECTORY_FAILED")
+            elif item[0] == "optimize":
+                _, job_id, kind, spec_json = item
+                try:
+                    self._execute_optimize(job_id, str(kind), str(spec_json))
+                except BaseException as exc:
+                    self._settle_failure(
+                        job_id, exc, default_code="OPTIMIZE_FAILED", respect_domain_code=True
+                    )
             else:
                 _, job_id, vehicle_json, samples, seed = item
                 try:
@@ -934,24 +961,98 @@ class ComputeJobRunner:
             timings_ms={"integrate_ms": round((time.perf_counter() - started) * 1000.0, 2)},
         )
 
+    #: 优化作业类型 → (请求模型, 运行入口)（§14 四能力；kind 即端点路径尾段）。
+    _OPTIMIZE_RUNNERS: ClassVar[dict[str, tuple[type[BaseModel], Any]]] = {
+        "nsga2": (Nsga2Request, run_nsga2),
+        "trade-study": (TradeStudyRequest, run_trade_study),
+        "sweep": (SweepRequest, run_sweep),
+        "inverse": (InverseRequest, run_inverse),
+    }
+
+    def _execute_optimize(self, job_id: str, kind: str, spec_json: str) -> None:
+        """优化作业（§14）：协调线程内顺序评估，进度按代数 / 批次上报。
+
+        请求模型与运行入口按 ``kind`` 分派（类属性 :data:`_OPTIMIZE_RUNNERS`）；
+        结果载荷（pareto_front / variants / rows / config + warnings + provenance）
+        原样进 ``metrics`` 下发（前端契约键，见各 run_* 模块）。
+        """
+        entry = self._OPTIMIZE_RUNNERS.get(kind)
+        if entry is None:  # pragma: no cover - kind 由 API 层固定下发，防御分支
+            raise ValueError(f"未知优化作业类型：{kind}")
+        spec_model, runner = entry
+        started = time.perf_counter()
+
+        request = spec_model.model_validate_json(spec_json)
+        self.board.update(
+            job_id,
+            status=JobStatus.RUNNING,
+            stage=JobStage.OPTIMIZING,
+            progress=_STAGE_PROGRESS[JobStage.OPTIMIZING],
+            started_at=_now(),
+        )
+
+        def _on_progress(done: int, total: int) -> None:
+            fraction = done / total if total else 1.0
+            self.board.update(
+                job_id,
+                stage=JobStage.OPTIMIZING,
+                progress=_STAGE_PROGRESS[JobStage.OPTIMIZING] + (0.85 * fraction),
+            )
+
+        def _should_cancel() -> bool:
+            event = self.board.cancel_event(job_id)
+            return event is not None and event.is_set()
+
+        result = runner(
+            request, store=self.store, on_progress=_on_progress, should_cancel=_should_cancel
+        )
+        metrics: dict[str, Any] = {**result, "optimize_job_id": job_id}
+
+        self.board.update(
+            job_id,
+            status=JobStatus.SUCCEEDED,
+            stage=JobStage.DONE,
+            progress=1.0,
+            metrics=metrics,
+            finished_at=_now(),
+            timings_ms={"optimize_ms": round((time.perf_counter() - started) * 1000.0, 2)},
+        )
+
     def _settle_failure(
-        self, job_id: str, exc: BaseException, *, default_code: str = "MC_FAILED"
+        self,
+        job_id: str,
+        exc: BaseException,
+        *,
+        default_code: str = "MC_FAILED",
+        respect_domain_code: bool = False,
     ) -> None:
         """把异常收敛为作业终态（取消 / 域错误 / 未预期异常）。
 
         ``default_code`` 是作业类型对应的兜底错误码（MC 域维持既有
-        ``MC_FAILED``；L2 弹道积分为 ``TRAJECTORY_FAILED``，→ 422）；域异常
-        自带的消息与 suggestion 原样透传（§10.3：可操作，不降级为"未知错误"）。
+        ``MC_FAILED``；L2 弹道积分为 ``TRAJECTORY_FAILED``；优化为
+        ``OPTIMIZE_FAILED``）。域异常自带的消息与 suggestion 原样透传（§10.3：
+        可操作，不降级为"未知错误"）；``respect_domain_code=True``（优化域）时
+        域异常的**错误码也保留**——``OPTIMIZE_INFEASIBLE``（逆向不硬凑）与
+        ``OPTIMIZE_FAILED`` 语义不同，不得被兜底码覆盖。
         """
         stage = self.board.stage_of(job_id)
-        if isinstance(exc, (_Cancelled, MCCancelled)):
+        if isinstance(exc, (_Cancelled, MCCancelled, OptimizeCancelled)):
+            if isinstance(exc, OptimizeCancelled):
+                message = "优化作业已按请求取消（代 / 批边界生效；结果未落盘，无半成品）"
+                suggestion = "如需重试，请重新提交优化请求"
+            else:
+                message = "MC 作业已按请求取消（块边界生效；结果未落盘，无半成品）"
+                suggestion = "如需重试，请重新提交 /api/uncertainty/mc 或再触发一次 evaluate"
             error = ErrorBody(
                 code="JOB_CANCELLED",
                 stage=stage.value,
-                message="MC 作业已按请求取消（块边界生效；结果未落盘，无半成品）",
-                suggestion="如需重试，请重新提交 /api/uncertainty/mc 或再触发一次 evaluate",
+                message=message,
+                suggestion=suggestion,
             )
             status = JobStatus.CANCELLED
+        elif isinstance(exc, AeroForgeError) and respect_domain_code:
+            error = to_error_body(exc).model_copy(update={"stage": stage.value})
+            status = JobStatus.FAILED
         else:
             body = to_error_body(exc)
             error = body.model_copy(update={"stage": stage.value, "code": default_code})

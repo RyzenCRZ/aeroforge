@@ -197,6 +197,21 @@ class ExportValidationError(AeroForgeError):
     stage = "export"
 
 
+class OptimizeError(AeroForgeError):
+    """优化域错误（规格 §14）：变量路径非法 / 方案数与组合数超限 / 逆向目标不可达。
+
+    与 :class:`ParamsError` 分开：参数**结构**合法性归参数域（§6.3），这里是
+    「优化问题本身不成立或超出规格承诺的尺度」——权衡方案 > 20、批量组合 > 10⁴
+    （§14 目标尺度）、逆向目标在给定自由度上不可达（**不硬凑**，如实报错）。
+    阶段标签 ``optimize`` 定位到优化层；``code`` 按情形细分：
+    ``OPTIMIZE_INVALID``（请求不合法，同步 422）/ ``OPTIMIZE_INFEASIBLE``
+    （逆向目标不可达，作业终态 FAILED → 422 语义）。
+    """
+
+    code = "OPTIMIZE_INVALID"
+    stage = "optimize"
+
+
 def to_error_body(exc: BaseException) -> ErrorBody:
     """把任意异常收敛为 §10.3 响应体。"""
     if isinstance(exc, AeroForgeError):

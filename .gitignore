@@ -27,6 +27,11 @@ frontend/coverage/
 # ── 桌面打包产物 ──────────────────────────────────────────────────────────
 # PyInstaller onedir 输出（数百 MB 二进制），可由 desktop/packaging/aeroforge.spec 重建（规格 §16.2）。
 dist-desktop/
+# NSIS 安装包输出（数百 MB 安装器），可由 desktop/packaging/aeroforge.nsi 重建（规格 §16 M7）。
+desktop/packaging/dist/
+
+# AI 助手运行时配置（OI-10：用户自填 base_url / api_key，明文密钥不入库）。
+data/assistant.json
 
 # ── 运行时噪声 ────────────────────────────────────────────────────────────
 # Chromium / WebView2 子进程会把自身日志写到当前工作目录，非本工程产物（实测为搜狗输入法

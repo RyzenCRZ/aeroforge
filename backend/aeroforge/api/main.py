@@ -22,6 +22,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from aeroforge import __version__
 from aeroforge.api import (
     artifacts,
+    assistant,
     catalog,
     export,
     geometry,
@@ -111,6 +112,8 @@ app.include_router(uncertainty.router)
 app.include_router(optimize.router)
 app.include_router(export.router)
 app.include_router(vehicle.router)
+# AI 助手（§10.2 / OI-10，可选通道）：REST 注册在此；/ws/assistant 随路由器挂载。
+app.include_router(assistant.router)
 
 
 def _error_response(status_code: int, body: ErrorBody) -> JSONResponse:

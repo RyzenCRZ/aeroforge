@@ -34,7 +34,7 @@ function isStringList(value: unknown): value is string[] {
 }
 
 /** 六字段裁定（§6.3 / §6.5 同形）。`field_path` 是「路径 → 控件」映射的键，必须校验。 */
-function isDiagnostic(value: unknown): value is Diagnostic {
+export function isDiagnostic(value: unknown): value is Diagnostic {
   if (!isRecord(value)) return false
   return (
     (value.level === 'hard' || value.level === 'warning') &&
@@ -45,7 +45,7 @@ function isDiagnostic(value: unknown): value is Diagnostic {
   )
 }
 
-function isRuleOutcome(value: unknown): value is RuleOutcome {
+export function isRuleOutcome(value: unknown): value is RuleOutcome {
   if (!isRecord(value)) return false
   return (
     typeof value.code === 'string' &&

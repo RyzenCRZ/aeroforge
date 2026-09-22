@@ -102,6 +102,12 @@ interface VehicleState {
   setSourcedFields: (map: Record<string, string>) => void
   /** 用户改动某字段：该字段出处转为「用户修改」（§11.5 ⑤ 规则 5）。 */
   markUserModified: (path: string) => void
+  /**
+   * 整包替换当前参数（AI 助手 diff **经用户确认后**的唯一写入口，§10.2 确认制），
+   * 被改字段出处标注为「用户修改」，并触发防抖诊断（既有建模刷新通路）。
+   * 没有用户确认的调用不存在——AI 永不静默改参数。
+   */
+  applyCandidate: (vehicle: Vehicle, changedPaths: readonly string[]) => void
   requestDiagnose: () => void
   /** 追加一组并联助推器（OI-36：侧级骨架 = 芯一级克隆，级号改 0）。 */
   addBooster: () => void
@@ -187,6 +193,13 @@ export const useVehicleStore = create<VehicleState>((set, get) => {
 
     markUserModified: (path) => {
       set({ sourcedFields: { ...get().sourcedFields, [path]: USER_MODIFIED_SOURCE } })
+    },
+
+    applyCandidate: (vehicle, changedPaths) => {
+      const sourcedFields = { ...get().sourcedFields }
+      for (const path of changedPaths) sourcedFields[path] = USER_MODIFIED_SOURCE
+      set({ vehicle, sourcedFields })
+      scheduler.schedule(runDiagnose)
     },
 
     requestDiagnose: () => {

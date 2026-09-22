@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 
+import { ChatPanel } from '../components/ChatPanel'
 import { DiagnosticsPanel } from '../components/DiagnosticsPanel'
 import { MeridianEditor } from '../components/MeridianEditor'
 import { OptimizePanel } from '../components/OptimizePanel'
@@ -142,6 +143,8 @@ export function Workspace() {
         {/* 回收质量代价（§8.9 / M5：三项分解可解释；未启用时常驻「无代价」提示） */}
         <RecoveryPanel />
       </aside>
+      {/* AI 助手（§10.2 / OI-10 / M7：右下角悬浮入口，未配置自动隐藏，三降级收敛为事件） */}
+      <ChatPanel />
     </div>
   )
 }

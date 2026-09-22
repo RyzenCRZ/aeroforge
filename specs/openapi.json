@@ -1424,6 +1424,70 @@
         }
       }
     },
+    "/api/assistant/status": {
+      "get": {
+        "tags": [
+          "assistant"
+        ],
+        "summary": "Assistant Status",
+        "description": "AI 通道状态（前端据 ``configured=false`` 隐藏入口——§10.2 降级①机检）。",
+        "operationId": "assistant_status_api_assistant_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/assistant/config": {
+      "post": {
+        "tags": [
+          "assistant"
+        ],
+        "summary": "Set Assistant Config",
+        "description": "写入 AI 通道配置并返回**写入后**的状态。\n\n日志纪律：只记 base_url / model / 是否已配置——``api_key`` 的明文\n**不允许**出现在任何日志行（结构化排障靠 status 的脱敏形态即可）。",
+        "operationId": "set_assistant_config_api_assistant_config_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssistantConfigRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/health": {
       "get": {
         "summary": "Health",
@@ -1504,6 +1568,114 @@
         ],
         "title": "ArcSegment",
         "description": "球冠段（圆弧）：半径端半径 R 与轴向跨度 H 唯一确定球半径 ρ=(R²+H²)/2H。"
+      },
+      "AssistantConfigRequest": {
+        "properties": {
+          "base_url": {
+            "type": "string",
+            "maxLength": 2048,
+            "title": "Base Url",
+            "description": "OpenAI 兼容服务地址，如 https://api.example.com/v1",
+            "default": ""
+          },
+          "model": {
+            "type": "string",
+            "maxLength": 256,
+            "title": "Model",
+            "description": "模型名，如 gpt-4o / deepseek-chat",
+            "default": ""
+          },
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key",
+            "description": "null=保留现有；空串=清除；非空=设置（只写，永不回传）"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "AssistantConfigRequest",
+        "description": "``POST /api/assistant/config`` 的请求体（OI-10 三项）。\n\n``api_key`` 语义：``null`` = 保留现有值（编辑 base_url / model 不必重填\n密钥）；空串 = 清除（回到未配置）；非空 = 设置新值。**没有**读回明文的\n通路——设置界面显示的是 status 的脱敏形态。"
+      },
+      "AssistantStatusResponse": {
+        "properties": {
+          "configured": {
+            "type": "boolean",
+            "title": "Configured",
+            "description": "是否已启用（三项齐备；未启用 = §10.2 降级①）"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url",
+            "description": "当前 base_url（非敏感，供设置界面回显）"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model",
+            "description": "当前模型名（非敏感）"
+          },
+          "api_key_masked": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key Masked",
+            "description": "密钥脱敏形态（sk-…abcd）；未设置时为 null"
+          },
+          "reachable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reachable",
+            "description": "最近一次对话的连通性标记；null = 从未尝试（惰性，不主动探测、不阻塞启动）"
+          },
+          "config_file": {
+            "type": "string",
+            "title": "Config File",
+            "description": "配置文件路径（data/assistant.json，§15）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "configured",
+          "base_url",
+          "model",
+          "api_key_masked",
+          "reachable",
+          "config_file"
+        ],
+        "title": "AssistantStatusResponse",
+        "description": "``GET /api/assistant/status`` 与 ``POST /api/assistant/config`` 的响应体。\n\n⚠ 任何字段都**不携带明文 api_key**（脱敏形态见 ``api_key_masked``）。"
       },
       "AvailabilityOut": {
         "properties": {

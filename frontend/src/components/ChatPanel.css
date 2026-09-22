@@ -1,0 +1,457 @@
+/* ============================================================================
+ * AI 助手 ChatPanel（规格 §10.2 / OI-10 / §11 行 1894）。
+ *
+ * 右下角悬浮按钮 + 对话面板 + 设置表单 + 结构化块（diff / 诊断 / 降级提示）。
+ * 颜色一律引用语义 token（§11.2 / tokens.css，ADR-013 禁字面色值）；
+ * 降级 / 错误用 --color-status-warn / --color-status-error 区分（§10.2 三降级）。
+ * ==========================================================================*/
+
+/* ---- 悬浮入口 ------------------------------------------------------------- */
+
+.chat-fab {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 40;
+}
+
+.chat-fab--hidden {
+  /* 未配置（OI-10 降级①）：入口隐藏——机检锚点是类名，不是 visibility 抖动 */
+  display: none;
+}
+
+.chat-fab__button {
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--color-accent);
+  border-radius: 50%;
+  background-color: var(--color-bg-surface);
+  color: var(--color-accent);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.chat-fab__button:hover {
+  background-color: var(--color-accent);
+  color: var(--color-bg-app);
+}
+
+/* ---- 对话面板 -------------------------------------------------------------- */
+
+.chat-panel {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  width: 380px;
+  max-width: calc(100vw - 32px);
+  height: 520px;
+  max-height: calc(100vh - 32px);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.chat-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.chat-panel__title {
+  margin: 0;
+  font-size: 13px;
+}
+
+.chat-panel__actions {
+  display: flex;
+  gap: 6px;
+}
+
+.chat-panel__action {
+  padding: 3px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background-color: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.chat-panel__action:hover {
+  border-color: var(--color-accent);
+  color: var(--color-text-primary);
+}
+
+.chat-panel__messages {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  overflow-y: auto;
+}
+
+.chat-panel__hint {
+  margin: auto 0;
+  color: var(--color-text-secondary);
+  text-align: center;
+  line-height: 1.6;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.chat-panel__input {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--color-border);
+}
+
+.chat-panel__input input {
+  flex: 1;
+}
+
+.chat-panel__input button {
+  padding: 4px 12px;
+  border: 1px solid var(--color-accent);
+  border-radius: 6px;
+  background-color: transparent;
+  color: var(--color-accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chat-panel__input button:disabled {
+  border-color: var(--color-border);
+  color: var(--color-text-secondary);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.chat-panel__input button:hover:not(:disabled) {
+  background-color: var(--color-accent);
+  color: var(--color-bg-app);
+}
+
+/* ---- AI 设置表单（OI-10：base_url / api_key / model，key 只写不回传） ------ */
+
+.chat-config {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.chat-config__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chat-config__field input {
+  padding: 4px 8px;
+}
+
+.chat-config__error {
+  margin: 0;
+  color: var(--color-status-error);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.chat-config__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.chat-config__actions button {
+  padding: 3px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background-color: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chat-config__actions button:hover:not(:disabled) {
+  border-color: var(--color-accent);
+}
+
+.chat-config__actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.chat-config__hint {
+  margin: 0;
+  color: var(--color-text-secondary);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* ---- 消息行 ---------------------------------------------------------------- */
+
+.chat-message {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 92%;
+}
+
+.chat-message--user {
+  align-self: flex-end;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px 10px 2px 10px;
+  background-color: var(--color-bg-surface);
+}
+
+.chat-message--assistant {
+  align-self: flex-start;
+}
+
+.chat-message__text {
+  margin: 0;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---- 参数修改建议（确认制：确认前不应用，OI-10 / §10.2） ------------------- */
+
+.chat-diff {
+  padding: 8px 10px;
+  border: 1px solid var(--color-accent);
+  border-radius: 8px;
+  background-color: var(--color-bg-surface);
+}
+
+.chat-diff--resolved {
+  border-color: var(--color-border);
+  opacity: 0.75;
+}
+
+.chat-diff__title {
+  margin: 0 0 6px;
+  color: var(--color-accent);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.chat-diff__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chat-diff__row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.chat-diff__path {
+  color: var(--color-text-primary);
+}
+
+.chat-diff__arrow,
+.chat-diff__sep {
+  color: var(--color-text-secondary);
+}
+
+.chat-diff__old {
+  color: var(--color-status-warn);
+  text-decoration: line-through;
+}
+
+.chat-diff__new {
+  color: var(--color-status-ok);
+}
+
+.chat-diff__resolved {
+  margin: 6px 0 0;
+  color: var(--color-text-secondary);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.chat-diff__actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.chat-diff__actions button {
+  padding: 3px 10px;
+  border: 1px solid var(--color-accent);
+  border-radius: 6px;
+  background-color: transparent;
+  color: var(--color-accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chat-diff__actions button:last-child {
+  border-color: var(--color-border);
+  color: var(--color-text-secondary);
+}
+
+.chat-diff__actions button:hover:first-child {
+  background-color: var(--color-accent);
+  color: var(--color-bg-app);
+}
+
+/* ---- 诊断块（零 LLM 本地规则集，结论全部来自后端） ------------------------- */
+
+.chat-diagnosis {
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background-color: var(--color-bg-surface);
+}
+
+.chat-diagnosis__title {
+  margin: 0 0 6px;
+  color: var(--color-text-secondary);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.chat-diagnosis__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chat-diagnosis__item {
+  border-left: 2px solid var(--color-border);
+  padding-left: 8px;
+}
+
+.chat-diagnosis__item--error {
+  border-left-color: var(--color-status-error);
+}
+
+.chat-diagnosis__item--warn {
+  border-left-color: var(--color-status-warn);
+}
+
+.chat-diagnosis__item--info {
+  border-left-color: var(--color-accent-alt);
+}
+
+.chat-diagnosis__code {
+  font-size: 11px;
+  color: var(--color-text-primary);
+}
+
+.chat-diagnosis__message,
+.chat-diagnosis__suggestion {
+  margin: 2px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.chat-diagnosis__suggestion {
+  color: var(--color-text-secondary);
+}
+
+.chat-diagnosis__hint {
+  margin: 0;
+  color: var(--color-text-secondary);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.chat-diagnosis__rules,
+.chat-diagnosis__note {
+  margin: 6px 0 0;
+  color: var(--color-text-secondary);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* ---- 降级 / 错误提示块（§10.2 三降级收敛为事件） ---------------------------- */
+
+.chat-notice {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--color-status-warn);
+}
+
+.chat-notice--degraded {
+  color: var(--color-status-warn);
+}
+
+.chat-notice--error {
+  border-color: var(--color-status-error);
+  color: var(--color-status-error);
+}
+
+.chat-notice__message,
+.chat-notice__suggestion {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.chat-notice__suggestion {
+  color: var(--color-text-secondary);
+}
+
+/* ---- 未配置时的可见引导（悬浮按钮已隐藏，但需给出配置入口） ----------------- */
+
+.chat-degraded-hint {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-status-warn);
+  border-radius: 10px;
+}
+
+.chat-degraded-hint p {
+  margin: 0;
+  color: var(--color-status-warn);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.chat-degraded-hint button {
+  padding: 3px 10px;
+  border: 1px solid var(--color-status-warn);
+  border-radius: 6px;
+  background-color: transparent;
+  color: var(--color-status-warn);
+  cursor: pointer;
+}
+
+.chat-degraded-hint button:hover {
+  background-color: var(--color-status-warn);
+  color: var(--color-bg-app);
+}

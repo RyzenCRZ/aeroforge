@@ -71,6 +71,17 @@ def config_file() -> Path:
     return data_root().parent / "config.toml"
 
 
+def assistant_config_file() -> Path:
+    """AI 助手配置文件路径（规格 §10.2 OI-10：``data/assistant.json``）。
+
+    刻意**独立于** ``config.toml``：那份文件归阈值体系所有（键集合受
+    :mod:`aeroforge.params.thresholds` 门禁约束，且会被 §13.8 的夹具校验整体验证）；
+    AI 配置含 ``api_key`` 敏感项，混进用户可随意手工编辑的 TOML 里只会扩大暴露面。
+    同样从 :func:`data_root` 派生——测试重定向数据根时本路径自动进临时区。
+    """
+    return data_root() / "assistant.json"
+
+
 def ensure_dir(path: Path) -> Path:
     """确保目录存在并返回它。"""
     path.mkdir(parents=True, exist_ok=True)

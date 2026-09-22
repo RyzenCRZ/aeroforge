@@ -795,6 +795,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/assistant/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Assistant Status
+         * @description AI 通道状态（前端据 ``configured=false`` 隐藏入口——§10.2 降级①机检）。
+         */
+        get: operations["assistant_status_api_assistant_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Assistant Config
+         * @description 写入 AI 通道配置并返回**写入后**的状态。
+         *
+         *     日志纪律：只记 base_url / model / 是否已配置——``api_key`` 的明文
+         *     **不允许**出现在任何日志行（结构化排障靠 status 的脱敏形态即可）。
+         */
+        post: operations["set_assistant_config_api_assistant_config_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/health": {
         parameters: {
             query?: never;
@@ -860,6 +903,71 @@ export interface components {
              * @enum {string}
              */
             type: "arc";
+        };
+        /**
+         * AssistantConfigRequest
+         * @description ``POST /api/assistant/config`` 的请求体（OI-10 三项）。
+         *
+         *     ``api_key`` 语义：``null`` = 保留现有值（编辑 base_url / model 不必重填
+         *     密钥）；空串 = 清除（回到未配置）；非空 = 设置新值。**没有**读回明文的
+         *     通路——设置界面显示的是 status 的脱敏形态。
+         */
+        AssistantConfigRequest: {
+            /**
+             * Base Url
+             * @description OpenAI 兼容服务地址，如 https://api.example.com/v1
+             * @default
+             */
+            base_url: string;
+            /**
+             * Model
+             * @description 模型名，如 gpt-4o / deepseek-chat
+             * @default
+             */
+            model: string;
+            /**
+             * Api Key
+             * @description null=保留现有；空串=清除；非空=设置（只写，永不回传）
+             */
+            api_key?: string | null;
+        };
+        /**
+         * AssistantStatusResponse
+         * @description ``GET /api/assistant/status`` 与 ``POST /api/assistant/config`` 的响应体。
+         *
+         *     ⚠ 任何字段都**不携带明文 api_key**（脱敏形态见 ``api_key_masked``）。
+         */
+        AssistantStatusResponse: {
+            /**
+             * Configured
+             * @description 是否已启用（三项齐备；未启用 = §10.2 降级①）
+             */
+            configured: boolean;
+            /**
+             * Base Url
+             * @description 当前 base_url（非敏感，供设置界面回显）
+             */
+            base_url: string | null;
+            /**
+             * Model
+             * @description 当前模型名（非敏感）
+             */
+            model: string | null;
+            /**
+             * Api Key Masked
+             * @description 密钥脱敏形态（sk-…abcd）；未设置时为 null
+             */
+            api_key_masked: string | null;
+            /**
+             * Reachable
+             * @description 最近一次对话的连通性标记；null = 从未尝试（惰性，不主动探测、不阻塞启动）
+             */
+            reachable: boolean | null;
+            /**
+             * Config File
+             * @description 配置文件路径（data/assistant.json，§15）
+             */
+            config_file: string;
         };
         /**
          * AvailabilityOut
@@ -5733,6 +5841,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VehicleSummaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assistant_status_api_assistant_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssistantStatusResponse"];
+                };
+            };
+        };
+    };
+    set_assistant_config_api_assistant_config_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssistantConfigRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssistantStatusResponse"];
                 };
             };
             /** @description Validation Error */

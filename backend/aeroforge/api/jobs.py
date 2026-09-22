@@ -13,6 +13,8 @@ WS 消息体是 :class:`~aeroforge.worker.jobs.JobRecord` 的完整 JSON 快照
 
 from __future__ import annotations
 
+import contextlib
+
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketState
 
@@ -80,4 +82,8 @@ async def stream_job(websocket: WebSocket, job_id: str) -> None:
     finally:
         runner.unsubscribe(job_id, target)
         if websocket.client_state is WebSocketState.CONNECTED:
-            await websocket.close()
+            # M7 探针实测竞态：客户端断开与 uvicorn 侧已发 close 之间存在窗口，
+            # close() 会抛 RuntimeError（"Cannot call send once a close message has
+            # been sent"）——订阅已摘除，此处兜底吞掉即可，通道异常不外溢（§10.2 同款纪律）。
+            with contextlib.suppress(Exception):
+                await websocket.close()

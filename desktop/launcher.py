@@ -23,6 +23,7 @@ PyInstaller 的导入图内；② 该模块对 ``build123d`` / ``cea`` 的真实
 from __future__ import annotations
 
 import argparse
+import multiprocessing
 import socket
 import sys
 import threading
@@ -109,13 +110,19 @@ def wait_for_health(port: int, timeout_s: float = 30.0) -> float | None:
     """轮询 ``/api/health`` 直到就绪，返回就绪耗时（秒）；超时返回 ``None``。
 
     走真实 HTTP 而非只查 ``server.started``：这同时验证了 ASGI 栈与路由装配。
+
+    ⚠ 必须显式绕过代理（M7 断网复跑实测缺陷）：``urllib.urlopen`` 默认遵循
+    ``HTTP_PROXY`` / ``HTTPS_PROXY`` 环境变量——企业代理或代理黑洞场景下，
+    对 ``127.0.0.1`` 的健康检查会被送进代理而永久失败（实测：黑洞代理下
+    30 s 超时、exit=4）。本机回环地址永不经过任何代理。
     """
     url = f"http://127.0.0.1:{port}/api/health"
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     started_at = time.perf_counter()
     deadline = started_at + timeout_s
     while time.perf_counter() < deadline:
         try:
-            with urllib.request.urlopen(url, timeout=1.0) as response:  # 仅本机回环
+            with opener.open(url, timeout=1.0) as response:  # 仅本机回环，直连不走代理
                 if response.status == 200:
                     return time.perf_counter() - started_at
         except (urllib.error.URLError, TimeoutError, ConnectionError):
@@ -247,6 +254,9 @@ def main(argv: list[str] | None = None) -> int:
 
     def on_start() -> None:
         """GUI 就绪后运行（pywebview 在独立线程调用），负责测量与自检收尾。"""
+        # create_window 的返回类型是 Window | None（失败时 None）；实际可达性由
+        # webview.start() 承载，此处仅按 mypy strict 口径收窄。
+        assert window is not None
         if window.events.loaded.wait(30):
             timings["loaded"] = time.perf_counter() - t0
         probe = _await_probe(window)
@@ -269,4 +279,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    # 冻结态多进程子进程的正确入口（M7 实测缺陷修复）：PyInstaller onedir 下
+    # ProcessPoolExecutor（MC ×4）以 `AeroForge.exe --multiprocessing-fork …` 拉起子进程，
+    # 缺 freeze_support() 时子进程会落进 argparse 并报 unrecognized arguments 退出，
+    # 池整体瘫痪；该调用在非冻结 / 非子进程形态下是零开销 no-op。
+    multiprocessing.freeze_support()
     raise SystemExit(main())

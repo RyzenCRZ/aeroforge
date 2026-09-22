@@ -131,6 +131,9 @@ FunctionEnd
 ; ── 主程序（代码包，必选）─────────────────────────────────────────────────
 Section "AeroForge 主程序（代码包）" SEC_MAIN
   SectionIn RO
+  ; 注册表视图显式化（与卸载段成对）：NSIS 进程位宽决定默认视图，不显式声明
+  # 则「写的视图」与「删的视图」可能错位（M7 终审实测的注册表残留根因）。
+  SetRegView 64
   SetOutPath "$INSTDIR"
   File /r "${CODE_DIR}\*.*"
 
@@ -204,6 +207,10 @@ FunctionEnd
 
 ; ── 卸载 ───────────────────────────────────────────────────────────────────
 Section Uninstall
+  ; 视图必须与安装段一致：实测缺陷（M7 终审）——卸载器若落在 32 位视图，
+  ; DeleteRegKey 删不中 64 位视图的键，「应用列表」里永久残留死条目。
+  SetRegView 64
+
   ; 1) 快捷方式
   Delete "$SMPROGRAMS\${PRODUCT_NAME}\${PRODUCT_NAME}.lnk"
   Delete "$SMPROGRAMS\${PRODUCT_NAME}\卸载 ${PRODUCT_NAME}.lnk"
@@ -213,12 +220,19 @@ Section Uninstall
   ; 2) 代码包与卸载器自身
   RMDir /r "$INSTDIR"
 
-  ; 3) 注册表
+  ; 3) 注册表——64 位视图为主，WOW6432Node 兜底删（幂等：不存在则静默跳过）
   DeleteRegKey HKLM "${UNINST_KEY}"
   DeleteRegKey HKLM "${APP_KEY}"
+  DeleteRegKey /ifempty HKLM "Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
+  DeleteRegKey /ifempty HKLM "Software\WOW6432Node\${APP_KEY}"
 
-  ; 4) 数据与用户数据——默认保留（artifacts 内容寻址缓存 / 母线存档 / 阈值配置属用户数据），
-  ;    弹窗确认后才删。默认按钮落在「保留」上（DEFBUTTON2）。
+  ; 4) 数据与用户数据——**默认保留**（artifacts 内容寻址缓存 / 母线存档 / 阈值配置属用户数据）。
+  ;    实测缺陷（M7 终审）：静默模式（/S）下 MessageBox 不可信——把「默认保留」
+  ;    弹窗按成了删除，数据包整目录消失。故静默模式**无条件跳过删除**，只允许
+  ;    交互式卸载经用户显式确认后才删。
+  IfSilent 0 _ask_data
+  Goto _keep_data
+_ask_data:
   MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 \
     "是否同时删除数据与用户数据目录？$\n$LOCALAPPDATA\AeroForge$\n$\n该目录包含：GCAT 数据包、CEA 预计算表、母线存档、阈值配置、$\n内容寻址产物缓存（artifacts，可由参数重建）。$\n$\n【默认：保留】重新安装时无需重新部署数据。" \
     IDNO _keep_data
